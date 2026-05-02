@@ -1,0 +1,15 @@
+# 忽略編譯與快取檔案
+src/j1stools/__pycache__/
+build/
+dist/
+*.so
+*.pyd
+*.o
+*.c
+*.csv
+.DS_Store
+*.egg-info
+db
+models/
+log/
+cache/
