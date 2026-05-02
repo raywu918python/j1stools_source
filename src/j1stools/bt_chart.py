@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import backtrader as bt
 
-import parquet_db
+from j1stools import parquet_db
 
 
 def plot_performance(strat, st, end, initial_cash=1_000_000):

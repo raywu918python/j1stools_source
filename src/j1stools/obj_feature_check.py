@@ -8,12 +8,12 @@ from sklearn.preprocessing import StandardScaler
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import pandas as pd
 
-import parquet_db
+from . import parquet_db
 from obj_base_model import BaseModel
 
 
 from obj_label import Label
-import rfc_main as rfc
+from . import rfc_main as rfc
 
 
 class FeatureCheck:

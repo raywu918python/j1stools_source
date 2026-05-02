@@ -9,22 +9,17 @@ import lightgbm as lgb
 from lightgbm import LGBMClassifier
 from pygments.unistring import No
 
-import parquet_db
-import rfc_main
-from obj_base_model import BaseModel
-from obj_filter_data import FilterData
-from obj_price_feature import PriceFeature
-from obj_random_feature import RandomFeature
+from . import obj_filter_data
+
+from . import parquet_db
+from . import rfc_main
 from click import File
 from numpy.testing import print_assert_equal
 from pandas import DataFrame
-from pyparsing import ai, null_debug_action
 from regex import D
 from sklearn.model_selection import TimeSeriesSplit, train_test_split
 from sklearn.preprocessing import StandardScaler, label_binarize
-import yfinance as yf
 import pandas as pd
-import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
@@ -437,7 +432,7 @@ def main(
 
     df = gen_feature(df, stocks, st, end)
     df = Label.add_label(df)
-    df = FilterData.get_data(df, True, False)
+    df = obj_filter_data.FilterData.get_data(df, True, False)
     df.set_index(["date", "stock_id"], inplace=True)
     xtrain, xval, xtest, ytrain, yval, ytest = split_date(df, trainging_idx)
     if lgbm.is_training:

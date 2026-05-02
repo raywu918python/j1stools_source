@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-import parquet_db
+from . import parquet_db
 
 
 def plot_performance(portfolio_value, trades_df, st, end, initial_cash=1_000_000):

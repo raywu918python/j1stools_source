@@ -1,34 +1,22 @@
 from time import time
 from math import e
+from venv import create
 
 
-import random
-
-from regex import D
 from requests import head
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    precision_score,
-)
 
-from obj_filter_data import FilterData
-from obj_price_feature import PriceFeature
+from j1stools.obj_filter_data import FilterData
+from obj_market_feature import MarketFeature
+from obj_random_feature import RandomFeature
 from obj_vwap_pvt_feature import VolumePriceFeature
 import parquet_db as parquet_db
 from obj_base_model import BaseModel
 from obj_hv_feature import HvFeature
 from obj_label import Label
-from obj_ma_feature import MaFeature
-from obj_macd_feature import MacdFeature
-from obj_market_feature import MarketFeature
-from obj_random_feature import RandomFeature
-from obj_volume_feature import VolumeFeature
+import obj_ma_feature
 import joblib
 
 
@@ -37,20 +25,6 @@ class RFCModel(BaseModel):
         super().__init__()
 
 
-#
-# predict
-#
-# rfc = RFCModel()
-# rfc.model = joblib.load("models/20260417/model20260417_140212_4.joblib")
-# rfc.THRESHOLD = 0.6
-# rfc.is_print_import_ft = False
-# rfc.is_add_noise = True
-# rfc.set_split_date(trainging_idx=0)
-# _, _, xtest, ytest = rfc.prepare_df()
-# gold_singal = rfc.batter_predict(xtest, ytest)
-# print(gold_singal.head())
-# print(gold_singal[gold_singal["gold_signal"] > 0.6].shape)
-# print(gold_singal[gold_singal["gold_signal"] > 0.6].head())
 #
 # training
 #
@@ -81,7 +55,7 @@ def gen_feature(df) -> pd.DataFrame:
     # df = AtrFeature.add_feature(df)
     #############################################################
     df = HvFeature.add_feature(df)
-    df = MaFeature.add_feature(df)
+    df = obj_ma_feature.MaFeature.add_feature(df)
     # df = MacdFeature.add_feature(df)
     df = MarketFeature.add_feature(df)
     df = VolumePriceFeature.add_feature(df)
@@ -171,6 +145,8 @@ def create_model():
     main(parquet_db.query_stocks_ids_list(), "2015-01-01", "2020-12-31", trainging_idx=0.99)
 
 
+# create_model()
+
 # delete.before: (482543, 7)
 # ****************************** filter
 # [318923, 64674, 98946] 20 % 13 %
@@ -190,3 +166,19 @@ def create_model():
 # main(stocks=["2330", "2360"])
 # main(parquet_db.query_stocks_no_etf(), st="2015-01-01", end="2018-01-01")
 # main(random.sample(parquet_db.query_stocks_no_etf(), 10), st="2015-01-01", end="2018-01-01")
+
+
+#
+# predict
+#
+# rfc = RFCModel()
+# rfc.model = joblib.load("models/20260417/model20260417_140212_4.joblib")
+# rfc.THRESHOLD = 0.6
+# rfc.is_print_import_ft = False
+# rfc.is_add_noise = True
+# rfc.set_split_date(trainging_idx=0)
+# _, _, xtest, ytest = rfc.prepare_df()
+# gold_singal = rfc.batter_predict(xtest, ytest)
+# print(gold_singal.head())
+# print(gold_singal[gold_singal["gold_signal"] > 0.6].shape)
+# print(gold_singal[gold_singal["gold_signal"] > 0.6].head())

@@ -1,15 +1,6 @@
-from logging import Filter
-import random
-
-from fontTools import subset
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
-from quantstats.stats import tail_ratio
-
-from obj_label import Label
-from obj_macd_feature import MacdFeature
-from obj_price_feature import PriceFeature
 
 
 class FilterData:
@@ -18,9 +9,6 @@ class FilterData:
         定義你的「進場門檻」
         只有符合這個門檻的資料，我們才關心它的 Label
         """
-        if log:
-            if "target" not in df.columns:
-                df = Label.add_label(df)
 
         before = df["target"].copy().value_counts().sort_index().tolist()
 

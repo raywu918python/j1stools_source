@@ -11,8 +11,8 @@ from regex import T
 from sqlalchemy import column
 import lgbm_main
 from rfc_main import RFCModel
-import rfc_main as rfc_main
-import parquet_db as parquet_db
+from . import rfc_main as rfc_main
+from . import parquet_db as parquet_db
 import vectorbt as vbt
 import quantstats as qs
 import plotly.io as pio

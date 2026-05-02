@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import utils
+import j1stools.utils as utils
 
 
 def create_now_price(yyyy, mm):

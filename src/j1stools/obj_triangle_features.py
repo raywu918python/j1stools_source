@@ -5,8 +5,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import argrelextrema
 
-from utils import get_file_list, stock
-
 # 1. 模擬包含一個「近期收斂」的數據
 # np.random.seed(42)
 # dates = pd.date_range(start="2026-01-01", periods=150)
@@ -21,12 +19,8 @@ from utils import get_file_list, stock
 class TriangleFeature:
     def find_triangle(df: np.DataFrame):
         # 2. 找出轉折高低點 (order=4)
-        df["High_Pivot"] = df["Close"].iloc[
-            argrelextrema(df["Close"].values, np.greater_equal, order=4)[0]
-        ]
-        df["Low_Pivot"] = df["Close"].iloc[
-            argrelextrema(df["Close"].values, np.less_equal, order=4)[0]
-        ]
+        df["High_Pivot"] = df["Close"].iloc[argrelextrema(df["Close"].values, np.greater_equal, order=4)[0]]
+        df["Low_Pivot"] = df["Close"].iloc[argrelextrema(df["Close"].values, np.less_equal, order=4)[0]]
 
         high_idx = np.where(df["High_Pivot"].notna())[0]
         low_idx = np.where(df["Low_Pivot"].notna())[0]
@@ -141,9 +135,7 @@ class TriangleFeature:
                     zorder=3,
                 )
 
-                print(
-                    f"🎯 成功鎖定最近一個三角收斂！(跨度從第 {min(x_h1, x_l1)} 根到第 {max(x_h2, x_l2)} 根 K 棒)"
-                )
+                print(f"🎯 成功鎖定最近一個三角收斂！(跨度從第 {min(x_h1, x_l1)} 根到第 {max(x_h2, x_l2)} 根 K 棒)")
             else:
                 print("❌ 近期內沒有發現符合條件的三角收斂形態。")
 
@@ -152,11 +144,12 @@ class TriangleFeature:
             plt.show()
 
     def test():
-        list_random_stock_id = random.sample(get_file_list(), 3)
+        # list_random_stock_id = random.sample(get_file_list(), 3)
 
-        for i in list_random_stock_id:
-            stock_id = i
-            df = stock(stock_id)
-            df["Close"] = df["close"]
-            df = df[-30:]
-            print(f"{stock_id} = {TriangleFeature.find_triangle(df)}")
+        # for i in list_random_stock_id:
+        #     stock_id = i
+        #     df = stock(stock_id)
+        #     df["Close"] = df["close"]
+        #     df = df[-30:]
+        #     print(f"{stock_id} = {TriangleFeature.find_triangle(df)}")
+        pass

@@ -5,8 +5,8 @@ import pandas as pd
 from pandas_ta import ma
 import vectorbt as vbt
 
-import lgbm_main
-import parquet_db
+from . import parquet_db
+from . import lgbm_main
 
 # ============================================================
 # 技術指標

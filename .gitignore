@@ -13,3 +13,5 @@ db
 models/
 log/
 cache/
+models/
+model/

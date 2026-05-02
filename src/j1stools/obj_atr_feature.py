@@ -2,9 +2,8 @@ from traceback import print_tb
 
 import numpy as np
 import pandas as pd
-from pandas import DataFrame
 
-from feature_utils import add_lag
+from j1stools.feature_utils import add_lag
 
 
 class AtrFeature:

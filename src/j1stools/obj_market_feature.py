@@ -1,9 +1,8 @@
 import pandas as pd
 import pandas
 import pandas_ta as ta
-from pytest import mark
 
-import parquet_db as parquet_db
+from j1stools import parquet_db
 
 
 class MarketFeature:
