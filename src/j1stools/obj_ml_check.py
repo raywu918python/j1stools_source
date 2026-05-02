@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from obj_label import Label
+from j1stools.obj_label import Label
 
 
 class MlCheck:

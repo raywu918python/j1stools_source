@@ -56,17 +56,20 @@ def predict():
     df = gen_feature(df)
     df = Label.add_label(df)
     df = FilterData.get_data(df, True, False)
+    df.set_index(["date", "stock_id"], inplace=True)
 
     x = df[[col for col in df.columns if col.startswith("f_")]]
     y = df["target"]
     x, y = drop_na_inf(x, y)
-
     expected_features = model.feature_names_in_
     x = x[expected_features]
 
     yproba = model.predict_proba(x)
-    print(yproba)
+    # print(x.head())
+    # print(x.shape)
+    # print(yproba.shape)
+    results = pd.DataFrame(yproba, index=x.index)
+    # results.reset_index(drop=False, inplace=True)
+    print(results.head())
+    # print(yproba)
     return yproba
-
-
-# predict()

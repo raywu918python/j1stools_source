@@ -1,7 +1,4 @@
-from traceback import print_tb
-
 import pandas as pd
-import pandas_ta as ta
 
 
 def help(df: pd.DataFrame):

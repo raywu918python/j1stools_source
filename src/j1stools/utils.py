@@ -1,12 +1,6 @@
 from inspect import getabsfile
 import pathlib
 
-from numpy import dtype
-import numpy as np
-import yfinance as yf
-import os
-import pandas as pd
-
 # from dotenv import load_dotenv
 
 # def is_has(stock):

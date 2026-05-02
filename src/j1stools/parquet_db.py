@@ -1,13 +1,10 @@
-import os
-import sys
-
 import pyarrow as pa
 import pandas as pd
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import j1stools.utils as utils
 
 
@@ -78,7 +75,17 @@ def create_info():
 #     pq.write_table(table, "history.parquet")
 
 
-def query_price(stocks: list, st="2015-01-01", end="2033-06-01", is_include_end=False):
+def query_last_price(stocks: list):
+    dataset = ds.dataset("db/price/", format="parquet")
+
+    table = dataset.to_table(
+        filter=ds.field("stock_id").isin(stocks), columns=["date", "stock_id", "close", "volume", "high", "low", "open"]
+    ).sort_by([("date", "ascending")])
+
+    return table.slice(table.num_rows - 1, 1).to_pandas()
+
+
+def query_price(stocks: list, st="2015-01-01", end="2099-01-01", is_include_end=False):
     dataset = ds.dataset("db/price/", format="parquet")
 
     # 定義你的查詢條件

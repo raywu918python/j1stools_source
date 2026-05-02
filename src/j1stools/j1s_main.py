@@ -5,8 +5,8 @@ import pandas as pd
 from pandas_ta import ma
 import vectorbt as vbt
 
-from . import parquet_db
-from . import lgbm_main
+from j1stools import parquet_db
+from j1stools import lgbm_main
 
 # ============================================================
 # 技術指標
@@ -254,9 +254,6 @@ def main(
     #     end=end,
     # )
 
-    print("9999")
-    print(len(positions))
-
     print(f"回測時間: {time() - t1:.2f} 秒")
 
     # 結果
@@ -269,20 +266,16 @@ def main(
         print(f"勝率：{(trades_df['pnl'] > 0).mean() * 100:.1f}%")
         print(f"平均報酬：{trades_df['return_pct'].mean():.2f}%")
 
-    return portfolio_value, trades_df
+    return portfolio_value, trades_df, positions
 
 
 def local_signals():
-    try:
-        signal = pd.read_csv("gold_signal.csv", dtype={"stock_id": str})
-        signal["date"] = pd.to_datetime(signal["date"])
-        return signal
-    except Exception as e:
-        print(e)
-        return None
+    signal = pd.read_csv("gold_signal.csv", dtype={"stock_id": str})
+    signal["date"] = pd.to_datetime(signal["date"])
+    return signal
 
 
-def query(signal=local_signals(), good_search=False):
+def query(signal=None, good_search=False, proba_threshold=0.6):
     #
     stocks = signal["stock_id"].unique().tolist()
     date = signal["date"]
@@ -330,14 +323,8 @@ def query(signal=local_signals(), good_search=False):
             st=st,
             end=end,
             max_positions=10,
-            proba_threshold=0.6,
+            proba_threshold=proba_threshold,
         )
-
-
-def save_signal(signal):
-    signal.rename(columns={2: "y_proba"}, inplace=True)
-    signal["date"] = pd.to_datetime(signal["date"])
-    signal.to_csv("gold_signal.csv", index=False)
 
 
 def grid_search(close, high, low, df_proba, stock_group, exits):
@@ -434,15 +421,10 @@ def grid_search(close, high, low, df_proba, stock_group, exits):
     return results_df
 
 
-def query_new():
-    signal = lgbm_main.query(parquet_db.query_stocks_no_etf(), "2024-01", "2029-01")
-    print("signal.shape")
-    print(signal.shape)
-    save_signal(signal)
-    query()
+# import os
+# print(os.getcwd())
 
-
-# query_new()
+# update()
 # main()
 # query()
 # query(good_search=True)

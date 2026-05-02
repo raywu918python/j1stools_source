@@ -9,11 +9,11 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import pandas as pd
 
 from . import parquet_db
-from obj_base_model import BaseModel
+from j1stools.obj_base_model import BaseModel
 
 
-from obj_label import Label
-from . import rfc_main as rfc
+from j1stools.obj_label import Label
+from j1stools import rfc_main as rfc
 
 
 class FeatureCheck:

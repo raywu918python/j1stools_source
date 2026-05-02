@@ -183,7 +183,7 @@ class BaseModel(ABC):
                 function_train(xtrain, xval, ytrain, yval, model)
             else:
                 model.fit(xtrain, ytrain)
-                joblib.dump(model, self.get_full_name())
+            joblib.dump(model, self.get_full_name())
             print(f"訓練時間: {time()-st:.2f} 秒")
 
         expected_features = self.model.feature_names_in_
@@ -225,7 +225,7 @@ class BaseModel(ABC):
         with open(f"log/log_import_ft{self.n}.py", "w", encoding="utf-8") as f:
             f.write(str(feat_importances.sort_values(ascending=False).index.tolist()))
 
-    def get_gold_signal(self, xtest, y_proba: pd.Series) -> pd.DataFrame:
+    def gen_gold_signal(self, xtest, y_proba: pd.Series) -> pd.DataFrame:
         results = pd.DataFrame(y_proba, index=xtest.index)
         results.reset_index(drop=False, inplace=True)
         # print(results.head())
@@ -234,7 +234,7 @@ class BaseModel(ABC):
 
     def print_trading_date(self, xtest: pd.DataFrame, y_proba):
         print(f"*" * 30, "print_trading_date")
-        xtest = self.get_gold_signal(xtest, y_proba)
+        xtest = self.gen_gold_signal(xtest, y_proba)
         gold_signals = xtest[xtest.iloc[:, 4] > self.THRESHOLD]
 
         print(f"門檻設定: {self.THRESHOLD}")

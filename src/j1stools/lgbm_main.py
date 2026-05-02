@@ -1,7 +1,4 @@
-from cProfile import label
-from codecs import ignore_errors
 from time import time
-
 
 import random
 import lightgbm as lgb
@@ -10,10 +7,10 @@ from pygments.unistring import No
 
 from j1stools.obj_base_model import BaseModel
 
-from . import obj_filter_data
-
-from . import parquet_db
-from . import rfc_main
+from j1stools import obj_filter_data
+from j1stools.obj_random_feature import RandomFeature
+from j1stools import parquet_db
+from j1stools import rfc_main
 from click import File
 from numpy.testing import print_assert_equal
 from pandas import DataFrame
@@ -21,7 +18,6 @@ from regex import D
 from sklearn.model_selection import TimeSeriesSplit, train_test_split
 from sklearn.preprocessing import StandardScaler, label_binarize
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -37,13 +33,11 @@ from j1stools.obj_ma_feature import MaFeature
 from j1stools.obj_macd_feature import MacdFeature
 from j1stools.obj_market_feature import MarketFeature
 from j1stools.obj_ml_check import MlCheck
-import j1stools.obj_random_feature as obj_random_feature
+import j1stools.obj_random_feature as RandomFeature
 from j1stools.obj_volume_feature import VolumeFeature
 import joblib
 
 from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
-
-using_rfc = True
 
 
 class LgbmModel(BaseModel):
@@ -51,7 +45,7 @@ class LgbmModel(BaseModel):
         super().__init__()
 
 
-def gen_feature(df, stocks, st, end) -> pd.DataFrame:
+def gen_feature(df, stocks, st, end, is_using_rfc=False) -> pd.DataFrame:
     st = time()
 
     # df = VolumeFeature.init(df)
@@ -64,10 +58,10 @@ def gen_feature(df, stocks, st, end) -> pd.DataFrame:
     # df = MacdFeature.add_feature(df)
     df = MarketFeature.add_feature(df)
     df = VolumePriceFeature.add_feature(df)
-    df = obj_random_feature.RandomFeature.add_feature(df)
+    # df = RandomFeature.RandomFeature.add_feature(df)
     print(f"gen_feature: {time() - st:.2f} 秒")
 
-    if using_rfc:
+    if is_using_rfc:
         df = add_rfc_feature(df, stocks, st, end)
 
     return df
@@ -75,8 +69,7 @@ def gen_feature(df, stocks, st, end) -> pd.DataFrame:
 
 def add_rfc_feature(df, stocks, st, end):
     signal = rfc_main.query(stocks, st, end)
-    signal.rename(columns={2: "f_rfc"}, inplace=True)
-    signal["date"] = pd.to_datetime(signal["date"])
+    signal.rename(columns={"y_proba": "f_rfc"}, inplace=True)
     signal = signal[["date", "stock_id", "f_rfc"]]
     #
     return pd.merge(
@@ -397,10 +390,9 @@ def test(n=0):
 
 
 def query_no_rfc(stocks, st, end):
-    using_rfc = False
 
     model = joblib.load("models/lgbm_20231231_no_rfc.joblib")
-    return main(
+    return exec(
         stocks,
         st,
         end,
@@ -409,29 +401,19 @@ def query_no_rfc(stocks, st, end):
     )
 
 
-def query(stocks, st, end):
-    model = joblib.load("models/lgbm_20231231.joblib")
-    return main(
-        stocks,
-        st,
-        end,
-        0,
-        model,
-    )
-
-
-def main(
+def exec(
     stocks=random.sample(parquet_db.query_stocks_ids_list(), 100),
     st="2024-01-01",
     end="2099-01-01",
     trainging_idx=0.7,
     model=None,
+    is_using_rfc=False,
 ):
     print(f"*" * 60, "lgbm start")
     lgbm = init(model=model, trainging_idx=trainging_idx)
     df = parquet_db.query_price(stocks, st, end)
 
-    df = gen_feature(df, stocks, st, end)
+    df = gen_feature(df, stocks, st, end, is_using_rfc)
     df = Label.add_label(df)
     df = obj_filter_data.FilterData.get_data(df, True, False)
     df.set_index(["date", "stock_id"], inplace=True)
@@ -455,17 +437,22 @@ def main(
         acc_list.append(y_proba[:, 2])
 
     # print(f"平均:", np.average(acc_list))
-    signal = lgbm.get_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
-    # print(signal.shape)
+    signal = lgbm.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
+    signal.rename(columns={2: "y_proba"}, inplace=True)
+    signal["date"] = pd.to_datetime(signal["date"])
     return signal
 
 
-def create_model():
-    """
-    訓練模型並儲存
-    "2021-01-01", "2024-01-01"
-    """
-    main(parquet_db.stocks_non_0050(), "2021-01-01", "2024-01-01", trainging_idx=0.8)
+def query(stocks, st, end):
+    model = joblib.load("models/lgbm.joblib")
+    return exec(
+        stocks,
+        st,
+        end,
+        0,
+        model,
+        is_using_rfc=True,
+    )
 
 
 # create_model()

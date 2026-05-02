@@ -9,14 +9,14 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
 from j1stools.obj_filter_data import FilterData
-from obj_market_feature import MarketFeature
-from obj_random_feature import RandomFeature
-from obj_vwap_pvt_feature import VolumePriceFeature
-import parquet_db as parquet_db
-from obj_base_model import BaseModel
-from obj_hv_feature import HvFeature
-from obj_label import Label
-import obj_ma_feature
+from j1stools.obj_market_feature import MarketFeature
+from j1stools.obj_random_feature import RandomFeature
+from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
+import j1stools.parquet_db as parquet_db
+from j1stools.obj_base_model import BaseModel
+from j1stools.obj_hv_feature import HvFeature
+from j1stools.obj_label import Label
+from j1stools.obj_ma_feature import MaFeature
 import joblib
 
 
@@ -55,11 +55,11 @@ def gen_feature(df) -> pd.DataFrame:
     # df = AtrFeature.add_feature(df)
     #############################################################
     df = HvFeature.add_feature(df)
-    df = obj_ma_feature.MaFeature.add_feature(df)
+    df = MaFeature.add_feature(df)
     # df = MacdFeature.add_feature(df)
     df = MarketFeature.add_feature(df)
     df = VolumePriceFeature.add_feature(df)
-    df = RandomFeature.add_feature(df)
+    # df = RandomFeature.add_feature(df)
     print(f"gen_feature: {time() - st:.2f} 秒")
 
     return df
@@ -80,7 +80,7 @@ def init(trainging_idx=0.8, model=None):
     rfc = RFCModel()
     rfc.trainging_idx = trainging_idx
     rfc.is_training = True and rfc.trainging_idx
-    rfc.is_print_import_ft = True
+    rfc.is_print_import_ft = False
     rfc.THRESHOLD = 0.5
     if model:
         rfc.model = model
@@ -91,7 +91,7 @@ def init(trainging_idx=0.8, model=None):
     return rfc
 
 
-def main(
+def exec(
     stocks=parquet_db.query_stocks_no_etf(),
     st="2015-01-01",
     end="2099-01-01",
@@ -126,23 +126,15 @@ def main(
         acc_list.append(y_proba[:, 2])
 
     # print(f"平均:", np.average(acc_list))
-    signal = model.get_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
-    signal.to_csv("gold_signal_rfc.csv")
-    # print(signal.shape)
+    signal = model.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
+    signal.rename(columns={2: "y_proba"}, inplace=True)
+    signal["date"] = pd.to_datetime(signal["date"])
     return signal
 
 
 def query(stocks, st, end):
-    model = joblib.load("models/rfc_20201231.joblib")
-    return main(stocks, st, end, trainging_idx=0, model=model)
-
-
-def create_model():
-    """
-    訓練模型並儲存
-    "2015-01-01", "2020-12-31"
-    """
-    main(parquet_db.query_stocks_ids_list(), "2015-01-01", "2020-12-31", trainging_idx=0.99)
+    model = joblib.load("models/rfc.joblib")
+    return exec(stocks, st, end, trainging_idx=0, model=model)
 
 
 # create_model()
