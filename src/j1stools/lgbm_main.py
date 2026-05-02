@@ -3,11 +3,12 @@ from codecs import ignore_errors
 from time import time
 
 
-from os import times
 import random
 import lightgbm as lgb
 from lightgbm import LGBMClassifier
 from pygments.unistring import No
+
+from j1stools.obj_base_model import BaseModel
 
 from . import obj_filter_data
 
@@ -29,18 +30,18 @@ from sklearn.metrics import (
     precision_score,
 )
 
-from obj_atr_feature import AtrFeature
-from obj_hv_feature import HvFeature
-from obj_label import Label
-from obj_ma_feature import MaFeature
-from obj_macd_feature import MacdFeature
-from obj_market_feature import MarketFeature
-from obj_ml_check import MlCheck
-import obj_random_feature as obj_random_feature
-from obj_volume_feature import VolumeFeature
+from j1stools.obj_atr_feature import AtrFeature
+from j1stools.obj_hv_feature import HvFeature
+from j1stools.obj_label import Label
+from j1stools.obj_ma_feature import MaFeature
+from j1stools.obj_macd_feature import MacdFeature
+from j1stools.obj_market_feature import MarketFeature
+from j1stools.obj_ml_check import MlCheck
+import j1stools.obj_random_feature as obj_random_feature
+from j1stools.obj_volume_feature import VolumeFeature
 import joblib
 
-from obj_vwap_pvt_feature import VolumePriceFeature
+from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
 
 using_rfc = True
 
@@ -63,7 +64,7 @@ def gen_feature(df, stocks, st, end) -> pd.DataFrame:
     # df = MacdFeature.add_feature(df)
     df = MarketFeature.add_feature(df)
     df = VolumePriceFeature.add_feature(df)
-    df = RandomFeature.add_feature(df)
+    df = obj_random_feature.RandomFeature.add_feature(df)
     print(f"gen_feature: {time() - st:.2f} 秒")
 
     if using_rfc:

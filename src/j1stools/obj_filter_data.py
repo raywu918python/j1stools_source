@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
+from j1stools.obj_macd_feature import MacdFeature
+
 
 class FilterData:
     def get_data(df: pd.DataFrame, log=False, is_del=False) -> DataFrame:
