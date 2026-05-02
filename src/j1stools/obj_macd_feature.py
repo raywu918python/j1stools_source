@@ -8,7 +8,7 @@ import pandas as pd
 from scipy.signal import argrelextrema
 import pandas_ta as ta
 
-import parquet_db as parquet_db
+import j1stools.parquet_db as parquet_db
 
 
 class MacdFeature:
