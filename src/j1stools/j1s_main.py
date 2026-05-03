@@ -5,13 +5,15 @@ import pandas as pd
 from pandas_ta import ma
 import vectorbt as vbt
 
-from j1stools import lgbm_main, parquet_db
+from j1stools import j1s_chart, lgbm_main, parquet_db
 
 # ============================================================
 # 技術指標
 # ============================================================
 
 import os
+
+from j1stools.backtest import simple_backtest
 
 
 def calc_adx(high, low, close, cache_path="cache/adx.pkl"):
@@ -90,115 +92,6 @@ def gen_exits(market_danger, df_proba):
 
 
 # ============================================================
-# 輕量回測引擎
-# ============================================================
-
-
-def simple_backtest(
-    close,
-    entries,
-    exits,
-    df_proba,
-    stock_group,
-    max_positions=10,
-    sl_trail=0.1,
-    hold_days=5,
-    init_cash=1_000_000,
-    fee=0.001,
-    group_limit=3,  # ✅ 每族群最多 3 支
-):
-    dates = close.index
-    cash = float(init_cash)
-    positions = {}
-    portfolio_value = []
-    trades = []
-
-    # ✅ 按機率排序
-    entries_dict = {}
-    for dt, row in entries.iterrows():
-        if row.any():
-            true_cols = row[row].index.tolist()
-            true_cols = sorted(true_cols, key=lambda x: df_proba.loc[dt, x], reverse=True)
-            entries_dict[dt] = true_cols
-
-    exits_arr = exits.values
-
-    for i, dt in enumerate(dates):
-        is_danger = bool(exits_arr[i]) if i < len(exits_arr) else False
-
-        # ── 出場 ──────────────────────────────────────────
-        for sid in list(positions.keys()):
-            if sid not in close.columns:
-                continue
-            price = close.loc[dt, sid]
-            pos = positions[sid]
-            pos["highest"] = max(pos["highest"], price)
-
-            should_exit = is_danger or price <= pos["highest"] * (1 - sl_trail)
-            # or (i - pos["entry_bar"]) >= hold_days
-
-            if should_exit:
-                sell_value = price * pos["shares"] * (1 - fee)
-                pnl = sell_value - pos["cost"]
-                cash += sell_value
-                trades.append(
-                    {
-                        "stock_id": sid,
-                        "entry_date": pos["entry_date"],
-                        "exit_date": dt,
-                        "entry_price": pos["entry_price"],
-                        "exit_price": price,
-                        "pnl": pnl,
-                        "size": pos["shares"],
-                        "return_pct": pnl / pos["cost"] * 100,
-                    }
-                )
-                del positions[sid]
-
-        # ── 進場（市場危險時不進場）──────────────────────
-        if not is_danger:
-            slots = max_positions - len(positions)
-            if slots > 0:
-                candidates = [sid for sid in entries_dict.get(dt, []) if sid not in positions and sid in close.columns][
-                    :slots
-                ]
-
-                if candidates:
-                    per_slot = cash / slots
-                    for sid in candidates:
-                        # ✅ 族群限制
-                        if stock_group is not None:
-                            group = stock_group.get(sid, "未知")
-                            current_group_count = sum(1 for s in positions if stock_group.get(s, "未知") == group)
-                            if current_group_count >= group_limit:
-                                print(f"🚫 {sid} 族群 {group} 已滿 {group_limit} 支")
-                                continue
-                        price = close.loc[dt, sid]
-                        if price <= 0:
-                            continue
-                        # ✅ 手續費只算一次
-                        cost = per_slot
-                        shares = cost * (1 - fee) / price
-                        cash -= cost
-                        positions[sid] = {
-                            "shares": shares,
-                            "entry_price": price,
-                            "entry_date": dt,
-                            "entry_bar": i,
-                            "highest": price,
-                            "cost": cost,
-                        }
-
-        # ── 每日資產價值 ──────────────────────────────────
-        pos_value = sum(close.loc[dt, sid] * pos["shares"] for sid, pos in positions.items() if sid in close.columns)
-        portfolio_value.append(cash + pos_value)
-
-    portfolio_value = pd.Series(portfolio_value, index=dates)
-    trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
-    return portfolio_value, trades_df, positions
-
-
-# ============================================================
 # 主流程
 # ============================================================
 
@@ -246,12 +139,12 @@ def main(
     )
     # j1s_chart.chart_allocation(portfolio_value, trades_df, close=close)
     # j1s_chart.chart_gantt(trades_df)
-    # j1s_chart.plot_performance(
-    #     portfolio_value=portfolio_value,
-    #     trades_df=trades_df,
-    #     st=st,
-    #     end=end,
-    # )
+    j1s_chart.plot_performance(
+        portfolio_value=portfolio_value,
+        trades_df=trades_df,
+        st=st,
+        end=end,
+    )
 
     print(f"回測時間: {time() - t1:.2f} 秒")
 
@@ -284,7 +177,7 @@ def query(signal=None, good_search=False, proba_threshold=0.6):
     # end = "2029-01-01"
     full_df = parquet_db.query_price(stocks, st, end)
     full_df["date"] = pd.to_datetime(full_df["date"])
-    vbt_input = pd.merge(
+    input = pd.merge(
         full_df,
         signal[["date", "stock_id", "y_proba"]],
         on=["date", "stock_id"],
@@ -293,13 +186,13 @@ def query(signal=None, good_search=False, proba_threshold=0.6):
         0
     )  # 沒預測到的（ATR太小的）補 0
 
-    df_proba = vbt_input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
-    df_close = vbt_input.pivot(index="date", columns="stock_id", values="close")
-    df_high = vbt_input.pivot(index="date", columns="stock_id", values="high")
-    df_low = vbt_input.pivot(index="date", columns="stock_id", values="low")
-    # df_close = df_close.ffill()
-    # df_high = df_high.ffill()
-    # df_low = df_low.ffill()
+    df_proba = input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
+    df_close = input.pivot(index="date", columns="stock_id", values="close")
+    df_high = input.pivot(index="date", columns="stock_id", values="high")
+    df_low = input.pivot(index="date", columns="stock_id", values="low")
+    df_close = df_close.ffill()
+    df_high = df_high.ffill()
+    df_low = df_low.ffill()
     # check_df_value(df_close)
     # check_df_value(df_high)
     # check_df_value(df_low)
@@ -420,9 +313,17 @@ def grid_search(close, high, low, df_proba, stock_group, exits):
     return results_df
 
 
-# signal = lgbm_main.query(parquet_db.query_stocks_no_etf(), "2024-01", "2099-01")
-# query(signal=signal)
+def query_last():
+    stocks = parquet_db.query_stocks_no_etf()
+    # stocks = parquet_db.query_stocks_ids_list()
+    signal = lgbm_main.query(stocks, "2024-01", "2099-01")
+    portfolio_value, trades_df, positions = query(signal)
+    # portfolio_value.to_csv("portfolio_value.csv")
+    # signal.to_csv("query_last.csv", index=False)
 
+
+# 2024-03-18沒資料，之後再檢查
+query_last()
 # main()
 # query()
 # query(good_search=True)
