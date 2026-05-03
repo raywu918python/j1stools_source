@@ -1,0 +1,124 @@
+# ============================================================
+# 輕量回測引擎
+# ============================================================
+
+import pandas as pd
+
+
+def simple_backtest(
+    close,
+    entries,
+    exits,
+    df_proba,
+    stock_group,
+    max_positions=10,
+    sl_trail=0.1,
+    use_hold_days=True,  # ✅ 新增開關
+    use_sl_trail=True,
+    sl_stop=0.08,  # ✅ 固定停損 8%
+    tp_stop=0.15,  # ✅ 固定停利 15%
+    use_fixed_sl=False,  # ✅ 固定停損開關
+    use_fixed_tp=False,  # ✅ 固定停利開關
+    hold_days=5,
+    init_cash=1_000_000,
+    fee=0.001,
+    group_limit=3,  # ✅ 每族群最多 3 支
+):
+    dates = close.index
+    cash = float(init_cash)
+    positions = {}
+    portfolio_value = []
+    trades = []
+
+    # ✅ 按機率排序
+    entries_dict = {}
+    for dt, row in entries.iterrows():
+        if row.any():
+            true_cols = row[row].index.tolist()
+            true_cols = sorted(true_cols, key=lambda x: df_proba.loc[dt, x], reverse=True)
+            entries_dict[dt] = true_cols
+
+    exits_arr = exits.values
+
+    for i, dt in enumerate(dates):
+        is_danger = bool(exits_arr[i]) if i < len(exits_arr) else False
+
+        # ── 出場 ──────────────────────────────────────────
+        for sid in list(positions.keys()):
+            if sid not in close.columns:
+                continue
+            price = close.loc[dt, sid]
+            pos = positions[sid]
+            pos["highest"] = max(pos["highest"], price)
+
+            should_exit = (
+                is_danger
+                # 移動停損
+                or (use_sl_trail and price <= pos["highest"] * (1 - sl_trail))
+                # 固定天數
+                or (use_hold_days and (i - pos["entry_bar"]) >= hold_days)
+                # 固定停損
+                or (use_fixed_sl and price <= pos["entry_price"] * (1 - sl_stop))
+                # 固定停利
+                or (use_fixed_tp and price >= pos["entry_price"] * (1 + tp_stop))
+            )
+
+            if should_exit:
+                sell_value = price * pos["shares"] * (1 - fee)
+                pnl = sell_value - pos["cost"]
+                cash += sell_value
+                trades.append(
+                    {
+                        "stock_id": sid,
+                        "entry_date": pos["entry_date"],
+                        "exit_date": dt,
+                        "entry_price": pos["entry_price"],
+                        "exit_price": price,
+                        "pnl": pnl,
+                        "size": pos["shares"],
+                        "return_pct": pnl / pos["cost"] * 100,
+                    }
+                )
+                del positions[sid]
+
+        # ── 進場（市場危險時不進場）──────────────────────
+        if not is_danger:
+            slots = max_positions - len(positions)
+            if slots > 0:
+                candidates = [sid for sid in entries_dict.get(dt, []) if sid not in positions and sid in close.columns][
+                    :slots
+                ]
+
+                if candidates:
+                    per_slot = cash / slots
+                    for sid in candidates:
+                        # ✅ 族群限制
+                        if stock_group is not None:
+                            group = stock_group.get(sid, "未知")
+                            current_group_count = sum(1 for s in positions if stock_group.get(s, "未知") == group)
+                            if current_group_count >= group_limit:
+                                print(f"🚫 {sid} 族群 {group} 已滿 {group_limit} 支")
+                                continue
+                        price = close.loc[dt, sid]
+                        if price <= 0:
+                            continue
+                        # ✅ 手續費只算一次
+                        cost = per_slot
+                        shares = cost * (1 - fee) / price
+                        cash -= cost
+                        positions[sid] = {
+                            "shares": shares,
+                            "entry_price": price,
+                            "entry_date": dt,
+                            "entry_bar": i,
+                            "highest": price,
+                            "cost": cost,
+                        }
+
+        # ── 每日資產價值 ──────────────────────────────────
+        pos_value = sum(close.loc[dt, sid] * pos["shares"] for sid, pos in positions.items() if sid in close.columns)
+        portfolio_value.append(cash + pos_value)
+
+    portfolio_value = pd.Series(portfolio_value, index=dates)
+    trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
+    return portfolio_value, trades_df, positions
