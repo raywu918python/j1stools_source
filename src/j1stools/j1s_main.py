@@ -97,53 +97,82 @@ def gen_exits(market_danger, df_proba):
 
 
 def main(
-    close,
-    high,
-    low,
-    df_proba,
-    st,
-    end,
+    signal,
     top_n=3,
     proba_threshold=0.6,
     max_positions=10,
-    sl_trail=0.1,
+    sl_trail=0.15,
     hold_days=5,
+    sl_stop=0.10,
+    tp_stop=0.15,
+    use_sl_trail=True,
 ):
+    p = PrepareDate(signal)
+    # stocks = signal["stock_id"].unique().tolist()
+    # date = signal["date"]
+    # st = date.min()
+    # end = date.max()
+    # # st = "2026-03-01"
+    # # end = "2029-01-01"
+    # full_df = parquet_db.query_price(stocks, st, end)
+    # full_df["date"] = pd.to_datetime(full_df["date"])
+    # input = pd.merge(
+    #     full_df,
+    #     signal[["date", "stock_id", "y_proba"]],
+    #     on=["date", "stock_id"],
+    #     how="left",  # 只取索引部分  # 以全時段為準
+    # ).fillna(
+    #     0
+    # )  # 沒預測到的（ATR太小的）補 0
+
+    # df_proba = input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
+    # close = input.pivot(index="date", columns="stock_id", values="close").ffill()
+    # high = input.pivot(index="date", columns="stock_id", values="high").ffill()
+    # low = input.pivot(index="date", columns="stock_id", values="low").ffill()
 
     from time import time
 
     t0 = time()
 
     # 前處理（向量化）
-    market_danger = check_market(close)
-    my_filter = gen_filter(close, high, low)
-    entries = gen_entries(my_filter, df_proba, top_n, proba_threshold)
-    exits = gen_exits(market_danger, df_proba)
-    stock_group = parquet_db.query_stock2group_dict()
+    market_danger = check_market(p.close)
+    my_filter = gen_filter(p.close, p.high, p.low)
+    entries = gen_entries(my_filter, p.proba, top_n, proba_threshold)
+    exits = gen_exits(market_danger, p.proba)
 
     print(f"前處理時間: {time() - t0:.2f} 秒")
     t1 = time()
 
     # 回測
+
+    use_sl_trail = use_sl_trail
+    use_fixed_sl = not use_sl_trail
+    use_fixed_tp = not use_sl_trail
+
     portfolio_value, trades_df, positions = simple_backtest(
-        close=close,
+        close=p.close,
         entries=entries,
         exits=exits,
-        df_proba=df_proba,
+        df_proba=p.proba,
         max_positions=max_positions,
-        sl_trail=sl_trail,
         hold_days=hold_days,
         init_cash=1_000_000,
         fee=0.001,
-        stock_group=stock_group,
+        use_hold_days=False,
+        use_sl_trail=use_sl_trail,
+        use_fixed_sl=use_fixed_sl,
+        use_fixed_tp=use_fixed_tp,
+        sl_trail=sl_trail,
+        sl_stop=sl_stop,
+        tp_stop=tp_stop,
+        stock_group=p.stock_group,
     )
     # j1s_chart.chart_allocation(portfolio_value, trades_df, close=close)
     # j1s_chart.chart_gantt(trades_df)
     j1s_chart.plot_performance(
         portfolio_value=portfolio_value,
         trades_df=trades_df,
-        st=st,
-        end=end,
+        is_web=False,
     )
 
     print(f"回測時間: {time() - t1:.2f} 秒")
@@ -167,60 +196,38 @@ def local_signals():
     return signal
 
 
-def query(signal=None, good_search=False, proba_threshold=0.6):
-    #
-    stocks = signal["stock_id"].unique().tolist()
-    date = signal["date"]
-    st = date.min()
-    end = date.max()
-    # st = "2026-03-01"
-    # end = "2029-01-01"
-    full_df = parquet_db.query_price(stocks, st, end)
-    full_df["date"] = pd.to_datetime(full_df["date"])
-    input = pd.merge(
-        full_df,
-        signal[["date", "stock_id", "y_proba"]],
-        on=["date", "stock_id"],
-        how="left",  # 只取索引部分  # 以全時段為準
-    ).fillna(
-        0
-    )  # 沒預測到的（ATR太小的）補 0
+class PrepareDate:
+    def __init__(self, signal):
+        self.signal = signal
 
-    df_proba = input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
-    df_close = input.pivot(index="date", columns="stock_id", values="close")
-    df_high = input.pivot(index="date", columns="stock_id", values="high")
-    df_low = input.pivot(index="date", columns="stock_id", values="low")
-    df_close = df_close.ffill()
-    df_high = df_high.ffill()
-    df_low = df_low.ffill()
-    # check_df_value(df_close)
-    # check_df_value(df_high)
-    # check_df_value(df_low)
+        #
+        stocks = signal["stock_id"].unique().tolist()
+        date = signal["date"]
+        st = date.min()
+        end = date.max()
+        # st = "2026-03-01"
+        # end = "2029-01-01"
+        full_df = parquet_db.query_price(stocks, st, end)
+        full_df["date"] = pd.to_datetime(full_df["date"])
+        input = pd.merge(
+            full_df,
+            signal[["date", "stock_id", "y_proba"]],
+            on=["date", "stock_id"],
+            how="left",  # 只取索引部分  # 以全時段為準
+        ).fillna(
+            0
+        )  # 沒預測到的（ATR太小的）補 0
 
-    if good_search:
-        return grid_search(
-            close=df_close,
-            high=df_high,
-            low=df_low,
-            df_proba=df_proba,
-            stock_group=parquet_db.query_stock2group_dict(),
-            exits=gen_exits(check_market(df_close), df_proba),
-        )
-    else:
-        return main(
-            close=df_close,
-            high=df_high,
-            low=df_low,
-            df_proba=df_proba,
-            st=st,
-            end=end,
-            max_positions=10,
-            proba_threshold=proba_threshold,
-        )
+        self.proba = input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
+        self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
+        self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
+        self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
+        self.stock_group = parquet_db.query_stock2group_dict()
 
 
-def grid_search(close, high, low, df_proba, stock_group, exits):
+def optimal(signal):
 
+    p = PrepareDate(signal)
     import itertools
     from time import time
 
@@ -235,7 +242,7 @@ def grid_search(close, high, low, df_proba, stock_group, exits):
     }
 
     # ── 預先算好 entries（避免重複計算）──────────────────
-    my_filter = gen_filter(close, high, low)
+    my_filter = gen_filter(p.close, p.high, p.low)
 
     # ── 產生所有組合 ──────────────────────────────────────
     keys = list(param_grid.keys())
@@ -252,20 +259,20 @@ def grid_search(close, high, low, df_proba, stock_group, exits):
         # 每組 top_n / proba_threshold 都要重新算 entries
         entries = gen_entries(
             my_filter,
-            df_proba,
+            p.proba,
             top_n=params["top_n"],
             proba_threshold=params["proba_threshold"],
         )
-
+        exits = gen_exits(check_market(p.close, p.proba))
         portfolio_value, trades_df = simple_backtest(
-            close=close,
+            close=p.close,
             entries=entries,
             exits=exits,
-            df_proba=df_proba,
+            df_proba=p.proba,
             max_positions=params["max_positions"],
             sl_trail=params["sl_trail"],
             hold_days=params["hold_days"],
-            stock_group=stock_group,
+            stock_group=p.stock_group,
             group_limit=params["group_limit"],
             init_cash=1_000_000,
             fee=0.001,
@@ -317,7 +324,7 @@ def query_last():
     stocks = parquet_db.query_stocks_no_etf()
     # stocks = parquet_db.query_stocks_ids_list()
     signal = lgbm_main.query(stocks, "2024-01", "2099-01")
-    portfolio_value, trades_df, positions = query(signal)
+    portfolio_value, trades_df, positions = main(signal)
     # portfolio_value.to_csv("portfolio_value.csv")
     # signal.to_csv("query_last.csv", index=False)
 

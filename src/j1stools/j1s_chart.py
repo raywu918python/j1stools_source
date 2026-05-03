@@ -2,10 +2,10 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from . import parquet_db
+from j1stools import parquet_db
 
 
-def plot_performance(portfolio_value, trades_df, st, end, initial_cash=1_000_000):
+def plot_performance(portfolio_value, trades_df, initial_cash=1_000_000, is_web=False):
     """
     接收 simple_backtest 回傳的 portfolio_value 和 trades_df
     """
@@ -13,7 +13,8 @@ def plot_performance(portfolio_value, trades_df, st, end, initial_cash=1_000_000
     # ── 1. 策略每日資產價值 ──────────────────────────────
     strategy_value = portfolio_value.copy()
     strategy_value.index = pd.to_datetime(strategy_value.index)
-
+    st = strategy_value.index.min()
+    end = strategy_value.index.max()
     # ── 2. 0050 基準 ──────────────────────────────────────
     df0050 = parquet_db.query_price(["0050"], st, end)
     df0050.set_index("date", inplace=True)
@@ -131,12 +132,13 @@ def plot_performance(portfolio_value, trades_df, st, end, initial_cash=1_000_000
         ),
     )
 
-    fig.show()
-
-    with open("chart/chart_data.json", "w", encoding="utf-8") as f:
-        f.write(fig.to_json())
-
-    return fig
+    if is_web:
+        return fig.to_json()
+    else:
+        fig.show()
+    # with open("chart/chart_data.json", "w", encoding="utf-8") as f:
+    # f.write(fig.to_json())
+    # return fig
 
 
 def chart_gantt(trades_df):
