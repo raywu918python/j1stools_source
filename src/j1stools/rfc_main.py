@@ -3,20 +3,18 @@ from math import e
 from venv import create
 
 
+from attr import field
 from requests import head
 from sklearn.model_selection import train_test_split
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
+from j1stools import feature_builder
 from j1stools.obj_filter_data import FilterData
-from j1stools.obj_market_feature import MarketFeature
-from j1stools.obj_random_feature import RandomFeature
-from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
 import j1stools.parquet_db as parquet_db
 from j1stools.obj_base_model import BaseModel
-from j1stools.obj_hv_feature import HvFeature
 from j1stools.obj_label import Label
-from j1stools.obj_ma_feature import MaFeature
+from j1stools.feature_builder import gen_feature
 import joblib
 
 
@@ -46,41 +44,25 @@ def gen_model():
     )
 
 
-def gen_feature(df) -> pd.DataFrame:
-    st = time()
-
-    # df = VolumeFeature.init(df)
-    # df = PriceFeature.add_feature(df)
-    #
-    # df = AtrFeature.add_feature(df)
-    #############################################################
-    df = HvFeature.add_feature(df)
-    df = MaFeature.add_feature(df)
-    # df = MacdFeature.add_feature(df)
-    df = MarketFeature.add_feature(df)
-    df = VolumePriceFeature.add_feature(df)
-    # df = RandomFeature.add_feature(df)
-    print(f"gen_feature: {time() - st:.2f} 秒")
-
-    return df
-
-
 def split_date(df: pd.DataFrame, trainging_idx=0.8):
     # group
     df.sort_values(by=["date", "stock_id"], inplace=True)
-    X = df[[col for col in df.columns if col.startswith("f_")]]
+    x = df[[col for col in df.columns if col.startswith("f_")]]
     y = df["target"]
     if trainging_idx == 0:
-        return None, X, None, y
-    X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=trainging_idx, random_state=42)
-    return X_train, X_test, y_train, y_test
+        return None, x, None, y
+    elif trainging_idx == 1:
+        return x, None, y, None
+    else:
+        xtrain, xtest, ytrain, ytest = train_test_split(x, y, train_size=trainging_idx, random_state=42)
+        return xtrain, xtest, ytrain, ytest
 
 
 def init(trainging_idx=0.8, model=None):
     rfc = RFCModel()
     rfc.trainging_idx = trainging_idx
     rfc.is_training = True and rfc.trainging_idx
-    rfc.is_print_import_ft = False
+    rfc.is_print_import_ft = True
     rfc.THRESHOLD = 0.5
     if model:
         rfc.model = model
@@ -102,7 +84,7 @@ def exec(
     model = init(trainging_idx=trainging_idx, model=model)
     df = parquet_db.query_price(stocks, st, end)
     print("delete.before:", df.shape)
-    df = gen_feature(df)
+    df = feature_builder.gen_feature(df)
     df = Label.add_label(df)
     df = FilterData.get_data(df, True, False)
     # parquet_db.create_features(df)

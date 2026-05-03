@@ -5,8 +5,7 @@ import pandas as pd
 from pandas_ta import ma
 import vectorbt as vbt
 
-from j1stools import parquet_db
-from j1stools import lgbm_main
+from j1stools import lgbm_main, parquet_db
 
 # ============================================================
 # 技術指標
@@ -421,10 +420,9 @@ def grid_search(close, high, low, df_proba, stock_group, exits):
     return results_df
 
 
-# import os
-# print(os.getcwd())
+# signal = lgbm_main.query(parquet_db.query_stocks_no_etf(), "2024-01", "2099-01")
+# query(signal=signal)
 
-# update()
 # main()
 # query()
 # query(good_search=True)

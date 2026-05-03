@@ -7,10 +7,8 @@ from pygments.unistring import No
 
 from j1stools.obj_base_model import BaseModel
 
-from j1stools import obj_filter_data
-from j1stools.obj_random_feature import RandomFeature
+from j1stools import feature_builder, obj_filter_data, rfc_main
 from j1stools import parquet_db
-from j1stools import rfc_main
 from click import File
 from numpy.testing import print_assert_equal
 from pandas import DataFrame
@@ -26,60 +24,13 @@ from sklearn.metrics import (
     precision_score,
 )
 
-from j1stools.obj_atr_feature import AtrFeature
-from j1stools.obj_hv_feature import HvFeature
 from j1stools.obj_label import Label
-from j1stools.obj_ma_feature import MaFeature
-from j1stools.obj_macd_feature import MacdFeature
-from j1stools.obj_market_feature import MarketFeature
-from j1stools.obj_ml_check import MlCheck
-import j1stools.obj_random_feature as RandomFeature
-from j1stools.obj_volume_feature import VolumeFeature
 import joblib
-
-from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
 
 
 class LgbmModel(BaseModel):
     def __init__(self):
         super().__init__()
-
-
-def gen_feature(df, stocks, st, end, is_using_rfc=False) -> pd.DataFrame:
-    st = time()
-
-    # df = VolumeFeature.init(df)
-    # df = PriceFeature.add_feature(df)
-    #
-    # df = AtrFeature.add_feature(df)
-    #############################################################
-    df = HvFeature.add_feature(df)
-    df = MaFeature.add_feature(df)
-    # df = MacdFeature.add_feature(df)
-    df = MarketFeature.add_feature(df)
-    df = VolumePriceFeature.add_feature(df)
-    # df = RandomFeature.RandomFeature.add_feature(df)
-    print(f"gen_feature: {time() - st:.2f} 秒")
-
-    if is_using_rfc:
-        df = add_rfc_feature(df, stocks, st, end)
-
-    return df
-
-
-def add_rfc_feature(df, stocks, st, end):
-    signal = rfc_main.query(stocks, st, end)
-    signal.rename(columns={"y_proba": "f_rfc"}, inplace=True)
-    signal = signal[["date", "stock_id", "f_rfc"]]
-    #
-    return pd.merge(
-        df,
-        signal[["date", "stock_id", "f_rfc"]],
-        on=["date", "stock_id"],
-        how="left",  # 只取索引部分  # 以全時段為準
-    ).fillna(
-        0
-    )  # 沒預測到的（ATR太小的）補 0
 
 
 def split_date(df: pd.DataFrame, trainging_idx=0.8):
@@ -285,8 +236,6 @@ def backtest_with_daily_cap(gold_signals, cap=3):
 
 
 def get_next_day_prediction(model, df: pd.DataFrame, threshold=0.6):
-
-    # df = gen_feature(df)
     # expected_features = get_features_name(df)
 
     # # 1. 只取最後一筆資料 (最新的一天)
@@ -413,7 +362,10 @@ def exec(
     lgbm = init(model=model, trainging_idx=trainging_idx)
     df = parquet_db.query_price(stocks, st, end)
 
-    df = gen_feature(df, stocks, st, end, is_using_rfc)
+    df = feature_builder.gen_feature(df)
+    if is_using_rfc:
+        df = add_rfc_feature(df, stocks, st, end)
+
     df = Label.add_label(df)
     df = obj_filter_data.FilterData.get_data(df, True, False)
     df.set_index(["date", "stock_id"], inplace=True)
@@ -453,6 +405,21 @@ def query(stocks, st, end):
         model,
         is_using_rfc=True,
     )
+
+
+def add_rfc_feature(df, stocks, st, end):
+    signal = rfc_main.query(stocks, st, end)
+    signal.rename(columns={"y_proba": "f_rfc"}, inplace=True)
+    signal = signal[["date", "stock_id", "f_rfc"]]
+    #
+    return pd.merge(
+        df,
+        signal[["date", "stock_id", "f_rfc"]],
+        on=["date", "stock_id"],
+        how="left",  # 只取索引部分  # 以全時段為準
+    ).fillna(
+        0
+    )  # 沒預測到的（ATR太小的）補 0
 
 
 # create_model()

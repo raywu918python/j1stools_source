@@ -23,7 +23,7 @@ class VolumePriceFeature:
         #
         #
         #
-        f_price_close_change = dfw["close"].pct_change()
+        f_price_close_change = dfw["close"].pct_change(fill_method=None)
         #
         #
         #

@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -8,10 +10,11 @@ from sklearn.preprocessing import StandardScaler
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import pandas as pd
 
-from . import parquet_db
+from j1stools import feature_builder, parquet_db
 from j1stools.obj_base_model import BaseModel
 
 
+from j1stools.obj_filter_data import FilterData
 from j1stools.obj_label import Label
 from j1stools import rfc_main as rfc
 
@@ -146,10 +149,14 @@ class FeatureCheck:
 
 def check():
     fc = FeatureCheck()
-    df = parquet_db.query_price(["2330", "2308", "3105"], "2024-01-01", "2029-01-01")
-    df = rfc.gen_feature(df)
+    # df = parquet_db.query_price(parquet_db.query_stocks_ids_list(), "2024-01-01", "2099-01-01")
+    stocks = random.sample(parquet_db.query_stocks_ids_list(), 10)
+    df = parquet_db.query_price(stocks, "2024-01-01", "2099-01-01")
+    df = feature_builder.gen_feature(df)
+    import pandas as pd
+
     df = Label.add_label(df)
-    # df = FilterData.get_data(df, True, False)
+    df = FilterData.get_data(df, True, False)
     # parquet_db.create_features(df)
     # 資料在這裡刪
     df.set_index(["date", "stock_id"], inplace=True)
@@ -157,6 +164,9 @@ def check():
 
     xtrain, ytrain = BaseModel().drop_na_inf(xtrain, ytrain)
     xtest, ytest = BaseModel().drop_na_inf(xtest, ytest)
+
+    print(xtrain.select_dtypes(include="number").describe().T.round(2))
+
     xtrain: pd.DataFrame = fc.get_non_dup_ft_VIF(xtrain)
     print(xtrain.columns)
     fc.find_import_by_RFECV(xtrain, ytrain)
