@@ -1,7 +1,11 @@
+import random
 import time
 
 import numpy as np
 import pandas as pd
+
+pd.set_option("future.no_silent_downcasting", True)
+
 from pandas_ta import ma
 import vectorbt as vbt
 
@@ -16,14 +20,14 @@ import os
 from j1stools.backtest import simple_backtest
 
 
-def calc_adx(high, low, close, cache_path="cache/adx.pkl"):
+def calc_adx(high, low, close, cache_path="cache/adx.pkl", is_using_cache=False):
     os.makedirs("cache", exist_ok=True)
 
     # ✅ 用資料的最後日期當作快取 key
     last_date = str(close.index[-1].date())
     cache_path = f"cache/adx_{last_date}.pkl"
 
-    if os.path.exists(cache_path):
+    if is_using_cache and os.path.exists(cache_path):
         print("載入 ADX 快取...")
         return pd.read_pickle(cache_path)
 
@@ -74,7 +78,7 @@ def gen_filter(close, high, low):
     if isinstance(adx.columns, pd.MultiIndex):
         adx.columns = adx.columns.get_level_values("stock_id")
 
-    filter_atr = (((atr / close) > 0.05) & (adx > 20)).fillna(False)
+    filter_atr = (((atr / close) > 0.05) & (adx > 20)).fillna(False).infer_objects(copy=False)
     return filter_atr & filter_limit_up
 
 
@@ -99,45 +103,25 @@ def gen_exits(market_danger, df_proba):
 def main(
     signal,
     top_n=3,
-    proba_threshold=0.6,
+    threshold=0.6,
     max_positions=10,
     sl_trail=0.15,
     hold_days=5,
     sl_stop=0.10,
     tp_stop=0.15,
     use_sl_trail=True,
+    group_limit=3,
+    use_hold_days=False,
 ):
-    p = PrepareDate(signal)
-    # stocks = signal["stock_id"].unique().tolist()
-    # date = signal["date"]
-    # st = date.min()
-    # end = date.max()
-    # # st = "2026-03-01"
-    # # end = "2029-01-01"
-    # full_df = parquet_db.query_price(stocks, st, end)
-    # full_df["date"] = pd.to_datetime(full_df["date"])
-    # input = pd.merge(
-    #     full_df,
-    #     signal[["date", "stock_id", "y_proba"]],
-    #     on=["date", "stock_id"],
-    #     how="left",  # 只取索引部分  # 以全時段為準
-    # ).fillna(
-    #     0
-    # )  # 沒預測到的（ATR太小的）補 0
-
-    # df_proba = input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
-    # close = input.pivot(index="date", columns="stock_id", values="close").ffill()
-    # high = input.pivot(index="date", columns="stock_id", values="high").ffill()
-    # low = input.pivot(index="date", columns="stock_id", values="low").ffill()
-
     from time import time
 
-    t0 = time()
+    p = PrepareDate(signal)
 
+    t0 = time()
     # 前處理（向量化）
     market_danger = check_market(p.close)
     my_filter = gen_filter(p.close, p.high, p.low)
-    entries = gen_entries(my_filter, p.proba, top_n, proba_threshold)
+    entries = gen_entries(my_filter, p.proba, top_n, threshold)
     exits = gen_exits(market_danger, p.proba)
 
     print(f"前處理時間: {time() - t0:.2f} 秒")
@@ -158,22 +142,18 @@ def main(
         hold_days=hold_days,
         init_cash=1_000_000,
         fee=0.001,
-        use_hold_days=False,
+        use_hold_days=use_hold_days,
         use_sl_trail=use_sl_trail,
         use_fixed_sl=use_fixed_sl,
         use_fixed_tp=use_fixed_tp,
         sl_trail=sl_trail,
         sl_stop=sl_stop,
+        group_limit=group_limit,
         tp_stop=tp_stop,
         stock_group=p.stock_group,
     )
     # j1s_chart.chart_allocation(portfolio_value, trades_df, close=close)
     # j1s_chart.chart_gantt(trades_df)
-    j1s_chart.plot_performance(
-        portfolio_value=portfolio_value,
-        trades_df=trades_df,
-        is_web=False,
-    )
 
     print(f"回測時間: {time() - t1:.2f} 秒")
 
@@ -320,17 +300,63 @@ def optimal(signal):
     return results_df
 
 
-def query_last():
+def web_backtest(stocks):
+    """for web"""
+    signal = lgbm_main.query(stocks, "2025-01-01", "2099-01-01")
+    portfolio_value, trades_df, positions = main(
+        signal,
+        threshold=0.6,
+        max_positions=10,
+        group_limit=99,
+        tp_stop=0.15,
+        sl_stop=0.15,
+        use_sl_trail=False,
+    )
+
+    return j1s_chart.plot_performance(
+        portfolio_value=portfolio_value,
+        trades_df=trades_df,
+        is_web=True,
+    )
+
+
+def web_query_last(
+    st="2024-01",
+    end="2099-01",
+):
+    """for web"""
     stocks = parquet_db.query_stocks_no_etf()
-    # stocks = parquet_db.query_stocks_ids_list()
-    signal = lgbm_main.query(stocks, "2024-01", "2099-01")
-    portfolio_value, trades_df, positions = main(signal)
+    # stocks = random.sample(stocks, 100)
+    signal = lgbm_main.query(stocks, st, end)
+    # portfolio_value, trades_df, positions =
+    portfolio_value, trades_df, positions = main(
+        signal,
+        threshold=0.6,
+        max_positions=10,
+        group_limit=3,
+        tp_stop=0.15,
+        sl_stop=0.15,
+        use_sl_trail=False,
+    )
+
+    # j1s_chart.plot_performance(
+    #     portfolio_value=portfolio_value,
+    #     trades_df=trades_df,
+    #     is_web=True,
+    # )
+    return portfolio_value, trades_df, positions
     # portfolio_value.to_csv("portfolio_value.csv")
     # signal.to_csv("query_last.csv", index=False)
 
 
 # 2024-03-18沒資料，之後再檢查
-query_last()
+# x, y, z = query_last()
+# j1s_chart.plot_performance(
+#     portfolio_value=x,
+#     trades_df=y,
+#     is_web=True,
+# )
+
 # main()
 # query()
 # query(good_search=True)
