@@ -25,10 +25,7 @@ class BaseModel(ABC):
         now = datetime.now()
         self.t = now.strftime("%Y%m%d_%H%M%S")
         self.model_name = "model"
-        self.is_create_model = True
         self.trainging_idx = 0
-        self.is_gen_train_data = True
-        self.is_gen_test_data = False
         self.run_type = RUN_TYPE.train
 
     def drop_na_inf(self, x, y):

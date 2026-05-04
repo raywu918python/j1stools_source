@@ -5,7 +5,7 @@ import lightgbm as lgb
 from lightgbm import LGBMClassifier
 from pygments.unistring import No
 
-from j1stools.obj_base_model import BaseModel
+from j1stools.obj_base_model import RUN_TYPE, BaseModel
 
 from j1stools import feature_builder, obj_filter_data, rfc_main
 from j1stools import parquet_db
@@ -33,23 +33,29 @@ class LgbmModel(BaseModel):
         super().__init__()
 
 
-def split_date(df: pd.DataFrame, trainging_idx=0.8):
+def split_date(
+    df: pd.DataFrame,
+    is_gen_train_data=True,
+    is_gen_test_data=True,
+):
     # group
     df.sort_values(by=["date", "stock_id"], inplace=True)
 
     X = df[[col for col in df.columns if col.startswith("f_")]]
     y = df["target"]
-    if trainging_idx == 0:
-        _ = None
-        return _, _, X, _, _, y
-    xremain, xtest, yremain, ytest = train_test_split(X, y, test_size=0.15, random_state=42)
+    if is_gen_train_data and is_gen_test_data:
+        xremain, xtest, yremain, ytest = train_test_split(X, y, test_size=0.15, random_state=42)
+        xtrain, xval, ytrain, yval = train_test_split(xremain, yremain, test_size=0.176, random_state=42)
 
-    xtrain, xval, ytrain, yval = train_test_split(xremain, yremain, test_size=0.176, random_state=42)
-
-    print(f"訓練集大小: {len(xtrain)}")
-    print(f"驗證集大小: {len(xval)}")
-    print(f"測試集大小: {len(xtest)}")
-    return xtrain, xval, xtest, ytrain, yval, ytest
+        print(f"訓練集大小: {len(xtrain)}")
+        print(f"驗證集大小: {len(xval)}")
+        print(f"測試集大小: {len(xtest)}")
+        return xtrain, xval, xtest, ytrain, yval, ytest
+    elif is_gen_train_data:
+        xtrain, xval, ytrain, yval = train_test_split(X, y, test_size=0.15, random_state=42)
+        return xtrain, xval, None, ytrain, yval, None
+    elif is_gen_test_data:
+        return None, None, X, None, None, y
 
 
 def get_model():
@@ -67,21 +73,7 @@ def get_model():
     return model
 
 
-def init(trainging_idx=0.7, model=None):
-    lgbm = LgbmModel()
-    if model:
-        lgbm.model = model
-    else:
-        lgbm.model = get_model()
-    lgbm.THRESHOLD = 0.6
-    lgbm.is_print_import_ft = False
-    lgbm.is_add_noise = False
-    lgbm.trainging_idx = trainging_idx
-    lgbm.is_training = True and lgbm.trainging_idx
-    return lgbm
-
-
-def train(xtrain, xval, ytrain, yval, model):
+def lgbm_train(xtrain, xval, ytrain, yval, model):
     model.fit(
         xtrain,
         ytrain,
@@ -357,9 +349,32 @@ def exec(
     model=None,
     is_using_rfc=False,
     trainging_idx=0.7,
+    run_type=RUN_TYPE.train,
+    pick_feature=True,
 ):
     print(f"*" * 60, "lgbm start")
-    lgbm = init(model=model, trainging_idx=trainging_idx)
+
+    m = LgbmModel()
+    if model:
+        m.model = model
+    else:
+        m.model = get_model()
+    m.THRESHOLD = 0.6
+    m.is_print_import_ft = False
+    m.is_add_noise = False
+    m.trainging_idx = trainging_idx
+    m.run_type = run_type
+
+    if run_type == RUN_TYPE.train:
+        is_gen_train_data = True
+        is_gen_test_data = True
+    elif run_type == RUN_TYPE.create_model:
+        is_gen_train_data = True
+        is_gen_test_data = False
+    elif run_type == RUN_TYPE.predict:
+        is_gen_train_data = False
+        is_gen_test_data = True
+
     df = parquet_db.query_price(stocks, st, end)
 
     df = feature_builder.gen_feature(df)
@@ -369,18 +384,25 @@ def exec(
     df = Label.add_label(df)
     df = obj_filter_data.FilterData.get_data(df, True, False)
     df.set_index(["date", "stock_id"], inplace=True)
-    xtrain, xval, xtest, ytrain, yval, ytest = split_date(df, trainging_idx)
-    if lgbm.is_training:
-        xtrain, ytrain = lgbm.drop_na_inf(xtrain, ytrain)
-        xval, yval = lgbm.drop_na_inf(xval, yval)
-        xtrain = feature_builder.pick_feature(xtrain)
-        xval = feature_builder.pick_feature(xval)
-    xtest, ytest = lgbm.drop_na_inf(xtest, ytest)
-    xtest = feature_builder.pick_feature(xtest)
+    xtrain, xval, xtest, ytrain, yval, ytest = split_date(
+        df,
+        is_gen_train_data=is_gen_train_data,
+        is_gen_test_data=is_gen_test_data,
+    )
+    if is_gen_train_data:
+        xtrain, ytrain = m.drop_na_inf(xtrain, ytrain)
+        xval, yval = m.drop_na_inf(xval, yval)
+        if pick_feature:
+            xtrain = feature_builder.pick_feature(xtrain)
+            xval = feature_builder.pick_feature(xval)
+    if is_gen_test_data:
+        xtest, ytest = m.drop_na_inf(xtest, ytest)
+        if pick_feature:
+            xtest = feature_builder.pick_feature(xtest)
 
     acc_list = []
     for i in range(1):
-        y_proba = lgbm.train_model(
+        y_proba = m.train_model(
             xtrain,
             xtest,
             ytrain,
@@ -388,12 +410,14 @@ def exec(
             xval=xval,
             yval=yval,
             n=i,
-            function_train=train,
+            function_train=lgbm_train,
         )
+        if m.run_type == RUN_TYPE.create_model:
+            return
         acc_list.append(y_proba[:, 2])
 
     # print(f"平均:", np.average(acc_list))
-    signal = lgbm.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
+    signal = m.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
     signal.rename(columns={2: "y_proba"}, inplace=True)
     signal["date"] = pd.to_datetime(signal["date"])
     return signal
@@ -407,7 +431,7 @@ def predict(stocks, st, end):
         end=end,
         model=model,
         is_using_rfc=True,
-        trainging_idx=0,
+        run_type=RUN_TYPE.predict,
     )
 
 

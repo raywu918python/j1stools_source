@@ -69,29 +69,29 @@ def exec(
     end="2099-01-01",
     trainging_idx=0.8,
     model=None,
-    pick_feature=True,
+    pick_import_feature=True,
     is_del_atr=True,
     run_type=RUN_TYPE.train,
 ):
     print(f"*" * 60, "rfc start")
-    rfc = RFCModel()
-    rfc.trainging_idx = trainging_idx
-    rfc.run_type = run_type
-    if run_type == RUN_TYPE.train:
-        rfc.is_gen_train_data = True
-        rfc.is_gen_test_data = True
-    elif run_type == RUN_TYPE.create_model:
-        rfc.is_gen_train_data = True
-        rfc.is_gen_test_data = False
-    elif run_type == RUN_TYPE.predict:
-        rfc.is_gen_train_data = False
-        rfc.is_gen_test_data = True
-
-    rfc.is_print_import_ft = True
+    m = RFCModel()
+    m.trainging_idx = trainging_idx
+    m.run_type = run_type
+    m.is_print_import_ft = True
     if model:
-        rfc.model = model
+        m.model = model
     else:
-        rfc.model = gen_model()
+        m.model = gen_model()
+
+    if run_type == RUN_TYPE.train:
+        is_gen_train_data = True
+        is_gen_test_data = True
+    elif run_type == RUN_TYPE.create_model:
+        is_gen_train_data = True
+        is_gen_test_data = False
+    elif run_type == RUN_TYPE.predict:
+        is_gen_train_data = False
+        is_gen_test_data = True
 
     df = parquet_db.query_price(stocks, st, end)
     print("delete.before:", df.shape)
@@ -101,32 +101,32 @@ def exec(
     # parquet_db.create_features(df)
     # 資料在這裡刪
     df.set_index(["date", "stock_id"], inplace=True)
-    xtrain, xtest, ytrain, ytest = split_date(df, trainging_idx, rfc.is_gen_train_data, rfc.is_gen_test_data)
-    if rfc.is_gen_train_data:
-        xtrain, ytrain = rfc.drop_na_inf(xtrain, ytrain)
-        if pick_feature:
+    xtrain, xtest, ytrain, ytest = split_date(df, trainging_idx, is_gen_train_data, is_gen_test_data)
+    if is_gen_train_data:
+        xtrain, ytrain = m.drop_na_inf(xtrain, ytrain)
+        if pick_import_feature:
             xtrain = feature_builder.pick_feature(xtrain)
-    if rfc.is_gen_test_data:
-        xtest, ytest = rfc.drop_na_inf(xtest, ytest)
-        if pick_feature:
+    if is_gen_test_data:
+        xtest, ytest = m.drop_na_inf(xtest, ytest)
+        if pick_import_feature:
             xtest = feature_builder.pick_feature(xtest)
 
     print("delete.after:", df.shape)
     acc_list = []
     for i in range(1):
-        y_proba = rfc.train_model(
+        y_proba = m.train_model(
             xtrain,
             xtest,
             ytrain,
             ytest,
             i,
         )
-        if rfc.run_type == RUN_TYPE.create_model:
+        if m.run_type == RUN_TYPE.create_model:
             return
         acc_list.append(y_proba[:, 2])
 
     # print(f"平均:", np.average(acc_list))
-    signal = rfc.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
+    signal = m.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
     signal.rename(columns={2: "y_proba"}, inplace=True)
     signal["date"] = pd.to_datetime(signal["date"])
     return signal
@@ -134,7 +134,14 @@ def exec(
 
 def predict(stocks, st, end):
     model = joblib.load("models/rfc.joblib")
-    return exec(stocks, st, end, trainging_idx=0, model=model)
+    return exec(
+        stocks,
+        st,
+        end,
+        trainging_idx=0,
+        model=model,
+        run_type=RUN_TYPE.predict,
+    )
 
 
 #
@@ -161,9 +168,9 @@ def main():
         end="2020-01-01",
         trainging_idx=0.8,
         model=None,
-        pick_feature=True,
-        is_del_atr=True,
+        pick_import_feature=False,
+        is_del_atr=False,
     )
 
 
-# main()
+main()
