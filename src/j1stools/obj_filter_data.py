@@ -6,7 +6,7 @@ from j1stools.obj_macd_feature import MacdFeature
 
 
 class FilterData:
-    def get_data(df: pd.DataFrame, log=False, is_del_ich=False) -> DataFrame:
+    def get_data(df: pd.DataFrame, log=False, is_del_ich=False, is_del_atr=True) -> DataFrame:
         """
         定義你的「進場門檻」
         只有符合這個門檻的資料，我們才關心它的 Label
@@ -25,8 +25,9 @@ class FilterData:
 
         # 刪除 df
         df = FilterData.ichimoku(df, is_del_ich)  # 做多比重提升
-        df = FilterData.always_del_atr(df)
         df = FilterData.always_del_limit_up(df)
+        if is_del_atr:
+            df = FilterData.always_del_atr(df)
 
         if log:
             after = df["target"].copy().value_counts().sort_index().tolist()

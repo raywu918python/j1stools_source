@@ -1,5 +1,6 @@
 from abc import ABC
 from datetime import datetime
+from enum import Enum
 from time import time
 
 import numpy as np
@@ -10,6 +11,12 @@ from sklearn.preprocessing import label_binarize
 import joblib
 
 
+class RUN_TYPE(Enum):
+    train = 1
+    create_model = 2
+    predict = 3
+
+
 class BaseModel(ABC):
 
     def __init__(self):
@@ -18,8 +25,11 @@ class BaseModel(ABC):
         now = datetime.now()
         self.t = now.strftime("%Y%m%d_%H%M%S")
         self.model_name = "model"
-        self.is_training = True
+        self.is_create_model = True
         self.trainging_idx = 0
+        self.is_gen_train_data = True
+        self.is_gen_test_data = False
+        self.run_type = RUN_TYPE.train
 
     def drop_na_inf(self, x, y):
         # 1. 把 inf 換成 NaN
@@ -60,28 +70,37 @@ class BaseModel(ABC):
 
     def print_matrix(self, ytest, yproba, accuracy_label2, is_better=False):
         if is_better:
-            print(f"*" * 30, f"三分類混淆矩陣\n")
-            y_pred_threshold = (yproba >= self.THRESHOLD).astype(int)
-            conf_matrix = np.zeros((3, 3), dtype=int)
-            for i in range(len(ytest)):
-                actual_label = ytest.iloc[i]  # 假設這裡的值是 0, 1, 或 2
+            # 設定門檻值範圍：從 0.5 到 0.9，包含 0.9 所以終點設為 0.91
+            thresholds = np.arange(0.5, 0.91, 0.05)
+            for thresh in thresholds:
+                print(f"\n" + "=" * 40)
+                print(f"信心度門檻: {thresh:.2f}")
 
-                # 檢查這個樣本在哪些類別中機率 >= 0.45
-                # 注意：這裡一個樣本可能會投給多個類別，也可能不投
-                predicted_indices = np.where(y_pred_threshold[i] == 1)[0]
+                # 根據當前門檻判定預測結果
+                y_pred_threshold = (yproba >= thresh).astype(int)
+                conf_matrix = np.zeros((3, 3), dtype=int)
 
-                for pred_label in predicted_indices:
-                    conf_matrix[actual_label, pred_label] += 1
+                for i in range(len(ytest)):
+                    actual_label = ytest.iloc[i]
+                    # 找出所有超過門檻的類別索引
+                    predicted_indices = np.where(y_pred_threshold[i] == 1)[0]
 
-            # 轉成 DataFrame 方便閱讀
-            df_cm = pd.DataFrame(
-                conf_matrix,
-                index=["Actual 0", "Actual 1", "Actual 2"],
-                columns=["Pred 0", "Pred 1", "Pred 2"],
-            )
-            print(df_cm)
-            print(f"信心度 > {self.THRESHOLD} 的預測分佈表：")
-            print(f"進場勝率: {accuracy_label2:.2%}")
+                    for pred_label in predicted_indices:
+                        conf_matrix[actual_label, pred_label] += 1
+
+                df_cm = pd.DataFrame(
+                    conf_matrix,
+                    index=["Actual 0", "Actual 1", "Actual 2"],
+                    columns=["Pred 0", "Pred 1", "Pred 2"],
+                )
+
+                # 計算該門檻下的進場勝率 (以 Label 2 為例)
+                # 勝率 = 預測為 2 且實際為 2 / 總共預測為 2 的次數
+                total_pred_2 = conf_matrix[:, 2].sum()
+                win_rate_2 = (conf_matrix[2, 2] / total_pred_2) if total_pred_2 > 0 else 0
+
+                print(df_cm)
+                print(f"在此信心度下，Label 2 的進場勝率: {win_rate_2:.2%}")
         else:
             cm = confusion_matrix(ytest, yproba)
             # print("cm", cm, sep="\n")
@@ -177,7 +196,7 @@ class BaseModel(ABC):
 
         # train
         model = self.model
-        if self.is_training:
+        if self.run_type == RUN_TYPE.train or self.run_type == RUN_TYPE.create_model:
             st = time()
             if function_train:
                 function_train(xtrain, xval, ytrain, yval, model)
@@ -186,16 +205,16 @@ class BaseModel(ABC):
             joblib.dump(model, self.get_full_name())
             print(f"訓練時間: {time()-st:.2f} 秒")
 
-        expected_features = self.model.feature_names_in_
-        xtest = xtest[expected_features]
+        if self.run_type == RUN_TYPE.train or self.run_type == RUN_TYPE.predict:
+            # test
+            expected_features = self.model.feature_names_in_
+            xtest = xtest[expected_features]
+            if self.run_type == RUN_TYPE.train:
+                self.base_predict(xtest, ytest)
 
-        self.base_predict(xtest, ytest)
-
-        # test
-        st = time()
-        accuracy = self.batter_predict(xtest, ytest)
-        print(f"回測時間: {time()-st:.2f} 秒")
-        return accuracy
+            accuracy = self.batter_predict(xtest, ytest)
+            print(f"回測時間: {time()-st:.2f} 秒")
+            return accuracy
 
     def print_target_counts(self, ytest):
         print("*" * 30, "value_counts")

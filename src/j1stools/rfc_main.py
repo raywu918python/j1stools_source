@@ -1,3 +1,5 @@
+from pdb import run
+import random
 from time import time
 from math import e
 from venv import create
@@ -12,9 +14,9 @@ from sklearn.ensemble import RandomForestClassifier
 from j1stools import feature_builder
 from j1stools.obj_filter_data import FilterData
 import j1stools.parquet_db as parquet_db
-from j1stools.obj_base_model import BaseModel
+from j1stools.obj_base_model import RUN_TYPE, BaseModel
 from j1stools.obj_label import Label
-from j1stools.feature_builder import gen_feature
+from j1stools.feature_builder import gen_feature, pick_feature
 import joblib
 
 
@@ -44,18 +46,21 @@ def gen_model():
     )
 
 
-def split_date(df: pd.DataFrame, trainging_idx=0.8):
+def split_date(df: pd.DataFrame, trainging_idx=0.8, is_gen_train=True, is_gen_test=True):
     # group
     df.sort_values(by=["date", "stock_id"], inplace=True)
     x = df[[col for col in df.columns if col.startswith("f_")]]
     y = df["target"]
-    if trainging_idx == 0:
-        return None, x, None, y
-    elif trainging_idx == 1:
-        return x, None, y, None
-    else:
+
+    if trainging_idx and is_gen_train:
         xtrain, xtest, ytrain, ytest = train_test_split(x, y, train_size=trainging_idx, random_state=42)
         return xtrain, xtest, ytrain, ytest
+    elif is_gen_train:
+        return x, None, y, None
+    elif is_gen_test:
+        return None, x, None, y
+    else:
+        raise Exception("參數錯誤")
 
 
 def exec(
@@ -64,14 +69,25 @@ def exec(
     end="2099-01-01",
     trainging_idx=0.8,
     model=None,
-    threshold=0.6,
+    pick_feature=True,
+    is_del_atr=True,
+    run_type=RUN_TYPE.train,
 ):
     print(f"*" * 60, "rfc start")
     rfc = RFCModel()
     rfc.trainging_idx = trainging_idx
-    rfc.is_training = True and rfc.trainging_idx
+    rfc.run_type = run_type
+    if run_type == RUN_TYPE.train:
+        rfc.is_gen_train_data = True
+        rfc.is_gen_test_data = True
+    elif run_type == RUN_TYPE.create_model:
+        rfc.is_gen_train_data = True
+        rfc.is_gen_test_data = False
+    elif run_type == RUN_TYPE.predict:
+        rfc.is_gen_train_data = False
+        rfc.is_gen_test_data = True
+
     rfc.is_print_import_ft = True
-    rfc.THRESHOLD = threshold
     if model:
         rfc.model = model
     else:
@@ -81,16 +97,19 @@ def exec(
     print("delete.before:", df.shape)
     df = feature_builder.gen_feature(df)
     df = Label.add_label(df)
-    df = FilterData.get_data(df, True, False)
+    df = FilterData.get_data(df, True, False, is_del_atr)
     # parquet_db.create_features(df)
     # 資料在這裡刪
     df.set_index(["date", "stock_id"], inplace=True)
-    xtrain, xtest, ytrain, ytest = split_date(df, trainging_idx)
-    if rfc.is_training:
+    xtrain, xtest, ytrain, ytest = split_date(df, trainging_idx, rfc.is_gen_train_data, rfc.is_gen_test_data)
+    if rfc.is_gen_train_data:
         xtrain, ytrain = rfc.drop_na_inf(xtrain, ytrain)
-        xtrain = feature_builder.pick_feature(xtrain)
-    xtest, ytest = rfc.drop_na_inf(xtest, ytest)
-    xtest = feature_builder.pick_feature(xtest)
+        if pick_feature:
+            xtrain = feature_builder.pick_feature(xtrain)
+    if rfc.is_gen_test_data:
+        xtest, ytest = rfc.drop_na_inf(xtest, ytest)
+        if pick_feature:
+            xtest = feature_builder.pick_feature(xtest)
 
     print("delete.after:", df.shape)
     acc_list = []
@@ -102,6 +121,8 @@ def exec(
             ytest,
             i,
         )
+        if rfc.run_type == RUN_TYPE.create_model:
+            return
         acc_list.append(y_proba[:, 2])
 
     # print(f"平均:", np.average(acc_list))
@@ -114,29 +135,6 @@ def exec(
 def predict(stocks, st, end):
     model = joblib.load("models/rfc.joblib")
     return exec(stocks, st, end, trainging_idx=0, model=model)
-
-
-# create_model()
-
-# delete.before: (482543, 7)
-# ****************************** filter
-# [318923, 64674, 98946] 20 % 13 %
-# [22611, 12431, 14682] 29 % 25 %
-# delete.after: (49724, 32)
-# main(
-#     stocks=parquet_db.stocks(),
-#     st="2015-01-01",
-#     end="2018-01-01",
-#     trainging_idx=0.8,
-# )
-
-#
-#
-#
-#
-# main(stocks=["2330", "2360"])
-# main(parquet_db.query_stocks_no_etf(), st="2015-01-01", end="2018-01-01")
-# main(random.sample(parquet_db.query_stocks_no_etf(), 10), st="2015-01-01", end="2018-01-01")
 
 
 #
@@ -153,3 +151,19 @@ def predict(stocks, st, end):
 # print(gold_singal.head())
 # print(gold_singal[gold_singal["gold_signal"] > 0.6].shape)
 # print(gold_singal[gold_singal["gold_signal"] > 0.6].head())
+
+
+def main():
+    stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
+    exec(
+        stocks,
+        st="2015-01-01",
+        end="2020-01-01",
+        trainging_idx=0.8,
+        model=None,
+        pick_feature=True,
+        is_del_atr=True,
+    )
+
+
+# main()

@@ -1,4 +1,5 @@
 from j1stools import parquet_db
+from j1stools.obj_base_model import RUN_TYPE
 
 
 def create_model(step=1):
@@ -13,8 +14,7 @@ def create_model(step=1):
             parquet_db.query_stocks_ids_list(),
             "2015-01-01",
             "2020-12-31",
-            trainging_idx=0.8,
-            threshold=0.6,
+            run_type=RUN_TYPE.create_model,
         )
     elif step == 2:
         """
@@ -26,4 +26,4 @@ def create_model(step=1):
         lgbm.exec(parquet_db.query_stocks_ids_list(), "2021-01-01", "2024-01-01", trainging_idx=0.8, is_using_rfc=True)
 
 
-# create_model(2)
+create_model(1)
