@@ -58,30 +58,25 @@ def split_date(df: pd.DataFrame, trainging_idx=0.8):
         return xtrain, xtest, ytrain, ytest
 
 
-def init(trainging_idx=0.8, model=None):
-    rfc = RFCModel()
-    rfc.trainging_idx = trainging_idx
-    rfc.is_training = True and rfc.trainging_idx
-    rfc.is_print_import_ft = True
-    rfc.THRESHOLD = 0.5
-    if model:
-        rfc.model = model
-    else:
-        rfc.model = gen_model()
-    # rfc.model = joblib.load("models/20260417/model20260421_232454_0.joblib")
-    # rfc.model = joblib.load("models/20260417/model20260417_140212_4.joblib")
-    return rfc
-
-
 def exec(
     stocks=parquet_db.query_stocks_no_etf(),
     st="2015-01-01",
     end="2099-01-01",
     trainging_idx=0.8,
     model=None,
+    threshold=0.6,
 ):
     print(f"*" * 60, "rfc start")
-    model = init(trainging_idx=trainging_idx, model=model)
+    rfc = RFCModel()
+    rfc.trainging_idx = trainging_idx
+    rfc.is_training = True and rfc.trainging_idx
+    rfc.is_print_import_ft = True
+    rfc.THRESHOLD = threshold
+    if model:
+        rfc.model = model
+    else:
+        rfc.model = gen_model()
+
     df = parquet_db.query_price(stocks, st, end)
     print("delete.before:", df.shape)
     df = feature_builder.gen_feature(df)
@@ -91,14 +86,16 @@ def exec(
     # 資料在這裡刪
     df.set_index(["date", "stock_id"], inplace=True)
     xtrain, xtest, ytrain, ytest = split_date(df, trainging_idx)
-    if model.is_training:
-        xtrain, ytrain = model.drop_na_inf(xtrain, ytrain)
-    xtest, ytest = model.drop_na_inf(xtest, ytest)
+    if rfc.is_training:
+        xtrain, ytrain = rfc.drop_na_inf(xtrain, ytrain)
+        xtrain = feature_builder.pick_feature(xtrain)
+    xtest, ytest = rfc.drop_na_inf(xtest, ytest)
+    xtest = feature_builder.pick_feature(xtest)
 
     print("delete.after:", df.shape)
     acc_list = []
     for i in range(1):
-        y_proba = model.train_model(
+        y_proba = rfc.train_model(
             xtrain,
             xtest,
             ytrain,
@@ -108,13 +105,13 @@ def exec(
         acc_list.append(y_proba[:, 2])
 
     # print(f"平均:", np.average(acc_list))
-    signal = model.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
+    signal = rfc.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
     signal.rename(columns={2: "y_proba"}, inplace=True)
     signal["date"] = pd.to_datetime(signal["date"])
     return signal
 
 
-def query(stocks, st, end):
+def predict(stocks, st, end):
     model = joblib.load("models/rfc.joblib")
     return exec(stocks, st, end, trainging_idx=0, model=model)
 

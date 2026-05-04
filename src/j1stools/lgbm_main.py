@@ -354,9 +354,9 @@ def exec(
     stocks=random.sample(parquet_db.query_stocks_ids_list(), 100),
     st="2024-01-01",
     end="2099-01-01",
-    trainging_idx=0.7,
     model=None,
     is_using_rfc=False,
+    trainging_idx=0.7,
 ):
     print(f"*" * 60, "lgbm start")
     lgbm = init(model=model, trainging_idx=trainging_idx)
@@ -373,7 +373,11 @@ def exec(
     if lgbm.is_training:
         xtrain, ytrain = lgbm.drop_na_inf(xtrain, ytrain)
         xval, yval = lgbm.drop_na_inf(xval, yval)
+        xtrain = feature_builder.pick_feature(xtrain)
+        xval = feature_builder.pick_feature(xval)
     xtest, ytest = lgbm.drop_na_inf(xtest, ytest)
+    xtest = feature_builder.pick_feature(xtest)
+
     acc_list = []
     for i in range(1):
         y_proba = lgbm.train_model(
@@ -395,20 +399,20 @@ def exec(
     return signal
 
 
-def query(stocks, st, end):
+def predict(stocks, st, end):
     model = joblib.load("models/lgbm.joblib")
     return exec(
-        stocks,
-        st,
-        end,
-        0,
-        model,
+        stocks=stocks,
+        st=st,
+        end=end,
+        model=model,
         is_using_rfc=True,
+        trainging_idx=0,
     )
 
 
 def add_rfc_feature(df, stocks, st, end):
-    signal = rfc_main.query(stocks, st, end)
+    signal = rfc_main.predict(stocks, st, end)
     signal.rename(columns={"y_proba": "f_rfc"}, inplace=True)
     signal = signal[["date", "stock_id", "f_rfc"]]
     #

@@ -1,12 +1,11 @@
 from j1stools import parquet_db
 
 
-def create_model():
+def create_model(step=1):
     """
     訓練模型並儲存
     "2015-01-01", "2020-12-31"
     """
-    step = 1
     if step == 1:
         import j1stools.rfc_main as rfc
 
@@ -15,15 +14,16 @@ def create_model():
             "2015-01-01",
             "2020-12-31",
             trainging_idx=0.8,
+            threshold=0.6,
         )
     elif step == 2:
         """
         訓練模型並儲存
         "2021-01-01", "2024-01-01"
         """
-        # import j1stools.lgbm_main as lgbm
+        import j1stools.lgbm_main as lgbm
 
-        # lgbm.exec(parquet_db.query_stocks_ids_list(), "2021-01-01", "2024-01-01", trainging_idx=0.8, is_using_rfc=True)
+        lgbm.exec(parquet_db.query_stocks_ids_list(), "2021-01-01", "2024-01-01", trainging_idx=0.8, is_using_rfc=True)
 
 
-# create_model()
+# create_model(2)

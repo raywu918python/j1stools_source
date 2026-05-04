@@ -54,13 +54,11 @@ class MarketFeature:
         df0050rsi = ta.rsi(df0050["close"], length=14)
         f_market_stock_rsi = (dfstockrsi.sub(df0050rsi, axis=0)) * 0.01
         #
-        # f_market_dist,f_market_bias_slope
+        # f_market_rs_1d
         #
         stockchange = dfclose.pct_change(1, fill_method=None)
         marketchange = df0050["close"].pct_change(1)
         f_market_rs_1d = stockchange.sub(marketchange, axis=0)
-        f_market_dist = f_market_rs_1d.div(marketchange, axis=0)
-        f_market_bias_slope = f_market_dist.diff(3)
         #
         # set to value
         #
@@ -69,8 +67,6 @@ class MarketFeature:
         df["f_market_rs_3d"] = f_market_rs_3d.stack(future_stack=True)
         df["f_market_rs_1d"] = f_market_rs_1d.stack(future_stack=True)
         df["f_market_stock_rsi"] = f_market_stock_rsi.stack(future_stack=True)
-        df["f_market_dist"] = f_market_dist.stack(future_stack=True)
-        df["f_market_bias_slope"] = f_market_bias_slope.stack(future_stack=True)
         df = df.reset_index()
         df["f_market_rsi_high"] = df["date"].map((df0050rsi > 0.70).astype(int))
         df["f_market_rsi_low"] = df["date"].map((df0050rsi < 0.30).astype(int))

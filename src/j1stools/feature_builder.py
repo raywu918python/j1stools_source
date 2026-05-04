@@ -25,3 +25,19 @@ def gen_feature(df) -> pd.DataFrame:
     print(f"gen_feature: {time() - st:.2f} 秒")
 
     return df
+
+
+def pick_feature(x):
+    return x[
+        [
+            "f_HV_60",
+            "f_HV_squeeze",
+            "f_market_rs_10d",
+            "f_market_rs_3d",
+            "f_market_stock_rsi",
+            "f_market_ret3",
+            "f_vwap_gap",
+            "f_vwap_roc",
+            "f_pvt_gap",
+        ]
+    ]

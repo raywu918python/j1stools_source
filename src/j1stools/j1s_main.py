@@ -100,7 +100,7 @@ def gen_exits(market_danger, df_proba):
 # ============================================================
 
 
-def main(
+def backtest(
     signal,
     top_n=3,
     threshold=0.6,
@@ -302,8 +302,8 @@ def optimal(signal):
 
 def web_backtest(stocks):
     """for web"""
-    signal = lgbm_main.query(stocks, "2025-01-01", "2099-01-01")
-    portfolio_value, trades_df, positions = main(
+    signal = lgbm_main.predict(stocks, "2025-01-01", "2099-01-01")
+    portfolio_value, trades_df, positions = backtest(
         signal,
         threshold=0.6,
         max_positions=10,
@@ -327,16 +327,24 @@ def web_query_last(
     """for web"""
     stocks = parquet_db.query_stocks_no_etf()
     # stocks = random.sample(stocks, 100)
-    signal = lgbm_main.query(stocks, st, end)
+    signal = lgbm_main.predict(stocks, st, end)
     # portfolio_value, trades_df, positions =
-    portfolio_value, trades_df, positions = main(
+    portfolio_value, trades_df, positions = backtest(
+        # signal,
+        # threshold=0.6,
+        # max_positions=10,
+        # group_limit=3,
+        # tp_stop=0.15,
+        # sl_stop=0.15,
+        # use_sl_trail=False,
         signal,
         threshold=0.6,
         max_positions=10,
         group_limit=3,
         tp_stop=0.15,
         sl_stop=0.15,
-        use_sl_trail=False,
+        sl_trail=0.10,
+        use_sl_trail=True,
     )
 
     # j1s_chart.plot_performance(
@@ -348,6 +356,33 @@ def web_query_last(
     # portfolio_value.to_csv("portfolio_value.csv")
     # signal.to_csv("query_last.csv", index=False)
 
+
+def main(
+    st="2024-01",
+    end="2099-01",
+):
+    stocks = parquet_db.query_stocks_no_etf()
+    # stocks = parquet_db.query_stocks_ids_list()
+    signal = lgbm_main.predict(stocks, st, end)
+    portfolio_value, trades_df, positions = backtest(
+        signal,
+        threshold=0.6,
+        max_positions=10,
+        group_limit=3,
+        tp_stop=0.15,
+        sl_stop=0.15,
+        sl_trail=0.10,
+        use_sl_trail=True,
+    )
+
+    j1s_chart.plot_performance(
+        portfolio_value=portfolio_value,
+        trades_df=trades_df,
+        is_web=False,
+    )
+
+
+# main()
 
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()

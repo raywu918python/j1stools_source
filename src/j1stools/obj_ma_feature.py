@@ -16,15 +16,16 @@ def help(df: pd.DataFrame):
 
 class MaFeature:
     def add_feature(df: pd.DataFrame):
-        df_wide = df.pivot(index="date", columns="stock_id", values="close")
+        dfclose = df.pivot(index="date", columns="stock_id", values="close")
+        dfclose.to_csv("dfclose.csv")
 
         # ma = adjust=False, ema = adjust=True
-        ma5 = df_wide.ewm(span=5, adjust=False).mean()
-        ma10 = df_wide.ewm(span=10, adjust=False).mean()
-        ma20 = df_wide.ewm(span=20, adjust=False).mean()
-        f_ma5_d = (df_wide - ma5) / ma5
-        f_ma10_d = (df_wide - ma10) / ma10
-        f_ma20_d = (df_wide - ma20) / ma20
+        ma5 = dfclose.ewm(span=5, adjust=False).mean()
+        ma10 = dfclose.ewm(span=10, adjust=False).mean()
+        ma20 = dfclose.ewm(span=20, adjust=False).mean()
+        f_ma5_d = dfclose / ma5
+        f_ma10_d = dfclose / ma10
+        f_ma20_d = dfclose / ma20
         f_ma20_change = f_ma20_d.pct_change(periods=3, fill_method=None)
 
         df = df.set_index(["date", "stock_id"])

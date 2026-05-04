@@ -151,6 +151,8 @@ def check():
     fc = FeatureCheck()
     # df = parquet_db.query_price(parquet_db.query_stocks_ids_list(), "2024-01-01", "2099-01-01")
     stocks = random.sample(parquet_db.query_stocks_ids_list(), 10)
+    # stocks = ["2355"]
+    print(stocks)
     df = parquet_db.query_price(stocks, "2024-01-01", "2099-01-01")
     df = feature_builder.gen_feature(df)
     import pandas as pd
