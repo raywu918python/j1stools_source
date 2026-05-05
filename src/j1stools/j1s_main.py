@@ -362,7 +362,7 @@ class Chart(IntFlag):
     N = 0
     PF = 1  # 2^0
     FLOW = 2  # 2^1
-    # EXECUTE = 4   # 2^2
+    INFO = 4  # 2^2
     # DELETE = 8    # 2^3
 
 
@@ -374,25 +374,28 @@ def main(
     IS_USE_CACHE = True
     # signal = lgbm_main.predict(parquet_db.query_stocks_no_etf(), st, end)
     signal = local_signals()
-    show_chart = Chart.N  # | Chart.PF
+    show_chart = Chart.N
+    # show_chart |= Chart.PF
+    show_chart |= Chart.FLOW
+    show_chart |= Chart.INFO
 
-    p = PrepareDate(signal, top_n=3, threshold=0.7)
+    p = PrepareDate(signal, top_n=99, threshold=0.9)
     #############################################################
     t1 = time()
     portfolio_value, trades_df, positions = j1s_backtest(
-        use_sl_trail=True,
-        sl_trail=0.1,
+        use_sl_trail=False,
+        sl_trail=0.15,
         use_fixed_sl=True,
-        sl_stop=0.1,
-        use_fixed_tp=False,
-        tp_stop=0.1,
+        sl_stop=0.15,
+        use_fixed_tp=True,
+        tp_stop=0.15,
         use_hold_days=False,
         hold_days=5,
         #############################################################
         use_fixed_sl_tp=True,
         #############################################################
         max_positions=10,
-        group_limit=3,
+        group_limit=99,
         stock_group=p.stock_group,
         #############################################################
         init_cash=1_000_000,
@@ -423,12 +426,12 @@ def main(
         )
     if show_chart & Chart.FLOW:
         j1s_chart.chart_gantt(trades_df)
-
-    # j1s_chart.chart_allocation(
-    #     portfolio_value,
-    #     trades_df,
-    #     close=close,
-    # )
+    if show_chart & Chart.INFO:
+        j1s_chart.chart_allocation(
+            portfolio_value,
+            trades_df,
+            close=p.close,
+        )
 
 
 main()
