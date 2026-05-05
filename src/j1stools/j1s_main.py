@@ -1,3 +1,4 @@
+from enum import IntFlag
 import random
 from time import time
 
@@ -357,6 +358,14 @@ def web_query_last(
     # signal.to_csv("query_last.csv", index=False)
 
 
+class Chart(IntFlag):
+    N = 0
+    PF = 1  # 2^0
+    FLOW = 2  # 2^1
+    # EXECUTE = 4   # 2^2
+    # DELETE = 8    # 2^3
+
+
 def main(
     st="2024-01",
     end="2099-01",
@@ -365,21 +374,22 @@ def main(
     IS_USE_CACHE = True
     # signal = lgbm_main.predict(parquet_db.query_stocks_no_etf(), st, end)
     signal = local_signals()
-    p = PrepareDate(signal, top_n=3, threshold=0.7)
+    show_chart = Chart.N  # | Chart.PF
 
+    p = PrepareDate(signal, top_n=3, threshold=0.7)
     #############################################################
     t1 = time()
     portfolio_value, trades_df, positions = j1s_backtest(
         use_sl_trail=True,
         sl_trail=0.1,
-        use_fixed_sl=False,
+        use_fixed_sl=True,
         sl_stop=0.1,
         use_fixed_tp=False,
         tp_stop=0.1,
         use_hold_days=False,
         hold_days=5,
         #############################################################
-        use_fixed_sp_sl=True,
+        use_fixed_sl_tp=True,
         #############################################################
         max_positions=10,
         group_limit=3,
@@ -404,12 +414,15 @@ def main(
         print(f"勝率：{(trades_df['pnl'] > 0).mean() * 100:.1f}%")
         print(f"平均報酬：{trades_df['return_pct'].mean():.2f}%")
     #############################################################
-    # j1s_chart.plot_performance(
-    #     portfolio_value=portfolio_value,
-    #     trades_df=trades_df,
-    #     is_web=False,
-    # )
-    # j1s_chart.chart_gantt(trades_df)
+
+    if show_chart & Chart.PF:
+        j1s_chart.plot_performance(
+            portfolio_value=portfolio_value,
+            trades_df=trades_df,
+            is_web=False,
+        )
+    if show_chart & Chart.FLOW:
+        j1s_chart.chart_gantt(trades_df)
 
     # j1s_chart.chart_allocation(
     #     portfolio_value,
