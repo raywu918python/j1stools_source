@@ -3,6 +3,7 @@ import time
 
 import numpy as np
 import pandas as pd
+from regex import P
 
 pd.set_option("future.no_silent_downcasting", True)
 
@@ -17,7 +18,36 @@ from j1stools import j1s_chart, lgbm_main, parquet_db
 
 import os
 
-from j1stools.backtest import simple_backtest
+from j1stools.j1s_backtest import j1s_backtest
+
+
+class PrepareDate:
+    def __init__(self, signal):
+        self.signal = signal
+
+        #
+        stocks = signal["stock_id"].unique().tolist()
+        date = signal["date"]
+        st = date.min()
+        end = date.max()
+        # st = "2026-03-01"
+        # end = "2029-01-01"
+        full_df = parquet_db.query_price(stocks, st, end)
+        full_df["date"] = pd.to_datetime(full_df["date"])
+        input = pd.merge(
+            full_df,
+            signal[["date", "stock_id", "y_proba"]],
+            on=["date", "stock_id"],
+            how="left",  # 只取索引部分  # 以全時段為準
+        ).fillna(
+            0
+        )  # 沒預測到的（ATR太小的）補 0
+
+        self.proba = input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
+        self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
+        self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
+        self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
+        self.stock_group = parquet_db.query_stock2group_dict()
 
 
 def calc_adx(high, low, close, cache_path="cache/adx.pkl", is_using_cache=False):
@@ -129,11 +159,10 @@ def backtest(
 
     # 回測
 
-    use_sl_trail = use_sl_trail
     use_fixed_sl = not use_sl_trail
     use_fixed_tp = not use_sl_trail
 
-    portfolio_value, trades_df, positions = simple_backtest(
+    portfolio_value, trades_df, positions = j1s_backtest(
         close=p.close,
         entries=entries,
         exits=exits,
@@ -152,7 +181,7 @@ def backtest(
         tp_stop=tp_stop,
         stock_group=p.stock_group,
     )
-    # j1s_chart.chart_allocation(portfolio_value, trades_df, close=close)
+    # j1s_chart.chart_allocation(portfolio_value, trades_df, close=p.close)
     # j1s_chart.chart_gantt(trades_df)
 
     print(f"回測時間: {time() - t1:.2f} 秒")
@@ -167,45 +196,16 @@ def backtest(
         print(f"勝率：{(trades_df['pnl'] > 0).mean() * 100:.1f}%")
         print(f"平均報酬：{trades_df['return_pct'].mean():.2f}%")
 
-    return portfolio_value, trades_df, positions
+    return portfolio_value, trades_df, positions, p.close
 
 
 def local_signals():
-    signal = pd.read_csv("gold_signal.csv", dtype={"stock_id": str})
+    signal = pd.read_csv("signal.csv", dtype={"stock_id": str})
     signal["date"] = pd.to_datetime(signal["date"])
     return signal
 
 
-class PrepareDate:
-    def __init__(self, signal):
-        self.signal = signal
-
-        #
-        stocks = signal["stock_id"].unique().tolist()
-        date = signal["date"]
-        st = date.min()
-        end = date.max()
-        # st = "2026-03-01"
-        # end = "2029-01-01"
-        full_df = parquet_db.query_price(stocks, st, end)
-        full_df["date"] = pd.to_datetime(full_df["date"])
-        input = pd.merge(
-            full_df,
-            signal[["date", "stock_id", "y_proba"]],
-            on=["date", "stock_id"],
-            how="left",  # 只取索引部分  # 以全時段為準
-        ).fillna(
-            0
-        )  # 沒預測到的（ATR太小的）補 0
-
-        self.proba = input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
-        self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
-        self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
-        self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
-        self.stock_group = parquet_db.query_stock2group_dict()
-
-
-def optimal(signal):
+def optimize(signal):
 
     p = PrepareDate(signal)
     import itertools
@@ -244,7 +244,7 @@ def optimal(signal):
             proba_threshold=params["proba_threshold"],
         )
         exits = gen_exits(check_market(p.close, p.proba))
-        portfolio_value, trades_df = simple_backtest(
+        portfolio_value, trades_df = j1s_backtest(
             close=p.close,
             entries=entries,
             exits=exits,
@@ -303,7 +303,7 @@ def optimal(signal):
 def web_backtest(stocks):
     """for web"""
     signal = lgbm_main.predict(stocks, "2025-01-01", "2099-01-01")
-    portfolio_value, trades_df, positions = backtest(
+    portfolio_value, trades_df, positions, close = backtest(
         signal,
         threshold=0.6,
         max_positions=10,
@@ -329,7 +329,7 @@ def web_query_last(
     # stocks = random.sample(stocks, 100)
     signal = lgbm_main.predict(stocks, st, end)
     # portfolio_value, trades_df, positions =
-    portfolio_value, trades_df, positions = backtest(
+    portfolio_value, trades_df, positions, close = backtest(
         # signal,
         # threshold=0.6,
         # max_positions=10,
@@ -361,18 +361,20 @@ def main(
     st="2024-01",
     end="2099-01",
 ):
-    stocks = parquet_db.query_stocks_no_etf()
+    # stocks = parquet_db.query_stocks_no_etf()
     # stocks = parquet_db.query_stocks_ids_list()
-    signal = lgbm_main.predict(stocks, st, end)
-    portfolio_value, trades_df, positions = backtest(
-        signal,
-        threshold=0.6,
+    # signal = lgbm_main.predict(stocks, st, end)
+    # signal.to_csv("signal.csv", index=False)
+    portfolio_value, trades_df, positions, close = backtest(
+        local_signals(),
+        threshold=0.75,
         max_positions=10,
         group_limit=3,
+        top_n=10,
         tp_stop=0.15,
-        sl_stop=0.15,
-        sl_trail=0.10,
-        use_sl_trail=True,
+        sl_stop=0.10,
+        sl_trail=0.20,
+        use_sl_trail=False,
     )
 
     j1s_chart.plot_performance(
@@ -380,9 +382,16 @@ def main(
         trades_df=trades_df,
         is_web=False,
     )
+    j1s_chart.chart_gantt(trades_df)
+
+    # j1s_chart.chart_allocation(
+    #     portfolio_value,
+    #     trades_df,
+    #     close=close,
+    # )
 
 
-# main()
+main()
 
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()

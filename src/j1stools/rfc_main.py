@@ -14,7 +14,7 @@ from sklearn.ensemble import RandomForestClassifier
 from j1stools import feature_builder
 from j1stools.obj_filter_data import FilterData
 import j1stools.parquet_db as parquet_db
-from j1stools.obj_base_model import RUN_TYPE, BaseModel
+from j1stools.obj_base_model import MODEL_TYPE, RUN_TYPE, BaseModel
 from j1stools.obj_label import Label
 from j1stools.feature_builder import gen_feature, pick_feature
 import joblib
@@ -23,6 +23,7 @@ import joblib
 class RFCModel(BaseModel):
     def __init__(self):
         super().__init__()
+        self.model_type = MODEL_TYPE.rfc
 
 
 #
@@ -39,6 +40,7 @@ def gen_model():
         # class_weight={0: 1, 1: 2.5, 2: 6},
         # class_weight={0: 1, 1: 1, 2: 10},
         # 增加 OOB 評估，讓你在訓練完可以直接看 OOB Score 準不準
+        class_weight="balanced",
         oob_score=True,
         random_state=42,
         criterion="entropy",
@@ -61,6 +63,16 @@ def split_date(df: pd.DataFrame, trainging_idx=0.8, is_gen_train=True, is_gen_te
         return None, x, None, y
     else:
         raise Exception("參數錯誤")
+
+
+def function_train(xtrain, ytrain, model):
+    sample_weights = ytrain.map({0: 1, 1: 1, 2: 3})
+
+    model.fit(
+        xtrain,
+        ytrain,
+        # sample_weight=sample_weights,
+    )
 
 
 def exec(
@@ -96,6 +108,7 @@ def exec(
     df = parquet_db.query_price(stocks, st, end)
     print("delete.before:", df.shape)
     df = feature_builder.gen_feature(df)
+    print(df.value_counts().T.to_csv("tmp.csv"))
     df = Label.add_label(df)
     df = FilterData.get_data(df, True, False, is_del_atr)
     # parquet_db.create_features(df)
@@ -120,6 +133,7 @@ def exec(
             ytrain,
             ytest,
             i,
+            function_train=function_train,
         )
         if m.run_type == RUN_TYPE.create_model:
             return
@@ -161,16 +175,29 @@ def predict(stocks, st, end):
 
 
 def main():
-    stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
+    stocks = random.sample(parquet_db.query_stocks_no_etf(), 500)
     exec(
         stocks,
         st="2015-01-01",
-        end="2020-01-01",
+        end="2018-01-01",
         trainging_idx=0.8,
         model=None,
-        pick_import_feature=False,
-        is_del_atr=False,
+        pick_import_feature=True,
+        is_del_atr=True,
     )
 
 
-main()
+def optimize():
+    model = joblib.load("model/rfc20260504_233715_0.joblib")
+    exec(
+        stocks=parquet_db.query_stocks_no_etf(),
+        st="2024-01-01",
+        end="2099-01-01",
+        model=model,
+        run_type=RUN_TYPE.predict,
+        pick_import_feature=True,
+    )
+
+
+# main()
+# optimize()

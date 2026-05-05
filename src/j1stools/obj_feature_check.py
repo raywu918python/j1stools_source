@@ -168,7 +168,6 @@ def check():
     xtest, ytest = BaseModel().drop_na_inf(xtest, ytest)
 
     print(xtrain.select_dtypes(include="number").describe().T.round(2))
-
     xtrain: pd.DataFrame = fc.get_non_dup_ft_VIF(xtrain)
     print(xtrain.columns)
     fc.find_import_by_RFECV(xtrain, ytrain)

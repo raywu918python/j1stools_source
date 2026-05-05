@@ -5,7 +5,7 @@ import lightgbm as lgb
 from lightgbm import LGBMClassifier
 from pygments.unistring import No
 
-from j1stools.obj_base_model import RUN_TYPE, BaseModel
+from j1stools.obj_base_model import MODEL_TYPE, RUN_TYPE, BaseModel
 
 from j1stools import feature_builder, obj_filter_data, rfc_main
 from j1stools import parquet_db
@@ -31,6 +31,7 @@ import joblib
 class LgbmModel(BaseModel):
     def __init__(self):
         super().__init__()
+        self.model_type = MODEL_TYPE.lgbm
 
 
 def split_date(
@@ -73,7 +74,9 @@ def get_model():
     return model
 
 
-def lgbm_train(xtrain, xval, ytrain, yval, model):
+def function_train(xtrain, xval, ytrain, yval, model):
+    # sample_weights = ytrain.map({0: 1, 1: 1, 2: 3})
+
     model.fit(
         xtrain,
         ytrain,
@@ -348,21 +351,22 @@ def exec(
     end="2099-01-01",
     model=None,
     is_using_rfc=False,
-    trainging_idx=0.7,
     run_type=RUN_TYPE.train,
-    pick_feature=True,
+    pick_import_feature=True,
+    is_del_atr=True,
 ):
     print(f"*" * 60, "lgbm start")
 
     m = LgbmModel()
+    m.model_type = MODEL_TYPE.lgbm
+    m.isprint_import_ft = True
     if model:
         m.model = model
     else:
         m.model = get_model()
     m.THRESHOLD = 0.6
-    m.is_print_import_ft = False
+    m.is_print_import_ft = True
     m.is_add_noise = False
-    m.trainging_idx = trainging_idx
     m.run_type = run_type
 
     if run_type == RUN_TYPE.train:
@@ -382,7 +386,7 @@ def exec(
         df = add_rfc_feature(df, stocks, st, end)
 
     df = Label.add_label(df)
-    df = obj_filter_data.FilterData.get_data(df, True, False)
+    df = obj_filter_data.FilterData.get_data(df, True, False, is_del_atr)
     df.set_index(["date", "stock_id"], inplace=True)
     xtrain, xval, xtest, ytrain, yval, ytest = split_date(
         df,
@@ -392,13 +396,13 @@ def exec(
     if is_gen_train_data:
         xtrain, ytrain = m.drop_na_inf(xtrain, ytrain)
         xval, yval = m.drop_na_inf(xval, yval)
-        if pick_feature:
-            xtrain = feature_builder.pick_feature(xtrain)
-            xval = feature_builder.pick_feature(xval)
+        if pick_import_feature:
+            xtrain = feature_builder.pick_feature(xtrain, is_using_rfc)
+            xval = feature_builder.pick_feature(xval, is_using_rfc)
     if is_gen_test_data:
         xtest, ytest = m.drop_na_inf(xtest, ytest)
-        if pick_feature:
-            xtest = feature_builder.pick_feature(xtest)
+        if pick_import_feature:
+            xtest = feature_builder.pick_feature(xtest, is_using_rfc)
 
     acc_list = []
     for i in range(1):
@@ -410,7 +414,7 @@ def exec(
             xval=xval,
             yval=yval,
             n=i,
-            function_train=lgbm_train,
+            function_train=function_train,
         )
         if m.run_type == RUN_TYPE.create_model:
             return
@@ -450,5 +454,17 @@ def add_rfc_feature(df, stocks, st, end):
     )  # 沒預測到的（ATR太小的）補 0
 
 
-# create_model()
+def main():
+    stocks = random.sample(parquet_db.query_stocks_no_etf(), 500)
+    exec(
+        stocks,
+        st="2015-01-01",
+        end="2018-01-01",
+        model=None,
+        pick_import_feature=False,
+        is_del_atr=False,
+        is_using_rfc=False,
+    )
+
+
 # main()

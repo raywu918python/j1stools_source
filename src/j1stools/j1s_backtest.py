@@ -5,7 +5,7 @@
 import pandas as pd
 
 
-def simple_backtest(
+def j1s_backtest(
     close,
     entries,
     exits,

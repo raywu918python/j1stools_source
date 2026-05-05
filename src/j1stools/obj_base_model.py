@@ -17,6 +17,11 @@ class RUN_TYPE(Enum):
     predict = 3
 
 
+class MODEL_TYPE(Enum):
+    rfc = 1
+    lgbm = 2
+
+
 class BaseModel(ABC):
 
     def __init__(self):
@@ -24,9 +29,9 @@ class BaseModel(ABC):
         self.THRESHOLD = 0.5
         now = datetime.now()
         self.t = now.strftime("%Y%m%d_%H%M%S")
-        self.model_name = "model"
         self.trainging_idx = 0
         self.run_type = RUN_TYPE.train
+        self.model_type = MODEL_TYPE.rfc
 
     def drop_na_inf(self, x, y):
         # 1. 把 inf 換成 NaN
@@ -118,7 +123,7 @@ class BaseModel(ABC):
             print(f"進場勝率: {accuracy_label2:.2%}")
 
     def get_full_name(self):
-        return f"model/{self.model_name}{self.t}_{self.n}.joblib"
+        return f"model/{self.model_type.name}{self.t}_{self.n}.joblib"
 
     # def prepare_df(self):
 
@@ -190,13 +195,15 @@ class BaseModel(ABC):
     ):
         self.n = n
         print(f"*" * 30, f"第 {self.n + 1} 次訓練")
-
+        st = time()
         # train
         model = self.model
         if self.run_type == RUN_TYPE.train or self.run_type == RUN_TYPE.create_model:
-            st = time()
             if function_train:
-                function_train(xtrain, xval, ytrain, yval, model)
+                if self.model_type == MODEL_TYPE.lgbm:
+                    function_train(xtrain, xval, ytrain, yval, model)
+                else:
+                    function_train(xtrain, ytrain, model)
             else:
                 model.fit(xtrain, ytrain)
             joblib.dump(model, self.get_full_name())
