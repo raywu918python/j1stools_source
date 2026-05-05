@@ -15,3 +15,5 @@ log/
 cache/
 models/
 model/
+*.json
+tmp.txt
