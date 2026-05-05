@@ -394,23 +394,24 @@ def main(
     # show_chart |= Chart.FLOW
     # show_chart |= Chart.INFO
 
-    p = PrepareDate(signal, top_n=3, threshold=0.9)
+    p = PrepareDate(signal, top_n=3, threshold=0.7)
     #############################################################
     t1 = time()
     portfolio_value, trades_df, positions = j1s_backtest(
         use_sl_trail=False,
         sl_trail=0.15,
         use_fixed_sl=True,
-        sl_stop=0.15,
+        sl_stop=0.20,
         use_fixed_tp=True,
         tp_stop=0.15,
         use_hold_days=False,
         hold_days=5,
         #############################################################
-        use_fixed_sl_tp=True,
+        use_fixed_sl_tp=False,
+        use_proba_sizing=False,
         #############################################################
         max_positions=10,
-        group_limit=99,
+        group_limit=3,
         stock_group=p.stock_group,
         #############################################################
         init_cash=1_000_000,
@@ -449,8 +450,8 @@ def main(
         )
 
 
-optimize(local_signals())
-# main()
+# optimize(local_signals())
+main()
 
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()
