@@ -24,6 +24,7 @@ def j1s_backtest(
     fee=0.001,
     group_limit=3,  # ✅ 每族群最多 3 支
     use_fixed_sl_tp=False,
+    use_proba_sizing=False,
 ):
     dates = close.index
     cash = float(init_cash)
