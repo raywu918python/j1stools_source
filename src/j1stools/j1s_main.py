@@ -208,7 +208,6 @@ def local_signals():
 
 def optimize(signal):
 
-    p = PrepareDate(signal)
     import itertools
     from time import time
 
@@ -216,13 +215,22 @@ def optimize(signal):
     param_grid = {
         "top_n": [3, 5, 10],
         "proba_threshold": [0.5, 0.6, 0.7],
-        "max_positions": [5, 10, 15],
-        "sl_trail": [0.05, 0.1, 0.15],
-        "hold_days": [3, 5, 10],
+        "max_positions": [5, 10, 15, 20],
         "group_limit": [2, 3, 5],
+        "use_sl_trail": [True, False],
+        "sl_trail": [0.05, 0.1, 0.15],
+        "use_fixed_sl": [True, False],
+        "sl_stop": [0.05, 0.1, 0.15],
+        "use_fixed_tp": [True, False],
+        "tp_stop": [0.05, 0.1, 0.15],
+        "use_hold_days": [True, False],
+        "hold_days": [3, 5, 10],
+        # "use_fixed_sl_tp": [True, False],
+        # "use_proba_sizing": [True, False],  # 未實作
     }
 
     # ── 預先算好 entries（避免重複計算）──────────────────
+    p = PrepareDate(signal, top_n=3, threshold=0.9)
     my_filter = gen_filter(p.close, p.high, p.low)
 
     # ── 產生所有組合 ──────────────────────────────────────
@@ -244,17 +252,24 @@ def optimize(signal):
             top_n=params["top_n"],
             proba_threshold=params["proba_threshold"],
         )
-        exits = gen_exits(check_market(p.close, p.proba))
-        portfolio_value, trades_df = j1s_backtest(
+        exits = gen_exits(check_market(p.close), p.proba)
+        portfolio_value, trades_df, _ = j1s_backtest(
             close=p.close,
             entries=entries,
             exits=exits,
             df_proba=p.proba,
             max_positions=params["max_positions"],
+            use_sl_trail=params["use_sl_trail"],
             sl_trail=params["sl_trail"],
+            use_fixed_sl=params["use_fixed_sl"],
+            sl_stop=params["sl_stop"],
+            use_fixed_tp=params["use_fixed_tp"],
+            tp_stop=params["tp_stop"],
+            use_hold_days=params["use_hold_days"],
             hold_days=params["hold_days"],
             stock_group=p.stock_group,
             group_limit=params["group_limit"],
+            # use_fixed_sl_tp=params["use_fixed_sl_tp"],
             init_cash=1_000_000,
             fee=0.001,
         )
@@ -376,10 +391,10 @@ def main(
     signal = local_signals()
     show_chart = Chart.N
     # show_chart |= Chart.PF
-    show_chart |= Chart.FLOW
-    show_chart |= Chart.INFO
+    # show_chart |= Chart.FLOW
+    # show_chart |= Chart.INFO
 
-    p = PrepareDate(signal, top_n=99, threshold=0.9)
+    p = PrepareDate(signal, top_n=3, threshold=0.9)
     #############################################################
     t1 = time()
     portfolio_value, trades_df, positions = j1s_backtest(
@@ -434,7 +449,8 @@ def main(
         )
 
 
-main()
+optimize(local_signals())
+# main()
 
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()

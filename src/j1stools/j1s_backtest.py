@@ -104,7 +104,7 @@ def j1s_backtest(
                             group = stock_group.get(sid, "未知")
                             current_group_count = sum(1 for s in positions if stock_group.get(s, "未知") == group)
                             if current_group_count >= group_limit:
-                                print(f"🚫 {sid} 族群 {group} 已滿 {group_limit} 支")
+                                # print(f"🚫 {sid} 族群 {group} 已滿 {group_limit} 支")
                                 continue
                         price = close.loc[dt, sid]
                         if price <= 0:
