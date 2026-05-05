@@ -1,5 +1,5 @@
 import random
-import time
+from time import time
 
 import numpy as np
 import pandas as pd
@@ -20,11 +20,15 @@ import os
 
 from j1stools.j1s_backtest import j1s_backtest
 
+IS_USE_CACHE = False
+
 
 class PrepareDate:
-    def __init__(self, signal):
+    def __init__(self, signal, top_n, threshold):
         self.signal = signal
-
+        self.top_n = top_n
+        self.threshold = threshold
+        t1 = time()
         #
         stocks = signal["stock_id"].unique().tolist()
         date = signal["date"]
@@ -48,6 +52,14 @@ class PrepareDate:
         self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
         self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
         self.stock_group = parquet_db.query_stock2group_dict()
+
+        # 前處理（向量化）
+        self.market_danger = check_market(self.close)
+        self.my_filter = gen_filter(self.close, self.high, self.low)
+        self.entries = gen_entries(self.my_filter, self.proba, top_n, threshold)
+        self.exits = gen_exits(self.market_danger, self.proba)
+
+        print(f"前處理時間: {time() - t1:.2f} 秒")
 
 
 def calc_adx(high, low, close, cache_path="cache/adx.pkl", is_using_cache=False):
@@ -102,7 +114,7 @@ def gen_filter(close, high, low):
     )
     atr = tr.rolling(14).mean()
 
-    adx = calc_adx(high, low, close)
+    adx = calc_adx(high, low, close, is_using_cache=IS_USE_CACHE)
 
     # ✅ 把 MultiIndex 拿掉，只保留 stock_id
     if isinstance(adx.columns, pd.MultiIndex):
@@ -130,7 +142,7 @@ def gen_exits(market_danger, df_proba):
 # ============================================================
 
 
-def backtest(
+def prepare_data_backtest(
     signal,
     top_n=3,
     threshold=0.6,
@@ -142,30 +154,18 @@ def backtest(
     use_sl_trail=True,
     group_limit=3,
     use_hold_days=False,
+    use_fixed_sl=False,
+    use_fixed_tp=False,
 ):
-    from time import time
 
-    p = PrepareDate(signal)
-
-    t0 = time()
-    # 前處理（向量化）
-    market_danger = check_market(p.close)
-    my_filter = gen_filter(p.close, p.high, p.low)
-    entries = gen_entries(my_filter, p.proba, top_n, threshold)
-    exits = gen_exits(market_danger, p.proba)
-
-    print(f"前處理時間: {time() - t0:.2f} 秒")
-    t1 = time()
+    p = PrepareDate(signal, top_n=top_n, threshold=threshold)
 
     # 回測
-
-    use_fixed_sl = not use_sl_trail
-    use_fixed_tp = not use_sl_trail
-
+    st = time()
     portfolio_value, trades_df, positions = j1s_backtest(
         close=p.close,
-        entries=entries,
-        exits=exits,
+        entries=p.entries,
+        exits=p.exits,
         df_proba=p.proba,
         max_positions=max_positions,
         hold_days=hold_days,
@@ -184,7 +184,7 @@ def backtest(
     # j1s_chart.chart_allocation(portfolio_value, trades_df, close=p.close)
     # j1s_chart.chart_gantt(trades_df)
 
-    print(f"回測時間: {time() - t1:.2f} 秒")
+    print(f"回測時間: {time() - st:.2f} 秒")
 
     # 結果
     final_value = portfolio_value.iloc[-1]
@@ -303,7 +303,7 @@ def optimize(signal):
 def web_backtest(stocks):
     """for web"""
     signal = lgbm_main.predict(stocks, "2025-01-01", "2099-01-01")
-    portfolio_value, trades_df, positions, close = backtest(
+    portfolio_value, trades_df, positions, close = prepare_data_backtest(
         signal,
         threshold=0.6,
         max_positions=10,
@@ -329,7 +329,7 @@ def web_query_last(
     # stocks = random.sample(stocks, 100)
     signal = lgbm_main.predict(stocks, st, end)
     # portfolio_value, trades_df, positions =
-    portfolio_value, trades_df, positions, close = backtest(
+    portfolio_value, trades_df, positions, close = prepare_data_backtest(
         # signal,
         # threshold=0.6,
         # max_positions=10,
@@ -361,28 +361,55 @@ def main(
     st="2024-01",
     end="2099-01",
 ):
-    # stocks = parquet_db.query_stocks_no_etf()
-    # stocks = parquet_db.query_stocks_ids_list()
-    # signal = lgbm_main.predict(stocks, st, end)
-    # signal.to_csv("signal.csv", index=False)
-    portfolio_value, trades_df, positions, close = backtest(
-        local_signals(),
-        threshold=0.75,
+    global IS_USE_CACHE
+    IS_USE_CACHE = True
+    # signal = lgbm_main.predict(parquet_db.query_stocks_no_etf(), st, end)
+    signal = local_signals()
+    p = PrepareDate(signal, top_n=3, threshold=0.7)
+
+    #############################################################
+    t1 = time()
+    portfolio_value, trades_df, positions = j1s_backtest(
+        use_sl_trail=True,
+        sl_trail=0.1,
+        use_fixed_sl=False,
+        sl_stop=0.1,
+        use_fixed_tp=False,
+        tp_stop=0.1,
+        use_hold_days=False,
+        hold_days=5,
+        #############################################################
+        use_fixed_sp_sl=True,
+        #############################################################
         max_positions=10,
         group_limit=3,
-        top_n=10,
-        tp_stop=0.15,
-        sl_stop=0.10,
-        sl_trail=0.20,
-        use_sl_trail=False,
+        stock_group=p.stock_group,
+        #############################################################
+        init_cash=1_000_000,
+        fee=0.001,
+        close=p.close,
+        entries=p.entries,
+        exits=p.exits,
+        df_proba=p.proba,
     )
+    print(f"回測時間: {time() - t1:.2f} 秒")
 
-    j1s_chart.plot_performance(
-        portfolio_value=portfolio_value,
-        trades_df=trades_df,
-        is_web=False,
-    )
-    j1s_chart.chart_gantt(trades_df)
+    #############################################################
+    final_value = portfolio_value.iloc[-1]
+    total_return = (final_value / 1_000_000 - 1) * 100
+    print(f"最終資產：{final_value:,.0f}")
+    print(f"總報酬率：{total_return:.2f}%")
+    if not trades_df.empty:
+        print(f"總交易次數：{len(trades_df)}")
+        print(f"勝率：{(trades_df['pnl'] > 0).mean() * 100:.1f}%")
+        print(f"平均報酬：{trades_df['return_pct'].mean():.2f}%")
+    #############################################################
+    # j1s_chart.plot_performance(
+    #     portfolio_value=portfolio_value,
+    #     trades_df=trades_df,
+    #     is_web=False,
+    # )
+    # j1s_chart.chart_gantt(trades_df)
 
     # j1s_chart.chart_allocation(
     #     portfolio_value,

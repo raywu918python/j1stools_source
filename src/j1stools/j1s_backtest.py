@@ -23,6 +23,7 @@ def j1s_backtest(
     init_cash=1_000_000,
     fee=0.001,
     group_limit=3,  # ✅ 每族群最多 3 支
+    use_fixed_sp_sl=False,
 ):
     dates = close.index
     cash = float(init_cash)
@@ -64,7 +65,14 @@ def j1s_backtest(
             )
 
             if should_exit:
-                sell_value = price * pos["shares"] * (1 - fee)
+                if use_fixed_sp_sl and (use_fixed_sl or use_fixed_tp):
+                    if price >= pos["entry_price"] * (1 + tp_stop):
+                        sell_value = pos["entry_price"] * (1 + tp_stop) * pos["shares"] * (1 - fee)
+                    else:
+                        sell_value = pos["entry_price"] * (1 - sl_stop) * pos["shares"] * (1 - fee)
+                else:
+                    sell_value = price * pos["shares"] * (1 - fee)
+
                 pnl = sell_value - pos["cost"]
                 cash += sell_value
                 trades.append(
