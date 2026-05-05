@@ -385,8 +385,6 @@ def main(
     st="2024-01",
     end="2099-01",
 ):
-    global IS_USE_CACHE
-    IS_USE_CACHE = False
     # signal = lgbm_main.predict(parquet_db.query_stocks_no_etf(), st, end)
     signal = local_signals()
     show_chart = Chart.N

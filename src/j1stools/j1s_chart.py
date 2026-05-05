@@ -152,6 +152,10 @@ def chart_gantt(trades_df):
     df_plot["entry_date"] = pd.to_datetime(df_plot["entry_date"])
     df_plot["exit_date"] = pd.to_datetime(df_plot["exit_date"])
 
+    stock_dict = parquet_db.query_group_by_ids(df_plot["stock_id"])
+    df_plot["name"] = df_plot["stock_id"].map(lambda x: stock_dict.get(x, {}).get("name"))
+    df_plot["group"] = df_plot["stock_id"].map(lambda x: stock_dict.get(x, {}).get("group"))
+    df_plot["merge_name"] = df_plot["stock_id"] + "|" + df_plot["name"] + "|" + df_plot["group"]
     # hover 用格式化日期
     df_plot["Entry_Day"] = df_plot["entry_date"].dt.strftime("%Y-%m-%d")
     df_plot["Exit_Day"] = df_plot["exit_date"].dt.strftime("%Y-%m-%d")
@@ -162,7 +166,7 @@ def chart_gantt(trades_df):
         df_plot,
         x_start="entry_date",
         x_end="exit_date",
-        y="stock_id",
+        y="merge_name",
         color="Status",
         color_discrete_map={"Profit": "#26a69a", "Loss": "#ef5350"},
         hover_data={
