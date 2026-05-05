@@ -386,11 +386,11 @@ def main(
     end="2099-01",
 ):
     global IS_USE_CACHE
-    IS_USE_CACHE = True
+    IS_USE_CACHE = False
     # signal = lgbm_main.predict(parquet_db.query_stocks_no_etf(), st, end)
     signal = local_signals()
     show_chart = Chart.N
-    # show_chart |= Chart.PF
+    show_chart |= Chart.PF
     # show_chart |= Chart.FLOW
     # show_chart |= Chart.INFO
 
@@ -404,14 +404,14 @@ def main(
         sl_stop=0.20,
         use_fixed_tp=True,
         tp_stop=0.15,
-        use_hold_days=False,
-        hold_days=5,
+        use_hold_days=True,
+        hold_days=30,
         #############################################################
         use_fixed_sl_tp=False,
         use_proba_sizing=False,
         #############################################################
-        max_positions=10,
-        group_limit=3,
+        max_positions=5,
+        group_limit=1,
         stock_group=p.stock_group,
         #############################################################
         init_cash=1_000_000,
@@ -451,7 +451,7 @@ def main(
 
 
 # optimize(local_signals())
-main()
+# main()
 
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()
@@ -461,6 +461,6 @@ main()
 #     is_web=True,
 # )
 
-# main()
+main()
 # query()
 # query(good_search=True)
