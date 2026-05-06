@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from pdb import run
 import random
 from time import time
@@ -108,7 +109,6 @@ def exec(
     df = parquet_db.query_price(stocks, st, end)
     print("delete.before:", df.shape)
     df = feature_builder.gen_feature(df)
-    print(df.value_counts().T.to_csv("tmp.csv"))
     df = Label.add_label(df)
     df = FilterData.get_data(df, True, False, is_del_atr)
     # parquet_db.create_features(df)
@@ -124,7 +124,6 @@ def exec(
         if pick_import_feature:
             xtest = feature_builder.pick_feature(xtest)
 
-    print("delete.after:", df.shape)
     acc_list = []
     for i in range(1):
         y_proba = m.train_model(
@@ -135,15 +134,34 @@ def exec(
             i,
             function_train=function_train,
         )
+        print("y_proba.shape", len(y_proba))
         if m.run_type == RUN_TYPE.create_model:
             return
         acc_list.append(y_proba[:, 2])
-
     # print(f"平均:", np.average(acc_list))
     signal = m.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
     signal.rename(columns={2: "y_proba"}, inplace=True)
     signal["date"] = pd.to_datetime(signal["date"])
     return signal
+
+
+def predict_today():
+    # stocks = random.sample(parquet_db.query_stocks_ids_list(), 100)
+    stocks = parquet_db.query_stocks_ids_list()
+    today = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+    model = joblib.load("models/rfc_day_trade.joblib")
+    signal = exec(
+        stocks,
+        today,
+        "2099-01-01",
+        model=model,
+        is_del_atr=True,
+        pick_import_feature=False,
+        run_type=RUN_TYPE.predict,
+    )
+    signal = signal[signal["y_proba"] > 0.6]
+    signal.sort_values(by=["date", "y_proba"], inplace=True)
+    signal.to_csv("signal_today.csv", index=False)
 
 
 def predict(stocks, st, end):
@@ -175,14 +193,15 @@ def predict(stocks, st, end):
 
 
 def main():
-    stocks = random.sample(parquet_db.query_stocks_no_etf(), 500)
-    exec(
+    # stocks = random.sample(parquet_db.query_stocks_ids_list(), 100)
+    stocks = parquet_db.query_stocks_ids_list()
+    signal = exec(
         stocks,
-        st="2015-01-01",
-        end="2018-01-01",
+        st="2021-01-01",
+        end="2024-01-01",
         trainging_idx=0.8,
         model=None,
-        pick_import_feature=True,
+        pick_import_feature=False,
         is_del_atr=True,
     )
 
@@ -199,5 +218,7 @@ def optimize():
     )
 
 
+predict_today()
 # main()
+# predict()
 # optimize()
