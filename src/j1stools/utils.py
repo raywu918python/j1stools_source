@@ -1,5 +1,9 @@
 from inspect import getabsfile
+import os
 import pathlib
+
+from dotenv import load_dotenv
+import pandas as pd
 
 # from dotenv import load_dotenv
 
@@ -13,43 +17,45 @@ import pathlib
 #     df.to_csv(f'{stock}.csv')
 
 
-# def get_base_url():
-#     load_dotenv()
-#     return os.getenv("BASE_URL")
+def get_base_url():
+    load_dotenv()
+    return os.getenv("BASE_URL")
 
 
-# def stock(stock_id: str, is_to_lower=True, is_add_noise=False):
-#     df = pd.read_csv(
-#         get_base_url() + f"{stock_id}_d1.csv",
-#         dtype={"代號": str},
-#         parse_dates=["Date"],  # 這裡請填入你 CSV 裡的日期欄位名
-#         index_col="Date",
-#     )
-#     if is_to_lower:
-#         df.rename(columns=str.lower, inplace=True)
-#     # df.index.name = df.index.name.lower()
+def stock(stock_id: str, is_to_lower=True, is_add_noise=False):
+    df = pd.read_csv(
+        get_base_url() + f"{stock_id}_d1.csv",
+        dtype={"代號": str},
+        parse_dates=["Date"],  # 這裡請填入你 CSV 裡的日期欄位名
+        index_col="Date",
+    )
+    if is_to_lower:
+        df.rename(columns=str.lower, inplace=True)
+    # df.index.name = df.index.name.lower()
 
-#     df["stock_id"] = stock_id
-#     df["date"] = df.index
-#     df = df[df["volume"] != 0]
-#     df = df.loc["2015":]
+    df["stock_id"] = stock_id
+    df["date"] = df.index
+    df = df[df["volume"] != 0]
+    df = df.loc["2015":]
 
-#     if is_add_noise:
-#         noise_level = 0.05
-#         sigma = df["close"].std() * noise_level
-#         # 生成與資料長度相同的隨機雜訊
-#         noise = np.random.normal(0, sigma, len(df))
-#         # 產生改動後的股價
-#         df["close"] = df["close"] + noise
+    if is_add_noise:
+        noise_level = 0.05
+        sigma = df["close"].std() * noise_level
+        # 生成與資料長度相同的隨機雜訊
+        noise = np.random.normal(0, sigma, len(df))
+        # 產生改動後的股價
+        df["close"] = df["close"] + noise
 
-#     return df
+    return df
 
 
-# def get_file_list():
-#     df: pd.DataFrame = pd.read_csv(get_base_url() + f"stock_list.csv", dtype={"代號": str})
-#     # df = df[~df["代號"].astype(str).str.startswith("00")]
-#     list_file = list(df["代號"])
-#     return list_file
+def get_file_list():
+    # 使用 or 提供預設值，避免 NoneType 錯誤
+    df = pd.read_csv((get_base_url() or "") + "stock_list.csv", dtype={"代號": str})
+
+    # df = df[~df["代號"].astype(str).str.startswith("00")]
+    list_file = list(df["代號"])
+    return list_file
 
 
 def keep_recent_files(folder_path, count=10):

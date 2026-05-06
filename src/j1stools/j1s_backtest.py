@@ -110,8 +110,14 @@ def j1s_backtest(
                         price = close.loc[dt, sid]
                         if price <= 0:
                             continue
-                        # ✅ 手續費只算一次
-                        cost = per_slot
+                        # ✅ 依信心度調整倍數
+                        if use_proba_sizing:
+                            proba = df_proba.loc[dt, sid]
+                            multiplier = get_proba_multiplier(proba)
+                        else:
+                            multiplier = 1.0
+
+                        cost = min(per_slot * multiplier, cash)  # 不超過剩餘現金
                         shares = cost * (1 - fee) / price
                         cash -= cost
                         positions[sid] = {
@@ -130,3 +136,13 @@ def j1s_backtest(
     portfolio_value = pd.Series(portfolio_value, index=dates)
     trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
     return portfolio_value, trades_df, positions
+
+
+def get_proba_multiplier(proba):
+    """依信心度回傳倍數"""
+    if proba >= 0.9:
+        return 1.5
+    elif proba >= 0.8:
+        return 1.2
+    else:
+        return 1

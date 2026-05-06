@@ -9,6 +9,19 @@ import j1stools.utils as utils
 
 
 def create_now_price(yyyy, mm):
+
+    my_schema = pa.schema(
+        [
+            ("open", pa.float64()),
+            ("high", pa.float64()),
+            ("low", pa.float64()),
+            ("close", pa.float64()),
+            ("volume", pa.int64()),
+            ("stock_id", pa.string()),  # 強制設為 string，即使是空的也會維持 string 類型
+            ("date", pa.timestamp("ns")),
+        ]
+    )
+
     stocks = utils.get_file_list()
     tables = []
     for stock_id in stocks:
@@ -18,7 +31,7 @@ def create_now_price(yyyy, mm):
             print(f"stock_id {stock_id}", e)
         df = df[(df["date"] >= f"{yyyy}-{mm}") & (df["date"] < f"{yyyy}-{mm+1}")]
         df.reset_index(drop=True, inplace=True)
-        tables.append(pa.Table.from_pandas(df))
+        tables.append(pa.Table.from_pandas(df, schema=my_schema))
 
     # 2. 合併 Table
     combined_table = pa.concat_tables(tables)
@@ -459,11 +472,13 @@ def query_stocks_no_etf():
     return list(all_stocks - excluded_stocks)
 
 
+#############################################################
+# create_now_price(2026, 5)
 # read_features()
 
 # create_info()
 # create_history_price()
-# create_now_price(2026, 4)
+
 # read()
 # query_price()
 # query_info()
