@@ -350,6 +350,6 @@ def generate_features_today(df: pd.DataFrame):
     df = df.reset_index()
 
     f = df.select_dtypes(include="number").describe().T.round(2)
-    f.to_csv("tmp.csv")
+    f.to_csv("describe.csv")
 
     return df
