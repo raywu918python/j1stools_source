@@ -1,4 +1,11 @@
+from colorsys import TWO_THIRD
+from enum import Enum
+from os import path
+import time
+
+import numpy as np
 from patsy.mgcv_cubic_splines import te
+from pytest import mark
 import yfinance as yf
 import os
 import pandas as pd
@@ -6,22 +13,47 @@ from dotenv import load_dotenv
 from j1stools.utils import get_base_url
 
 
-def download_from_yf(stock, min, market):
-    min_dic = {1: "1m", 5: "5m", 0: "d"}
-    market_dic = {"市": "TW", "櫃": "TWO"}
+class MARKET(Enum):
+    tw = "TW"
+    two = "TWO"
+
+
+class TIME(Enum):
+    m1 = "1m"
+    m5 = "5m"
+    day = "d"
+    allday = "allday"
+
+
+def download_from_yf(stock, time: TIME, market: MARKET):
     template = None
 
-    if min == 0:
+    if time == TIME.allday:
         load_dotenv()
         s = os.getenv("START")
         e = os.getenv("END")
 
-        template = yf.download(f"{stock}.{market_dic[market]}", start=s, end=e, repair=True)
+        template = yf.download(f"{stock}.{market.value}", start=s, end=e, repair=True)
+    elif time == TIME.day:
+        print(f"下載 {stock} 日線")
+        tickers = "2330.TW,0050.TW,2303.TW,0052.TW,0056.TW"
+        # template = yf.download("2330.TW,0050.TW", period="5d", repair=True)
+        template = yf.download(
+            tickers,
+            period="50d",
+            auto_adjust=True,
+            repair=True,
+            interval="1d",
+            group_by="ticker",
+            threads=True,
+        )
+        # template = yf.download(tickers, period="5d", repair=True)
+        # template = yf.download(tickers, period="5d")
     else:
         template = yf.download(
-            tickers=f"{stock}.{market_dic[market]}",
+            tickers=f"{stock}.{[market]}",
             period="5d",
-            interval=min_dic[min],
+            interval=time.value,
             repair=True,
         )
 
@@ -31,42 +63,12 @@ def download_from_yf(stock, min, market):
     template.index = template.index.tz_localize(None)
 
     # 1. 先只抓取特定的欄位 (通常 yf 下載回來會有 'Adj Close')
-    template = template[["Open", "High", "Low", "Close", "Volume"]]
+    # template = template[["Open", "High", "Low", "Close", "Volume"]]
 
     # 2. 再進行重新命名 (如果你需要自定義名稱或大小寫)
-    template.columns = ["Open", "High", "Low", "Close", "Volume"]
+    # template.columns = ["Open", "High", "Low", "Close", "Volume"]
 
     return template
-
-
-def getDataFM(stock):
-    # if(utils.isFileExit(stock)):
-    # return utils.getCsvFile(stock)
-
-    load_dotenv()
-    s = os.getenv("START")
-    e = os.getenv("END")
-
-    token = os.getenv("FINMIND_TOKEN")
-    fm = DataLoader(token)
-    print(f"fm.api_usage_limit = {fm.api_usage_limit}")
-    print(f"fm.api_usage = {fm.api_usage}")
-    # 先抓取原始資料物件
-    df = fm.taiwan_stock_daily(stock_id=stock, start_date=s, end_date=e)
-
-    # df = fm.taiwan_stock_kbar(
-    #     stock_id='2330',
-    #     date='2026-03-04'
-    # )
-
-    # utils.save(df,'2330_20260309_1.csv')
-    return df
-
-
-# data = getDataFM('2330')
-# data = getDataYF('2330')
-# data.columns = [i.lower() for i in data.columns]
-# print(data.sample)
 
 
 #
@@ -211,39 +213,65 @@ def clear_format(file_name):
     # print(d.head())
 
 
-if __name__ == "__main__":
+def save_and_merge(ticker, new_data):
+    new_data = new_data[["Open", "High", "Low", "Close", "Volume"]]
+    # 1. 定義檔案路徑
+    file_path = f"{get_base_url() + ticker}_d1.csv"
 
-    # save_download_stock_file()
-    save_price_file(0)
-    save_price_file(1)
+    # 2. 檢查舊檔是否存在
+    if os.path.exists(file_path):
+        # 讀取舊檔，並將 Date 設為索引以利合併
+        old_data = pd.read_csv(file_path, index_col=0, parse_dates=True)
 
-    # df = download_from_yf("0050", 0, "市")
-    # print(df.columns)
-    # print(df.tail())
+        # 3. 合併資料
+        # concat 會將新舊資料接在一起
+        # combined = pd.concat([old_data, new_data])
 
-    # Price           Close       High        Low       Open Repaired?     Volume
-    # Ticker        0050.TW    0050.TW    0050.TW    0050.TW   0050.TW    0050.TW
-    # Date
-    # 2026-04-17  84.150002  84.500000  84.000000  84.199997     False   93304532
-    # 2026-04-20  84.550003  85.099998  84.449997  84.550003     False   95994589
-    # 2026-04-21  86.000000  86.099998  85.000000  85.500000     False   71987659
-    # 2026-04-22  86.349998  86.599998  85.550003  85.750000      True   58297374
-    # 2026-04-23  86.150002  88.800003  85.150002  87.650002     False  139715388
+        # 更好的做法是 combine_first：它會以新資料為主，補足舊資料沒有的部分
+        combined = new_data.combine_first(old_data)
 
-    # load_dotenv()
-    # s = os.getenv("START")
-    # e = os.getenv("END")
-    # template = yf.download(f"6494.TWO", start=s, end=e, repair=True)
-    # # df = pd.DataFrame(template)
+        # 4. 確保日期排序且刪除重複項 (避免重複下載同一天)
+        combined = combined.sort_index().drop_duplicates()
+    else:
+        # 如果沒舊檔，就直接用新抓到的資料
+        combined = new_data
 
-    # # 如果你希望移除時區符號 (+08:00)，只保留時間數值
-    # template.index = template.index.tz_localize(None)
+    # 5. 存檔
+    combined.to_csv(file_path)
+    print(f"{ticker} 資料已更新並合併。")
 
-    # # 1. 先只抓取特定的欄位 (通常 yf 下載回來會有 'Adj Close')
-    # template = template[["Open", "High", "Low", "Close", "Volume"]]
 
-    # # 2. 再進行重新命名 (如果你需要自定義名稱或大小寫)
-    # template.columns = ["Open", "High", "Low", "Close", "Volume"]
-    # # print(df.tail())
+def download_day():
+    dfcsv = pd.read_csv(get_base_url() + "stock_list.csv", dtype={"代號": str})
+    dfcsv["download_path"] = dfcsv["代號"] + "." + np.where(dfcsv["市場"] == "市", "TW", "TWO")
+    all_tickers = dfcsv["download_path"].tolist()
+    chunk_size = 50  # 每次下載 50 檔
 
-    pass
+    for i in range(0, len(all_tickers), chunk_size):
+        batch = all_tickers[i : i + chunk_size]
+
+        df = yf.download(
+            batch,
+            period="10d",
+            auto_adjust=True,
+            repair=True,
+            interval="1d",
+            group_by="ticker",
+            threads=True,
+        )
+
+        save(batch, df)
+
+        print(f"已完成第 {i+chunk_size} 檔...")
+
+        time.sleep(2)
+
+
+def save(stocks, dfall):
+    for path in stocks:
+        df = dfall[path]
+        stock = path.split(".")[0]
+        save_and_merge(stock, df)
+
+
+# download_day()
