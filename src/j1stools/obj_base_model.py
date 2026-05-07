@@ -193,6 +193,8 @@ class BaseModel(ABC):
         n=0,
         function_train=None,
     ):
+        keep_latest_ten_files("./model")
+
         self.n = n
         print(f"*" * 30, f"第 {self.n + 1} 次訓練")
         st = time()
@@ -266,3 +268,27 @@ class BaseModel(ABC):
             print("訊號分布的天數:", gold_signals["date"].nunique())
             print("訊號包含的股票數:", gold_signals["stock_id"].nunique())  # 你的欄位是 stock_id
         return gold_signals
+
+
+from pathlib import Path
+
+
+def keep_latest_ten_files(directory_path: str):
+    """
+    不論檔名，保留資料夾中最後修改時間最新的 10 個檔案，其餘刪除。
+    """
+    folder = Path(directory_path)
+    if not folder.exists():
+        return
+
+    # 取得資料夾內的所有檔案（排除子資料夾）
+    files = [f for f in folder.iterdir() if f.is_file()]
+
+    # 依最後修改時間排序（最新到最舊）
+    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+
+    # 如果檔案數超過 10 個，將第 11 個（索引 10）之後的舊檔案刪除
+    if len(files) > 10:
+        for file in files[10:]:
+            file.unlink()
+            print(f"已刪除舊檔案: {file.name}")

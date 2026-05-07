@@ -149,7 +149,7 @@ def predict_today():
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 100)
     stocks = parquet_db.query_stocks_ids_list()
     today = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
-    model = joblib.load("models/rfc_day_trade.joblib")
+    model = joblib.load("models/rfct0.joblib")
     signal = exec(
         stocks,
         today,
@@ -197,13 +197,16 @@ def main():
     stocks = parquet_db.query_stocks_ids_list()
     signal = exec(
         stocks,
-        st="2021-01-01",
-        end="2024-01-01",
+        st="2024-01-01",
+        end="2099-01-01",
         trainging_idx=0.8,
         model=None,
         pick_import_feature=False,
         is_del_atr=True,
     )
+    signal = signal[signal["y_proba"] > 0.8]
+    signal.sort_values(by=["date", "y_proba"], inplace=True)
+    signal.to_csv("signal_today.csv", index=False)
 
 
 def optimize():
