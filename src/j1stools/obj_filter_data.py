@@ -26,8 +26,7 @@ class FilterData:
         # 刪除 df
         df = FilterData.ichimoku(df, is_del_ich)  # 做多比重提升
         df = FilterData.always_del_limit_up(df)
-        if is_del_atr:
-            df = FilterData.always_del_atr(df)
+        df = FilterData.always_del_atr(df, is_del_atr)
 
         if log:
             after = df["target"].copy().value_counts().sort_index().tolist()
@@ -460,7 +459,7 @@ class FilterData:
         if is_del:
             return df[final_cond].copy()
         else:
-            df["f_ich"] = np.where(final_cond, 1, 0)
+            # df["f_ich"] = np.where(final_cond, 1, 0)
             return df
 
     import pandas as pd
@@ -583,7 +582,7 @@ class FilterData:
 
         return df
 
-    def always_del_atr(df):
+    def always_del_atr(df, is_del_atr):
         """
         篩選條件：
         1. ATR 變化量：今日 ATR > 過去 10 日 ATR 平均值
@@ -602,10 +601,12 @@ class FilterData:
         df["del_atr"] = tr.groupby(df["stock_id"]).rolling(window=14).mean().reset_index(level=0, drop=True)
         df["del_atr"] = df["del_atr"] / df["close"]  # ATR 相對值（ATR / 收盤價）
         condition = df["del_atr"] > 0.05  # ATR 相對值大於 2% 的條件
-        if True:
+        if is_del_atr:
             df = df[condition]
         else:
-            df["f_atr_just"] = condition.astype(int)
+            # df["f_atr_just"] = condition.astype(int)
+            df["f_atr_just"] = df["del_atr"]
+
         # 移除計算用欄位回傳
         # df.drop(columns=["atr"])
 

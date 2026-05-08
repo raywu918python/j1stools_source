@@ -66,12 +66,16 @@ def split_date(df: pd.DataFrame, trainging_idx=0.8, is_gen_train=True, is_gen_te
         raise Exception("參數錯誤")
 
 
-def function_train(xtrain, ytrain, model):
+def function_train(xtrain, ytrain, model, df):
     sample_weights = ytrain.map({0: 1, 1: 1, 2: 3})
+    # m = xtrain["f_atr_just"]
+    # xtrain = xtrain.drop(["f_atr_just"], axis=1)
+    # print(m.head(10))
 
     model.fit(
         xtrain,
         ytrain,
+        # sample_weight=m.values**2,
         # sample_weight=sample_weights,
     )
 
@@ -133,8 +137,8 @@ def exec(
             ytest,
             i,
             function_train=function_train,
+            df=df,
         )
-        print("y_proba.shape", len(y_proba))
         if m.run_type == RUN_TYPE.create_model:
             return
         acc_list.append(y_proba[:, 2])
@@ -164,7 +168,12 @@ def predict_today():
     signal.to_csv("signal_today.csv", index=False)
 
 
-def predict(stocks, st, end):
+def predict(
+    stocks,
+    st,
+    end,
+    pick_import_feature=True,
+):
     model = joblib.load("models/rfc.joblib")
     return exec(
         stocks,
@@ -172,6 +181,7 @@ def predict(stocks, st, end):
         end,
         trainging_idx=0,
         model=model,
+        pick_import_feature=pick_import_feature,
         run_type=RUN_TYPE.predict,
     )
 
@@ -197,14 +207,14 @@ def main():
     stocks = parquet_db.query_stocks_ids_list()
     signal = exec(
         stocks,
-        st="2024-01-01",
+        st="2024-01-01",  # 2024-01-01
         end="2099-01-01",
         trainging_idx=0.8,
         model=None,
         pick_import_feature=False,
-        is_del_atr=True,
+        is_del_atr=False,
     )
-    signal = signal[signal["y_proba"] > 0.8]
+    signal = signal[signal["y_proba"] > 0.5]
     signal.sort_values(by=["date", "y_proba"], inplace=True)
     signal.to_csv("signal_today.csv", index=False)
 
@@ -221,7 +231,7 @@ def optimize():
     )
 
 
-predict_today()
+# predict_today()
 # main()
 # predict()
 # optimize()

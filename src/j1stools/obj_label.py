@@ -3,7 +3,7 @@ import pandas as pd
 
 class Label:
 
-    def add_label(df: pd.DataFrame, hold_days=30, profit_target=0.15, stop_loss=-0.15) -> pd.DataFrame:
+    def add_label(df: pd.DataFrame, hold_days=10, profit_target=0.10, stop_loss=-0.10) -> pd.DataFrame:
         """
         三分類標籤方案：
         2: 成功（漲）- 達到 profit_target 且過程中未觸及 stop_loss

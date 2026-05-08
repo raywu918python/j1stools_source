@@ -192,6 +192,7 @@ class BaseModel(ABC):
         yval=None,
         n=0,
         function_train=None,
+        df=None,
     ):
         keep_latest_ten_files("./model")
 
@@ -205,7 +206,7 @@ class BaseModel(ABC):
                 if self.model_type == MODEL_TYPE.lgbm:
                     function_train(xtrain, xval, ytrain, yval, model)
                 else:
-                    function_train(xtrain, ytrain, model)
+                    function_train(xtrain, ytrain, model, df)
             else:
                 model.fit(xtrain, ytrain)
             joblib.dump(model, self.get_full_name())

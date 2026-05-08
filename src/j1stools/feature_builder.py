@@ -2,6 +2,7 @@ from time import time
 
 import pandas as pd
 
+from j1stools.macdh_divergences import f_macd_hist_divergences_with_atr
 from j1stools.obj_hv_feature import HvFeature
 from j1stools.obj_ma_feature import MaFeature
 from j1stools.obj_macd_feature import MacdFeature
@@ -9,7 +10,8 @@ from j1stools.obj_market_feature import MarketFeature
 from j1stools.obj_random_feature import RandomFeature
 from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
 
-IS_DAY_TRADE = True
+IS_DAY_TRADE = False
+IS_MACD = True
 
 
 def gen_feature(df) -> pd.DataFrame:
@@ -23,6 +25,8 @@ def gen_feature(df) -> pd.DataFrame:
     if IS_DAY_TRADE:
         # return generate_features_t1(df)
         return generate_features_today(df)
+    elif IS_MACD:
+        return f_macd_hist_divergences_with_atr(df)
     else:
         df = HvFeature.add_feature(df)
         df = MaFeature.add_feature(df)
@@ -342,6 +346,10 @@ def generate_features_today(df: pd.DataFrame):
         "f_body_ratio": body_ratio,
         "f_upper_shadow": upper_shadow,
         "f_lower_shadow": lower_shadow,
+        # 在進場前先判斷現在是恐慌性錯殺還是趨勢性崩跌：
+        "f_index_ret_5d": close.pct_change(5),  # 大盤5日報酬
+        "f_index_ret_20d": close.pct_change(20),  # 大盤20日報酬
+        "f_index_ma200": close / close.rolling(200).mean() - 1,  # 離年線距離
     }
 
     for fname, wide_df in feature_map.items():

@@ -11,9 +11,11 @@ def create_model(step=1):
         import j1stools.rfc_main as rfc
 
         rfc.exec(
-            parquet_db.query_stocks_no_etf(),
+            parquet_db.query_stocks_ids_list(),
             st="2015-01-01",
             end="2021-01-01",
+            is_del_atr=False,
+            pick_import_feature=False,
             run_type=RUN_TYPE.create_model,
         )
     elif step == 2:
@@ -24,9 +26,11 @@ def create_model(step=1):
         import j1stools.lgbm_main as lgbm
 
         lgbm.exec(
-            parquet_db.query_stocks_no_etf(),
+            parquet_db.query_stocks_ids_list(),
             st="2021-01-01",
             end="2024-01-01",
+            is_del_atr=False,
+            pick_import_feature=False,
             is_using_rfc=True,
             run_type=RUN_TYPE.create_model,
         )
