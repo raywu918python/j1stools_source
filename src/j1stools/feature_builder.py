@@ -36,6 +36,10 @@ def gen_feature(df) -> pd.DataFrame:
         df = RandomFeature.add_feature(df)
     print(f"gen_feature: {time() - st:.2f} 秒")
 
+    f = df.select_dtypes(include="number").describe().T.round(2)
+    print(f)
+    f.to_csv("describe.csv")
+
     return df
 
 
@@ -133,9 +137,6 @@ def generate_features_t1(df: pd.DataFrame):
     df["f_dist_to_ma5"] = z_dist_to_ma5.stack(future_stack=True)
     df["f_atr_ratio"] = z_atr_ratio.stack(future_stack=True)
     df = df.reset_index()
-
-    f = df.select_dtypes(include="number").describe().T.round(2)
-    f.to_csv("tmp.csv")
 
     return df
 
@@ -356,8 +357,4 @@ def generate_features_today(df: pd.DataFrame):
         df[fname] = wide_df.stack(future_stack=True)
 
     df = df.reset_index()
-
-    f = df.select_dtypes(include="number").describe().T.round(2)
-    f.to_csv("describe.csv")
-
     return df

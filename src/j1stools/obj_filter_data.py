@@ -1,3 +1,5 @@
+from enum import Enum
+
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
@@ -5,8 +7,20 @@ from pandas import DataFrame
 from j1stools.obj_macd_feature import MacdFeature
 
 
+class FILTER_CONFIG(Enum):
+    add_ = 1
+    del_ = 2
+    add_and_del = 3
+    none_ = 4
+
+
 class FilterData:
-    def get_data(df: pd.DataFrame, log=False, is_del_ich=False, is_del_atr=True) -> DataFrame:
+    def get_data(
+        df: pd.DataFrame,
+        log=False,
+        ichcfg: FILTER_CONFIG = FILTER_CONFIG.none_,
+        atrcfg: FILTER_CONFIG = FILTER_CONFIG.none_,
+    ) -> DataFrame:
         """
         定義你的「進場門檻」
         只有符合這個門檻的資料，我們才關心它的 Label
@@ -24,9 +38,9 @@ class FilterData:
         # df = FilterData.abcd(df)
 
         # 刪除 df
-        df = FilterData.ichimoku(df, is_del_ich)  # 做多比重提升
+        # df = FilterData.ichimoku(df, ichcfg)  # 做多比重提升
         df = FilterData.always_del_limit_up(df)
-        df = FilterData.always_del_atr(df, is_del_atr)
+        df = FilterData.always_del_atr(df, atrcfg)
 
         if log:
             after = df["target"].copy().value_counts().sort_index().tolist()
@@ -409,8 +423,11 @@ class FilterData:
 
     import pandas as pd
 
-    def ichimoku(df: pd.DataFrame, is_del=False):
+    def ichimoku(df: pd.DataFrame, cfg: FILTER_CONFIG = FILTER_CONFIG.none_):
         # 確保資料按 stock_id 和時間排序，這是 groupby 操作的基礎
+        if cfg == FILTER_CONFIG.none_:
+            return df
+
         df = df.sort_values(["stock_id", "date"])
         grouped = df.groupby("stock_id")
 
@@ -456,10 +473,13 @@ class FilterData:
         # 確保沒有 NaN 的干擾（shift產生的前26筆會是 NaN）
         final_cond = (cond_price_above_kumo == True) & (chikou_above_kumo == True)
 
-        if is_del:
+        if cfg == FILTER_CONFIG.add_and_del:
+            df["f_ich"] = np.where(final_cond, 1, 0)
             return df[final_cond].copy()
-        else:
-            # df["f_ich"] = np.where(final_cond, 1, 0)
+        elif cfg == FILTER_CONFIG.del_:
+            return df[final_cond].copy()
+        elif cfg == FILTER_CONFIG.add_:
+            df["f_ich"] = np.where(final_cond, 1, 0)
             return df
 
     import pandas as pd
@@ -582,11 +602,13 @@ class FilterData:
 
         return df
 
-    def always_del_atr(df, is_del_atr):
+    def always_del_atr(df, cfg: FILTER_CONFIG = FILTER_CONFIG.none_):
         """
         篩選條件：
         1. ATR 變化量：今日 ATR > 過去 10 日 ATR 平均值
         """
+        if cfg == FILTER_CONFIG.none_:
+            return df
 
         # --- 1. 計算 ATR (14日為標準週期) ---
         # 1. 先計算 TR (這部分不需要 group，因為是橫向 row-based 運算)
@@ -601,14 +623,17 @@ class FilterData:
         df["del_atr"] = tr.groupby(df["stock_id"]).rolling(window=14).mean().reset_index(level=0, drop=True)
         df["del_atr"] = df["del_atr"] / df["close"]  # ATR 相對值（ATR / 收盤價）
         condition = df["del_atr"] > 0.05  # ATR 相對值大於 2% 的條件
-        if is_del_atr:
-            df = df[condition]
-        else:
-            # df["f_atr_just"] = condition.astype(int)
-            df["f_atr_just"] = df["del_atr"]
 
-        # 移除計算用欄位回傳
-        # df.drop(columns=["atr"])
+        if cfg == FILTER_CONFIG.add_and_del:
+            df["f_atr_just"] = df["del_atr"]
+            df = df[condition].copy()
+            return df
+        elif cfg == FILTER_CONFIG.del_:
+            df = df[condition].copy()
+            return df
+        elif cfg == FILTER_CONFIG.add_:
+            df["f_atr_just"] = df["del_atr"]
+            return df
 
         return df
 
