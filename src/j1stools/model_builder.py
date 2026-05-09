@@ -26,6 +26,7 @@ def gen_rfc_model():
 
 def gen_lgbm_model():
     model = LGBMClassifier(
+        class_weight="balanced",
         n_estimators=1000,
         learning_rate=0.05,
         num_leaves=31,

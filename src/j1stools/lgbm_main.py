@@ -3,12 +3,36 @@ from time import time
 
 import random
 
-from j1stools.CONFIG import LgbmTrainConfig, MACDDataBuilterConfig
+from numpy import add
+import pandas as pd
+
+from j1stools import rfc_main
+from j1stools.CONFIG import BaseDataBuilderConfig, LgbmTrainConfig, MACDDataBuilterConfig
 from j1stools.TYPE import FEATURE_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 
 from j1stools.model_training_process import run_train_process
 import joblib
+
+
+def add_rfc_feature(df, data: BaseDataBuilderConfig):
+    signal = rfc_main.predict(
+        stocks=data.stocks,
+        st=data.st,
+        end=data.end,
+        pick_import_feature=data.pick_import_feature,
+    )
+    signal.rename(columns={"y_proba": "f_rfc"}, inplace=True)
+    signal = signal[["date", "stock_id", "f_rfc"]]
+    #
+    return pd.merge(
+        df,
+        signal[["date", "stock_id", "f_rfc"]],
+        on=["date", "stock_id"],
+        how="left",  # 只取索引部分  # 以全時段為準
+    ).fillna(
+        0
+    )  # 沒預測到的（ATR太小的）補 0
 
 
 def query_no_rfc(stocks, st, end):
@@ -38,15 +62,18 @@ def predict(stocks, st, end):
 
 def main():
     train = LgbmTrainConfig()
+    train.is_use_rfc = False
+    # train.rfc_proba = add_rfc_feature(df, data)
     # train.model = (joblib.load("models/rfc_macd.joblib"),)
     #############################################################
     data = MACDDataBuilterConfig()
-    # data.is_continuous = True
-    data.feature_type = FEATURE_TYPE.today
+    data.is_continuous = True
+    data.feature_type = FEATURE_TYPE.normal
+    # data.feature_type = FEATURE_TYPE.today
     # data.atrcfg = FILTER_CONFIG.del_
     data.train_config = train
-    data.st = "2021-01-01"
-    data.end = "2024-01-01"
+    data.st = "2024-01-01"
+    data.end = "2099-01-01"
     signal = run_train_process(cfg=data)
     #############################################################
     signal = signal[signal["y_proba"] > 0.5]

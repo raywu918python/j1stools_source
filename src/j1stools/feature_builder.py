@@ -3,7 +3,6 @@ from time import time
 
 import pandas as pd
 
-from j1stools import rfc_main
 from j1stools.CONFIG import BaseDataBuilderConfig
 from j1stools.TYPE import FEATURE_TYPE
 from j1stools.macdh_divergences import f_macd_continuous_features, f_macd_hist_divergences_with_atr
@@ -38,6 +37,9 @@ def gen_feature(df, cfg: BaseDataBuilderConfig) -> pd.DataFrame:
         df = MarketFeature.add_feature(df)
         df = VolumePriceFeature.add_feature(df)
         df = RandomFeature.add_feature(df)
+        df = generate_features_today(df)
+        df = f_macd_continuous_features(df)
+        # df = f_macd_hist_divergences_with_atr(df)
     print(f"gen_feature: {time() - st:.2f} 秒")
 
     f = df.select_dtypes(include="number").describe().T.round(2)
@@ -362,24 +364,3 @@ def generate_features_today(df: pd.DataFrame):
 
     df = df.reset_index()
     return df
-
-
-def add_rfc_feature(df, data: BaseDataBuilderConfig):
-
-    signal = rfc_main.predict(
-        stocks=data.stocks,
-        st=data.st,
-        end=data.end,
-        pick_import_feature=data.pick_import_feature,
-    )
-    signal.rename(columns={"y_proba": "f_rfc"}, inplace=True)
-    signal = signal[["date", "stock_id", "f_rfc"]]
-    #
-    return pd.merge(
-        df,
-        signal[["date", "stock_id", "f_rfc"]],
-        on=["date", "stock_id"],
-        how="left",  # 只取索引部分  # 以全時段為準
-    ).fillna(
-        0
-    )  # 沒預測到的（ATR太小的）補 0

@@ -20,8 +20,8 @@ from j1stools.CONFIG import (
     TodayDataBuilterConfig,
 )
 from j1stools.TYPE import TRAIN_TYPE
-import j1stools.parquet_db as parquet_db
 from j1stools.model_training_process import run_train_process
+import j1stools.parquet_db as parquet_db
 import joblib
 
 
@@ -85,8 +85,8 @@ def main():
     #############################################################
     data = MACDDataBuilterConfig()
     data.train_config = train
-    data.st = "2021-01-01"
-    data.end = "2022-01-01"
+    data.st = "2024-01-01"
+    data.end = "2099-01-01"
     signal = run_train_process(cfg=data)
     #############################################################
     signal = signal[signal["y_proba"] > 0.5]
