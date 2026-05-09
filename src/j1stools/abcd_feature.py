@@ -2,238 +2,90 @@ import pandas as pd
 import numpy as np
 from numba import njit
 
-# ── 狀態定義 ──────────────────────────────────────────────────────────────── #
-IDLE = 0
-AB = 1  # A→B 上漲段
-BC = 2  # B→C 回調段
-CD = 3  # C→D 再漲段
-D1 = 4  # N 字確認後
-
 
 @njit
-def _run_state_machine(
+def _find_abcd_segments(
     high: np.ndarray,
     low: np.ndarray,
-    close: np.ndarray,
-    volume: np.ndarray,
-    max_ab_bars: int = 10,  # AB 段必須在 N 根內完成上漲
-    max_bc_bars: int = 10,  # BC 回調必須在 N 根內止跌
-    max_cd_bars: int = 10,  # CD 再漲必須在 N 根內突破 B
+    seg: int = 7,  # 每段 K 根數，建議 5~9
 ):
     """
-    N 字型狀態機：
-        AB：max_ab_bars 根內持續上漲，找到 B 高點
-        BC：max_bc_bars 根內回調止跌，不跌破 A，找到 C 低點（C > A）
-        CD：max_cd_bars 根內再漲，D 突破 B → D1 確認
+    用固定分段高低點找 ABCD：
+        seg1：A = 最低點，B = 最高點
+        seg2：C = 最低點（C > A，否則結構無效）
+        seg3：D = 最高點，D > B 則 N 字成立
 
-    破壞條件：
-        1. 任何階段跌破 A → reset
-        2. CD 段未突破 B 卻跌破 C → reset
-        3. 各段超過 bar 上限 → reset
+    每根 bar 往回看三段（3 * seg 根），計算當下的 ABCD。
+
+    Returns
+    -------
+    A_arr, B_arr, C_arr, D_arr, valid_arr : np.ndarray shape=(T,)
+        valid = 1 表示 C > A 且 D > B（N 字成立）
     """
-    T = len(close)
-    state_arr = np.full(T, np.nan)
+    T = len(high)
     A_arr = np.full(T, np.nan)
     B_arr = np.full(T, np.nan)
     C_arr = np.full(T, np.nan)
     D_arr = np.full(T, np.nan)
+    valid_arr = np.zeros(T)
 
-    state = IDLE
-    A = np.nan
-    B = np.nan
-    C = np.nan
-    D = np.nan
-    bar_count = 0
+    total = seg * 3  # 需要回看的總根數
 
-    for i in range(T):
-        h = high[i]
-        l = low[i]
-        c = close[i]
+    for i in range(total - 1, T):
+        # seg1：最早的一段 → A（低）、B（高）
+        seg1_high = high[i - total + 1 : i - 2 * seg + 1]
+        seg1_low = low[i - total + 1 : i - 2 * seg + 1]
 
-        # ── IDLE → AB ────────────────────────────────────────────────── #
-        if state == IDLE:
-            A = l
-            B = h
-            bar_count = 0
-            state = AB
+        # seg2：中間一段 → C（低）
+        seg2_high = high[i - 2 * seg + 1 : i - seg + 1]
+        seg2_low = low[i - 2 * seg + 1 : i - seg + 1]
 
-        # ── AB 段：在 max_ab_bars 根內找到高點 B ─────────────────────── #
-        elif state == AB:
-            bar_count += 1
+        # seg3：最近一段 → D（高）
+        seg3_high = high[i - seg + 1 : i + 1]
+        seg3_low = low[i - seg + 1 : i + 1]
 
-            # 超時：N 根內沒完成上漲，以當根重設起點（含第 N 根）
-            if bar_count >= max_ab_bars:
-                A = l
-                B = h
-                C = np.nan
-                D = np.nan
-                bar_count = 0
-                state_arr[i] = AB
-                A_arr[i] = A
-                B_arr[i] = B
-                continue
+        A = np.min(seg1_low)
+        B = np.max(seg1_high)
+        C = np.min(seg2_low)
+        D = np.max(seg3_high)
 
-            # 破壞：跌破 A
-            if l < A:
-                A = l
-                B = h
-                C = np.nan
-                D = np.nan
-                bar_count = 0
-                state_arr[i] = AB
-                A_arr[i] = A
-                B_arr[i] = B
-                continue
-
-            # 持續更新 B 高點
-            if h > B:
-                B = h
-
-            # 收盤回調（跌破 B 的 1%）→ 進入 BC
-            # 不要求漲幅，只要在 N 根內有上漲且開始回調即可
-            if c < B * 0.99:
-                state = BC
-                bar_count = 0
-                C = l
-
-        # ── BC 段：max_bc_bars 根內止跌，不跌破 A ────────────────────── #
-        elif state == BC:
-            bar_count += 1
-
-            # 超時：回調超過 N 根，reset（含第 N 根）
-            if bar_count >= max_bc_bars:
-                A = l
-                B = h
-                C = np.nan
-                D = np.nan
-                bar_count = 0
-                state_arr[i] = AB
-                A_arr[i] = A
-                B_arr[i] = B
-                continue
-
-            # 破壞：跌破 A
-            if l < A:
-                A = l
-                B = h
-                C = np.nan
-                D = np.nan
-                bar_count = 0
-                state_arr[i] = AB
-                A_arr[i] = A
-                B_arr[i] = B
-                continue
-
-            # 更新 C 低點
-            if l < C:
-                C = l
-
-            # 收盤站回 C 上方 → 止跌，準備進 CD
-            if c > C * 1.01:
-                # C 必須高於 A
-                if C <= A:
-                    A = l
-                    B = h
-                    C = np.nan
-                    D = np.nan
-                    bar_count = 0
-                    state_arr[i] = AB
-                    A_arr[i] = A
-                    B_arr[i] = B
-                    continue
-                state = CD
-                bar_count = 0
-                D = h
-
-        # ── CD 段：max_cd_bars 根內 D 突破 B ─────────────────────────── #
-        elif state == CD:
-            bar_count += 1
-
-            # 超時：N 根內沒突破 B，reset（含第 N 根，所以用 >=）
-            if bar_count >= max_cd_bars:
-                A = l
-                B = h
-                C = np.nan
-                D = np.nan
-                bar_count = 0
-                state_arr[i] = AB
-                A_arr[i] = A
-                B_arr[i] = B
-                continue
-
-            # 破壞 1：跌破 A
-            if l < A:
-                A = l
-                B = h
-                C = np.nan
-                D = np.nan
-                bar_count = 0
-                state_arr[i] = AB
-                A_arr[i] = A
-                B_arr[i] = B
-                continue
-
-            # 破壞 2：未突破 B 卻跌破 C
-            if D < B and l < C:
-                A = l
-                B = h
-                C = np.nan
-                D = np.nan
-                bar_count = 0
-                state_arr[i] = AB
-                A_arr[i] = A
-                B_arr[i] = B
-                continue
-
-            if h > D:
-                D = h
-
-            # D 突破 B → N 字確認
-            if D > B:
-                state = D1
-                bar_count = 0
-
-        # ── D1：確認後持續追蹤 ───────────────────────────────────────── #
-        elif state == D1:
-            bar_count += 1
-
-            # 破壞：跌破 A
-            if l < A:
-                A = l
-                B = h
-                C = np.nan
-                D = np.nan
-                bar_count = 0
-                state_arr[i] = AB
-                A_arr[i] = A
-                B_arr[i] = B
-                continue
-
-        state_arr[i] = state
         A_arr[i] = A
         B_arr[i] = B
         C_arr[i] = C
         D_arr[i] = D
 
-    return state_arr, A_arr, B_arr, C_arr, D_arr
+        # N 字成立條件：C > A（不跌破起漲點）且 D > B（突破前高）
+        if C > A and D > B:
+            valid_arr[i] = 1.0
+
+    return A_arr, B_arr, C_arr, D_arr, valid_arr
 
 
 def detect_n_shape_features(
     df: pd.DataFrame,
-    max_ab_bars: int = 10,  # AB 段最多幾根
-    max_bc_bars: int = 10,  # BC 段最多幾根
-    max_cd_bars: int = 10,  # CD 段最多幾根
+    seg: int = 7,  # 每段 K 根數，可調整 5~9
 ) -> pd.DataFrame:
     """
-    基於狀態機的 N 字型特徵。
+    用固定分段高低點計算 N 字型特徵。
+
+    每根 bar 往回看三段（3 * seg 根）：
+        segment 1（最早）→ A 低點、B 高點
+        segment 2（中間）→ C 低點
+        segment 3（最近）→ D 高點
+
+    N 字成立條件：C > A 且 D > B
 
     Parameters
     ----------
     df : pd.DataFrame
         長表格，需包含欄位: date, stock_id, close, high, low, volume
-    max_ab_bars : AB 段最大 bar 數（預設 10）
-    max_bc_bars : BC 段最大 bar 數（預設 10）
-    max_cd_bars : CD 段最大 bar 數（預設 10）
+    seg : int
+        每段的 K 根數，建議 5~9（預設 7）
+
+    Returns
+    -------
+    pd.DataFrame
+        原始長表格 + f_ 開頭特徵欄位
     """
     close_wide = df.pivot(index="date", columns="stock_id", values="close")
     high_wide = df.pivot(index="date", columns="stock_id", values="high")
@@ -243,87 +95,65 @@ def detect_n_shape_features(
     stocks = close_wide.columns.tolist()
     dates = close_wide.index
 
-    results = {}
+    # 每檔跑一次分段計算
+    res = {}
     for sid in stocks:
         h = high_wide[sid].values.astype(np.float64)
         l = low_wide[sid].values.astype(np.float64)
-        c = close_wide[sid].values.astype(np.float64)
-        v = volume_wide[sid].values.astype(np.float64)
-
-        state_arr, A_arr, B_arr, C_arr, D_arr = _run_state_machine(h, l, c, v, max_ab_bars, max_bc_bars, max_cd_bars)
-        results[sid] = {
-            "state": state_arr,
+        A_arr, B_arr, C_arr, D_arr, valid_arr = _find_abcd_segments(h, l, seg)
+        res[sid] = {
             "A": A_arr,
             "B": B_arr,
             "C": C_arr,
             "D": D_arr,
+            "valid": valid_arr,
         }
 
     def to_wide(key):
-        return pd.DataFrame({sid: results[sid][key] for sid in stocks}, index=dates)
+        return pd.DataFrame({sid: res[sid][key] for sid in stocks}, index=dates)
 
-    state_wide = to_wide("state")
     A_wide = to_wide("A")
     B_wide = to_wide("B")
     C_wide = to_wide("C")
     D_wide = to_wide("D")
-
-    d1_mask = state_wide == D1
+    valid_wide = to_wide("valid").astype(bool)
 
     # ── 特徵計算 ──────────────────────────────────────────────────────── #
 
-    # AB 漲幅
+    # AB 漲幅（第一波力道）
     f_n_ab_gain = (B_wide - A_wide) / (A_wide + 1e-9)
 
-    # BC 回調比例（相對 AB 幅度）
+    # BC 回調比例（相對 AB 幅度，黃金回調 0.38~0.62）
     ab_range = (B_wide - A_wide).clip(lower=1e-9)
     f_n_bc_retracement = (B_wide - C_wide) / ab_range
 
-    # C 高於 A 的幅度
+    # C 高於 A 的幅度（越高結構越健康）
     f_n_c_above_a = (C_wide - A_wide) / (A_wide + 1e-9)
 
     # D 突破 B 的力道
     f_n_d_breakout_strength = (D_wide - B_wide) / (B_wide + 1e-9)
 
-    # CD 漲幅 vs AB 漲幅
+    # CD 漲幅 vs AB 漲幅（> 1 代表第二波更強）
     cd_gain = (D_wide - C_wide) / (C_wide + 1e-9)
     f_n_cd_vs_ab_momentum = cd_gain / (f_n_ab_gain + 1e-9)
 
-    # 收盤相對 B 的位置
+    # 收盤相對 B 的位置（> 0 代表站上前高）
     f_n_close_vs_b = (close_wide - B_wide) / (B_wide + 1e-9)
 
-    # 綜合品質分（只在 D1 有值）
+    # 綜合品質分（只在 N 字成立時有值）
     f_n_structure_score = (
         (1 - f_n_bc_retracement.clip(0, 1)) * 0.3 + f_n_c_above_a.clip(0) * 0.3 + f_n_d_breakout_strength.clip(0) * 0.4
-    ).where(d1_mask)
+    ).where(valid_wide)
 
-    # D1 旗標
-    f_n_d1_confirmed = d1_mask.astype(float)
+    # N 字成立旗標
+    f_n_confirmed = valid_wide.astype(float)
 
     # 突破段量 vs 回調段量
-    vol_roll = volume_wide.rolling(max_cd_bars).mean()
-    vol_roll_prev = vol_roll.shift(max_bc_bars)
-    f_n_volume_on_breakout = (vol_roll / (vol_roll_prev + 1e-9)).where(state_wide.isin([CD, D1]))
+    vol_seg3 = volume_wide.rolling(seg).mean()
+    vol_seg2 = volume_wide.rolling(seg).mean().shift(seg)
+    f_n_volume_confirm = (vol_seg3 / (vol_seg2 + 1e-9)).where(valid_wide)
 
-    # D1 確認後幾根
-    def days_since_signal(bool_wide: pd.DataFrame) -> pd.DataFrame:
-        arr = bool_wide.values.astype(float)
-        out = np.full_like(arr, np.nan)
-        counter = np.full(arr.shape[1], np.nan)
-        for i in range(len(arr)):
-            signal = arr[i]
-            counter = np.where(signal == 1, 0, np.where(np.isnan(counter), np.nan, counter + 1))
-            out[i] = counter
-        return pd.DataFrame(out, index=bool_wide.index, columns=bool_wide.columns)
-
-    f_n_days_since_d1 = days_since_signal(d1_mask)
-
-    # 當前所在階段
-    f_n_state = state_wide.where(state_wide > IDLE)
-
-    # ── 有效結構 mask ─────────────────────────────────────────────────── #
-    valid = state_wide > IDLE
-
+    # ── 有效結構 mask：所有特徵在 N 字不成立時設為 NaN ──────────────── #
     feature_wides_raw = {
         "f_n_ab_gain": f_n_ab_gain,
         "f_n_bc_retracement": f_n_bc_retracement,
@@ -332,13 +162,13 @@ def detect_n_shape_features(
         "f_n_cd_vs_ab_momentum": f_n_cd_vs_ab_momentum,
         "f_n_close_vs_b": f_n_close_vs_b,
         "f_n_structure_score": f_n_structure_score,
-        "f_n_d1_confirmed": f_n_d1_confirmed,
-        "f_n_volume_on_breakout": f_n_volume_on_breakout,
-        "f_n_days_since_d1": f_n_days_since_d1,
-        "f_n_state": f_n_state,
+        "f_n_confirmed": f_n_confirmed,
+        "f_n_volume_confirm": f_n_volume_confirm,
     }
 
-    feature_wides = {name: feat.where(valid) for name, feat in feature_wides_raw.items()}
+    feature_wides = {name: feat.where(valid_wide) for name, feat in feature_wides_raw.items()}
+    # f_n_confirmed 本身就是 0/1，不需要遮
+    feature_wides["f_n_confirmed"] = f_n_confirmed
 
     # ── 整合回長表格 ──────────────────────────────────────────────────── #
     feature_longs = []
