@@ -1,14 +1,178 @@
 import pandas as pd
 import numpy as np
+from numba import njit
+
+# ── 狀態定義 ──────────────────────────────────────────────────────────────── #
+IDLE = 0  # 等待起漲
+AB = 1  # A→B 上漲段
+BC = 2  # B→C 回調段
+CD = 3  # C→D 再漲段
+D1 = 4  # N 字確認後
+
+
+@njit
+def _run_state_machine(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray):
+    """
+    逐 bar 執行 N 字型狀態機，回傳每根 bar 的狀態與 ABCD 關鍵價位。
+
+    破壞條件：
+      - 任何階段跌破 A → reset 回 IDLE
+      - CD 段（尚未突破 B）若跌破 C → reset 回 IDLE
+
+    Parameters
+    ----------
+    high, low, close, volume : np.ndarray  shape=(T,)
+
+    Returns
+    -------
+    tuple of np.ndarray, each shape=(T,):
+        state_arr, A_arr, B_arr, C_arr, D_arr
+    """
+    T = len(close)
+    state_arr = np.full(T, np.nan)
+    A_arr = np.full(T, np.nan)
+    B_arr = np.full(T, np.nan)
+    C_arr = np.full(T, np.nan)
+    D_arr = np.full(T, np.nan)
+
+    state = IDLE
+    A = np.nan
+    B = np.nan
+    C = np.nan
+    D = np.nan
+
+    for i in range(T):
+        h = high[i]
+        l = low[i]
+        c = close[i]
+
+        if state == IDLE:
+            # 以當根低點作為潛在 A，下一根若創新高則進入 AB 段
+            A = l
+            B = h
+            state = AB
+
+        elif state == AB:
+            # ── 破壞條件：跌破 A ──
+            if l < A:
+                # reset：以當根重新作為起點
+                A = l
+                B = h
+                state = AB
+                state_arr[i] = state
+                A_arr[i] = A
+                B_arr[i] = B
+                continue
+
+            # 持續更新 B 高點
+            if h > B:
+                B = h
+
+            # 判斷是否開始回調（收盤低於前一根低點，簡單以收盤拉回判斷）
+            # 用高點已確立、當根收盤低於 B 的一定比例作為進入 BC 的信號
+            # 這裡用「收盤跌破 B 的 1%」作為轉折判斷
+            if c < B * 0.99:
+                state = BC
+                C = l  # 初始化 C
+
+        elif state == BC:
+            # ── 破壞條件：跌破 A ──
+            if l < A:
+                A = l
+                B = h
+                C = np.nan
+                D = np.nan
+                state = AB
+                state_arr[i] = state
+                A_arr[i] = A
+                B_arr[i] = B
+                continue
+
+            # 持續更新 C 低點
+            if l < C:
+                C = l
+
+            # 判斷回調結束、開始上漲（收盤突破回調高點）
+            # 用「收盤站回 C 上方一定幅度」作為進入 CD 的信號
+            if c > C * 1.01:
+                # 確認 C > A，否則 N 字無效，reset
+                if C <= A:
+                    A = l
+                    B = h
+                    C = np.nan
+                    D = np.nan
+                    state = AB
+                    state_arr[i] = state
+                    A_arr[i] = A
+                    B_arr[i] = B
+                    continue
+                state = CD
+                D = h  # 初始化 D
+
+        elif state == CD:
+            # ── 破壞條件 1：跌破 A ──
+            if l < A:
+                A = l
+                B = h
+                C = np.nan
+                D = np.nan
+                state = AB
+                state_arr[i] = state
+                A_arr[i] = A
+                B_arr[i] = B
+                continue
+
+            # ── 破壞條件 2：未突破 B 卻跌破 C ──
+            if D < B and l < C:
+                A = l
+                B = h
+                C = np.nan
+                D = np.nan
+                state = AB
+                state_arr[i] = state
+                A_arr[i] = A
+                B_arr[i] = B
+                continue
+
+            # 更新 D 高點
+            if h > D:
+                D = h
+
+            # D 突破 B → N 字確認（D1）
+            if D > B:
+                state = D1
+
+        elif state == D1:
+            # ── 破壞條件：跌破 A（最嚴格，結構全毀）──
+            if l < A:
+                A = l
+                B = h
+                C = np.nan
+                D = np.nan
+                state = AB
+                state_arr[i] = state
+                A_arr[i] = A
+                B_arr[i] = B
+                continue
+
+            # 也可選擇跌破 C 就重來（更嚴格版本，可依需求開啟）
+            # if l < C:
+            #     A = l; B = h; C = np.nan; D = np.nan; state = AB; continue
+
+        state_arr[i] = state
+        A_arr[i] = A
+        B_arr[i] = B
+        C_arr[i] = C if not np.isnan(C) else np.nan
+        D_arr[i] = D if not np.isnan(D) else np.nan
+
+    return state_arr, A_arr, B_arr, C_arr, D_arr
 
 
 def detect_n_shape_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    基於標準 N 字型結構產生特徵：
-        A → B 上漲
-        B → C 回調（C > A）
-        C → D 上漲，D 突破 B → 確認 N 字（D1）
-        D1 之後為做多訊號區
+    基於狀態機的 N 字型特徵，支援結構破壞自動 reset：
+        破壞條件 1：任何階段跌破 A → 重來
+        破壞條件 2：CD 段尚未突破 B 就跌破 C → 重來
 
     Parameters
     ----------
@@ -25,87 +189,78 @@ def detect_n_shape_features(df: pd.DataFrame) -> pd.DataFrame:
     low_wide = df.pivot(index="date", columns="stock_id", values="low")
     volume_wide = df.pivot(index="date", columns="stock_id", values="volume")
 
-    # 用來近似 A B C D 四個點的窗口設定
-    w_ab = 10  # A→B 上漲段長度
-    w_bc = 10  # B→C 回調段長度
-    w_cd = 10  # C→D 再漲段長度
-    w_total = w_ab + w_bc + w_cd  # 整個 N 字視窗 = 30 根
+    stocks = close_wide.columns.tolist()
+    dates = close_wide.index
 
-    # ── 近似四個關鍵價位 ──────────────────────────────────────────────── #
-    # B：w_ab 段內的最高點（第一波高點）
-    B = high_wide.shift(w_bc + w_cd).rolling(w_ab).max()
+    # 每個股票跑一次狀態機
+    results = {}
+    for sid in stocks:
+        h = high_wide[sid].values.astype(np.float64)
+        l = low_wide[sid].values.astype(np.float64)
+        c = close_wide[sid].values.astype(np.float64)
+        v = volume_wide[sid].values.astype(np.float64)
 
-    # A：B 之前的最低點（起漲點）
-    A = low_wide.shift(w_bc + w_cd + w_ab).rolling(w_ab).min()
+        state_arr, A_arr, B_arr, C_arr, D_arr = _run_state_machine(h, l, c, v)
+        results[sid] = {
+            "state": state_arr,
+            "A": A_arr,
+            "B": B_arr,
+            "C": C_arr,
+            "D": D_arr,
+        }
 
-    # C：B 之後回調段的最低點
-    C = low_wide.shift(w_cd).rolling(w_bc).min()
+    def to_wide(key):
+        return pd.DataFrame({sid: results[sid][key] for sid in stocks}, index=dates)
 
-    # D：當前 C→D 段的最高點（今天附近）
-    D = high_wide.rolling(w_cd).max()
+    state_wide = to_wide("state")
+    A_wide = to_wide("A")
+    B_wide = to_wide("B")
+    C_wide = to_wide("C")
+    D_wide = to_wide("D")
 
-    # 當前收盤
-    cur_close = close_wide
+    # D1 確認旗標
+    d1_mask = state_wide == D1
 
-    # ── 核心條件：D1 確認 ─────────────────────────────────────────────── #
-    # D 突破 B，且 C > A（N 字結構成立）
-    d1_confirmed = (D > B) & (C > A)
+    # ── 特徵計算（只在有效狀態下有值）────────────────────────────────── #
 
-    # ── Feature 1: f_n_ab_gain ────────────────────────────────────────── #
-    # A→B 的漲幅，衡量第一波力道
-    f_n_ab_gain = (B - A) / (A + 1e-9)
+    # f_n_ab_gain：A→B 漲幅
+    f_n_ab_gain = (B_wide - A_wide) / (A_wide + 1e-9)
 
-    # ── Feature 2: f_n_bc_retracement ────────────────────────────────── #
-    # B→C 回調比例 = (B - C) / (B - A)
-    # 黃金回調約 0.382~0.618，太深代表結構可能破壞
-    ab_range = (B - A).clip(lower=1e-9)
-    f_n_bc_retracement = (B - C) / ab_range
+    # f_n_bc_retracement：B→C 回調比例
+    ab_range = (B_wide - A_wide).clip(lower=1e-9)
+    f_n_bc_retracement = (B_wide - C_wide) / ab_range
 
-    # ── Feature 3: f_n_c_above_a ─────────────────────────────────────── #
-    # C 比 A 高多少（N 字必要條件：C > A）
-    f_n_c_above_a = (C - A) / (A + 1e-9)
+    # f_n_c_above_a：C 高於 A 的幅度
+    f_n_c_above_a = (C_wide - A_wide) / (A_wide + 1e-9)
 
-    # ── Feature 4: f_n_d_breakout_strength ───────────────────────────── #
-    # D 突破 B 的幅度，越大代表突破越有力
-    f_n_d_breakout_strength = (D - B) / (B + 1e-9)
+    # f_n_d_breakout_strength：D 突破 B 的力道
+    f_n_d_breakout_strength = (D_wide - B_wide) / (B_wide + 1e-9)
 
-    # ── Feature 5: f_n_cd_vs_ab_momentum ─────────────────────────────── #
-    # C→D 漲幅 vs A→B 漲幅的比值
-    # > 1 代表第二波力道強於第一波（加速上漲）
-    cd_gain = (D - C) / (C + 1e-9)
+    # f_n_cd_gain：C→D 漲幅
+    cd_gain = (D_wide - C_wide) / (C_wide + 1e-9)
+
+    # f_n_cd_vs_ab_momentum：第二波 vs 第一波力道
     f_n_cd_vs_ab_momentum = cd_gain / (f_n_ab_gain + 1e-9)
 
-    # ── Feature 6: f_n_close_vs_b ────────────────────────────────────── #
-    # 當前收盤相對 B 點的位置
-    # > 0 代表已站上 B（D1 之後持續強勢）
-    f_n_close_vs_b = (cur_close - B) / (B + 1e-9)
+    # f_n_close_vs_b：收盤相對 B 的位置
+    f_n_close_vs_b = (close_wide - B_wide) / (B_wide + 1e-9)
 
-    # ── Feature 7: f_n_structure_score ───────────────────────────────── #
-    # 綜合 N 字品質分數（只在 d1_confirmed 時有意義）
-    # 回調淺 + C>A 幅度大 + 突破力道強
+    # f_n_structure_score：綜合品質分（只在 D1 後有值）
     f_n_structure_score = (
-        (1 - f_n_bc_retracement.clip(0, 1)) * 0.3  # 回調越淺越好
-        + f_n_c_above_a.clip(0) * 0.3  # C 高於 A 越多越好
-        + f_n_d_breakout_strength.clip(0) * 0.4  # 突破力道
-    ) * d1_confirmed.astype(
-        float
-    )  # 未確認 N 字則為 0
+        (1 - f_n_bc_retracement.clip(0, 1)) * 0.3 + f_n_c_above_a.clip(0) * 0.3 + f_n_d_breakout_strength.clip(0) * 0.4
+    ).where(d1_mask)
 
-    # ── Feature 8: f_n_d1_confirmed ──────────────────────────────────── #
-    # D1 確認旗標（布林 → 0/1）
-    f_n_d1_confirmed = d1_confirmed.astype(float)
+    # f_n_d1_confirmed：D1 旗標
+    f_n_d1_confirmed = d1_mask.astype(float)
 
-    # ── Feature 9: f_n_volume_on_breakout ────────────────────────────── #
-    # 突破 B 當段的成交量相對 BC 回調段平均量的放大倍數
-    vol_cd = volume_wide.rolling(w_cd).mean()
-    vol_bc = volume_wide.shift(w_cd).rolling(w_bc).mean()
-    f_n_volume_on_breakout = vol_cd / (vol_bc + 1e-9)
+    # f_n_volume_on_breakout：CD 段量 vs BC 段量
+    # 用狀態紀錄無法直接取窗口，用當前 state 做近似
+    vol_roll10 = volume_wide.rolling(10).mean()
+    vol_roll10_prev = vol_roll10.shift(10)
+    f_n_volume_on_breakout = (vol_roll10 / (vol_roll10_prev + 1e-9)).where(state_wide.isin([CD, D1]))
 
-    # ── Feature 10: f_n_days_since_d1 ────────────────────────────────── #
-    # D1 確認後已過幾根（越近越新鮮）
-    # 用 cumsum trick：確認日 reset，否則累加
+    # f_n_days_since_d1：D1 確認後幾根
     def days_since_signal(bool_wide: pd.DataFrame) -> pd.DataFrame:
-        result = pd.DataFrame(index=bool_wide.index, columns=bool_wide.columns, dtype=float)
         arr = bool_wide.values.astype(float)
         out = np.full_like(arr, np.nan)
         counter = np.full(arr.shape[1], np.nan)
@@ -115,14 +270,14 @@ def detect_n_shape_features(df: pd.DataFrame) -> pd.DataFrame:
             out[i] = counter
         return pd.DataFrame(out, index=bool_wide.index, columns=bool_wide.columns)
 
-    f_n_days_since_d1 = days_since_signal(d1_confirmed)
+    f_n_days_since_d1 = days_since_signal(d1_mask)
 
-    # ── 有效結構 mask：C >= A，否則所有特徵設為 NaN ───────────────────── #
-    # C < A 代表回調已跌破起漲點，N 字結構不成立
-    # 讓 LGBM 的缺失值機制忽略這些無效樣本，避免學到錯誤規律
-    valid_structure = C >= A  # DataFrame[bool]
+    # f_n_state：目前所處階段（1=AB, 2=BC, 3=CD, 4=D1）
+    f_n_state = state_wide.where(state_wide > IDLE)
 
-    # ── 整合回長表格 ──────────────────────────────────────────────────── #
+    # ── 有效結構 mask：非 IDLE 狀態才輸出特徵 ───────────────────────── #
+    valid = state_wide > IDLE
+
     feature_wides_raw = {
         "f_n_ab_gain": f_n_ab_gain,
         "f_n_bc_retracement": f_n_bc_retracement,
@@ -134,14 +289,16 @@ def detect_n_shape_features(df: pd.DataFrame) -> pd.DataFrame:
         "f_n_d1_confirmed": f_n_d1_confirmed,
         "f_n_volume_on_breakout": f_n_volume_on_breakout,
         "f_n_days_since_d1": f_n_days_since_d1,
+        "f_n_state": f_n_state,
     }
 
-    # C < A 的列全部遮成 NaN，讓 LGBM 視為缺失值
-    feature_wides = {name: feat.where(valid_structure) for name, feat in feature_wides_raw.items()}
+    feature_wides = {name: feat.where(valid) for name, feat in feature_wides_raw.items()}
 
+    # ── 整合回長表格 ──────────────────────────────────────────────────── #
     feature_longs = []
     for feat_name, feat_wide in feature_wides.items():
-        feat_long = feat_wide.stack().reset_index().rename(columns={0: feat_name})
+        feat_long = feat_wide.stack().reset_index()
+        feat_long.columns = ["date", "stock_id", feat_name]  # 強制命名
         feature_longs.append(feat_long.set_index(["date", "stock_id"]))
 
     features_df = pd.concat(feature_longs, axis=1).reset_index()
