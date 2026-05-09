@@ -11,17 +11,29 @@ D1 = 4  # N 字確認後
 
 
 @njit
-def _run_state_machine(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray):
+def _run_state_machine(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    volume: np.ndarray,
+    max_ab_bars: int = 20,
+    max_bc_bars: int = 15,
+    max_cd_bars: int = 20,
+):
     """
     逐 bar 執行 N 字型狀態機，回傳每根 bar 的狀態與 ABCD 關鍵價位。
 
     破壞條件：
-      - 任何階段跌破 A → reset 回 IDLE
-      - CD 段（尚未突破 B）若跌破 C → reset 回 IDLE
+      - 任何階段跌破 A → reset
+      - CD 段（尚未突破 B）若跌破 C → reset
+      - 各段超過 bar 數上限 → reset（動能已散）
 
     Parameters
     ----------
     high, low, close, volume : np.ndarray  shape=(T,)
+    max_ab_bars : AB 段最大 bar 數（預設 20）
+    max_bc_bars : BC 段最大 bar 數（預設 15）
+    max_cd_bars : CD 段最大 bar 數（預設 20）
 
     Returns
     -------
@@ -40,6 +52,7 @@ def _run_state_machine(high: np.ndarray, low: np.ndarray, close: np.ndarray, vol
     B = np.nan
     C = np.nan
     D = np.nan
+    bar_count = 0  # 當前 state 已待幾根 bar
 
     for i in range(T):
         h = high[i]
@@ -297,8 +310,7 @@ def detect_n_shape_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── 整合回長表格 ──────────────────────────────────────────────────── #
     feature_longs = []
     for feat_name, feat_wide in feature_wides.items():
-        feat_long = feat_wide.stack().reset_index()
-        feat_long.columns = ["date", "stock_id", feat_name]  # 強制命名
+        feat_long = feat_wide.stack().reset_index().rename(columns={0: feat_name})
         feature_longs.append(feat_long.set_index(["date", "stock_id"]))
 
     features_df = pd.concat(feature_longs, axis=1).reset_index()
