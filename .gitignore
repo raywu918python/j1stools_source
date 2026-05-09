@@ -17,3 +17,5 @@ models/
 model/
 *.json
 tmp.txt
+*.pyc
+src/j1stools/db_models/__pycache__/
