@@ -19,6 +19,7 @@ def _run_state_machine(
     max_ab_bars: int = 20,  # AB 上漲段最多幾根，超時 reset
     max_bc_bars: int = 15,  # BC 回調段最多幾根，超時 reset
     max_cd_bars: int = 20,  # CD 再漲段最多幾根，超時 reset
+    min_ab_gain: float = 0.05,  # AB 段最低漲幅門檻（預設 5%），不足則繼續等更高 B
 ):
     """
     逐 bar 執行 N 字型狀態機，回傳每根 bar 的狀態與 ABCD 關鍵價位。
@@ -93,10 +94,19 @@ def _run_state_machine(
                 B = h
 
             # 收盤跌破 B 的 1% → 回調開始，進 BC
+            # 但 AB 漲幅必須達到門檻，否則繼續在 AB 等更高的 B
             if c < B * 0.99:
-                state = BC
-                bar_count = 0
-                C = l
+                if (B - A) / (A + 1e-9) >= min_ab_gain:
+                    state = BC
+                    bar_count = 0
+                    C = l
+                else:
+                    # 漲幅不足，視為假突破，重設起點繼續找
+                    A = l
+                    B = h
+                    C = np.nan
+                    D = np.nan
+                    bar_count = 0
 
         # ── BC 段：找 C 低點，等待止跌回升 ─────────────────────────── #
         elif state == BC:
@@ -224,6 +234,7 @@ def detect_n_shape_features(
     max_ab_bars: int = 20,
     max_bc_bars: int = 15,
     max_cd_bars: int = 20,
+    min_ab_gain: float = 0.05,  # AB 段最低漲幅，預設 5%，可手動調整
 ) -> pd.DataFrame:
     """
     基於狀態機的 N 字型特徵，支援結構破壞 + 超時自動 reset。
@@ -235,6 +246,7 @@ def detect_n_shape_features(
     max_ab_bars : AB 段最大 bar 數（預設 20）
     max_bc_bars : BC 段最大 bar 數（預設 15）
     max_cd_bars : CD 段最大 bar 數（預設 20）
+    min_ab_gain : AB 段最低漲幅門檻（預設 0.05 = 5%），不足則不進 BC
 
     Returns
     -------
@@ -257,7 +269,9 @@ def detect_n_shape_features(
         c = close_wide[sid].values.astype(np.float64)
         v = volume_wide[sid].values.astype(np.float64)
 
-        state_arr, A_arr, B_arr, C_arr, D_arr = _run_state_machine(h, l, c, v, max_ab_bars, max_bc_bars, max_cd_bars)
+        state_arr, A_arr, B_arr, C_arr, D_arr = _run_state_machine(
+            h, l, c, v, max_ab_bars, max_bc_bars, max_cd_bars, min_ab_gain
+        )
         results[sid] = {
             "state": state_arr,
             "A": A_arr,
