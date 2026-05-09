@@ -5,7 +5,7 @@ import lightgbm as lgb
 from lightgbm import LGBMClassifier
 from pygments.unistring import No
 
-from j1stools.obj_base_model import MODEL_TYPE, RUN_TYPE, BaseModel
+from j1stools.obj_base_model import MODEL_TYPE, MODEL_RUN_TYPE, BaseModel
 
 from j1stools import feature_builder, obj_filter_data, rfc_main
 from j1stools import parquet_db
@@ -45,15 +45,15 @@ def split_date(
     X = df[[col for col in df.columns if col.startswith("f_")]]
     y = df["target"]
     if is_gen_train_data and is_gen_test_data:
-        xremain, xtest, yremain, ytest = train_test_split(X, y, test_size=0.15, random_state=42)
-        xtrain, xval, ytrain, yval = train_test_split(xremain, yremain, test_size=0.176, random_state=42)
+        xremain, xtest, yremain, ytest = train_test_split(X, y, test_size=0.15, shuffle=False)
+        xtrain, xval, ytrain, yval = train_test_split(xremain, yremain, test_size=0.176, shuffle=False)
 
         print(f"訓練集大小: {len(xtrain)}")
         print(f"驗證集大小: {len(xval)}")
         print(f"測試集大小: {len(xtest)}")
         return xtrain, xval, xtest, ytrain, yval, ytest
     elif is_gen_train_data:
-        xtrain, xval, ytrain, yval = train_test_split(X, y, test_size=0.15, random_state=42)
+        xtrain, xval, ytrain, yval = train_test_split(X, y, test_size=0.15, shuffle=False)
         return xtrain, xval, None, ytrain, yval, None
     elif is_gen_test_data:
         return None, None, X, None, None, y
@@ -351,7 +351,7 @@ def exec(
     end="2099-01-01",
     model=None,
     is_using_rfc=False,
-    run_type=RUN_TYPE.train,
+    run_type=MODEL_RUN_TYPE.train,
     pick_import_feature=True,
     is_del_atr=True,
 ):
@@ -367,23 +367,30 @@ def exec(
     m.THRESHOLD = 0.6
     m.is_print_import_ft = True
     m.is_add_noise = False
-    m.run_type = run_type
+    m.model_run_type = run_type
 
-    if run_type == RUN_TYPE.train:
+    if run_type == MODEL_RUN_TYPE.train:
         is_gen_train_data = True
         is_gen_test_data = True
-    elif run_type == RUN_TYPE.create_model:
+    elif run_type == MODEL_RUN_TYPE.create_model:
         is_gen_train_data = True
         is_gen_test_data = False
-    elif run_type == RUN_TYPE.predict:
+    elif run_type == MODEL_RUN_TYPE.predict:
         is_gen_train_data = False
         is_gen_test_data = True
 
+    print("pick_import_feature", pick_import_feature)
     df = parquet_db.query_price(stocks, st, end)
 
     df = feature_builder.gen_feature(df)
     if is_using_rfc:
-        df = add_rfc_feature(df, stocks, st, end)
+        df = add_rfc_feature(
+            df,
+            stocks,
+            st,
+            end,
+            pick_import_feature,
+        )
 
     df = Label.add_label(df)
     df = obj_filter_data.FilterData.get_data(df, True, False, is_del_atr)
@@ -416,7 +423,7 @@ def exec(
             n=i,
             function_train=function_train,
         )
-        if m.run_type == RUN_TYPE.create_model:
+        if m.model_run_type == MODEL_RUN_TYPE.create_model:
             return
         acc_list.append(y_proba[:, 2])
 
@@ -435,12 +442,24 @@ def predict(stocks, st, end):
         end=end,
         model=model,
         is_using_rfc=True,
-        run_type=RUN_TYPE.predict,
+        pick_import_feature=False,
+        run_type=MODEL_RUN_TYPE.predict,
     )
 
 
-def add_rfc_feature(df, stocks, st, end):
-    signal = rfc_main.predict(stocks, st, end)
+def add_rfc_feature(
+    df,
+    stocks,
+    st,
+    end,
+    pick_import_feature=False,
+):
+    signal = rfc_main.predict(
+        stocks,
+        st,
+        end,
+        pick_import_feature=pick_import_feature,
+    )
     signal.rename(columns={"y_proba": "f_rfc"}, inplace=True)
     signal = signal[["date", "stock_id", "f_rfc"]]
     #
@@ -458,13 +477,18 @@ def main():
     stocks = random.sample(parquet_db.query_stocks_no_etf(), 500)
     exec(
         stocks,
-        st="2015-01-01",
-        end="2018-01-01",
+        st="2024-01-01",
+        end="2099-01-01",
         model=None,
         pick_import_feature=False,
         is_del_atr=False,
-        is_using_rfc=False,
+        is_using_rfc=True,
     )
 
 
 # main()
+# predict(
+#     stocks=random.sample(parquet_db.query_stocks_no_etf(), 500),
+#     st="2024-01-01",
+#     end="2099-01-01",
+# )

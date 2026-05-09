@@ -1,8 +1,11 @@
+from calendar import c
 from time import time
 
 import pandas as pd
 
-from j1stools.macdh_divergences import f_macd_hist_divergences_with_atr
+from j1stools.CONFIG import BaseDataBuilderConfig
+from j1stools.TYPE import FEATURE_TYPE
+from j1stools.macdh_divergences import f_macd_continuous_features, f_macd_hist_divergences_with_atr
 from j1stools.obj_hv_feature import HvFeature
 from j1stools.obj_ma_feature import MaFeature
 from j1stools.obj_macd_feature import MacdFeature
@@ -10,11 +13,8 @@ from j1stools.obj_market_feature import MarketFeature
 from j1stools.obj_random_feature import RandomFeature
 from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
 
-IS_DAY_TRADE = False
-IS_MACD = True
 
-
-def gen_feature(df) -> pd.DataFrame:
+def gen_feature(df, cfg: BaseDataBuilderConfig) -> pd.DataFrame:
     st = time()
 
     # df = VolumeFeature.init(df)
@@ -22,11 +22,14 @@ def gen_feature(df) -> pd.DataFrame:
     #
     # df = AtrFeature.add_feature(df)
     #############################################################
-    if IS_DAY_TRADE:
+    if cfg.feature_type == FEATURE_TYPE.today:
         # return generate_features_t1(df)
         return generate_features_today(df)
-    elif IS_MACD:
-        return f_macd_hist_divergences_with_atr(df)
+    elif cfg.feature_type == FEATURE_TYPE.macd:
+        if cfg.is_continuous:
+            return f_macd_continuous_features(df)
+        else:
+            return f_macd_hist_divergences_with_atr(df)
     else:
         df = HvFeature.add_feature(df)
         df = MaFeature.add_feature(df)

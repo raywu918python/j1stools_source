@@ -11,7 +11,7 @@ from sklearn.preprocessing import label_binarize
 import joblib
 
 
-class RUN_TYPE(Enum):
+class MODEL_RUN_TYPE(Enum):
     train = 1
     create_model = 2
     predict = 3
@@ -30,18 +30,8 @@ class BaseModel(ABC):
         now = datetime.now()
         self.t = now.strftime("%Y%m%d_%H%M%S")
         self.trainging_idx = 0
-        self.run_type = RUN_TYPE.train
+        self.model_run_type = MODEL_RUN_TYPE.train
         self.model_type = MODEL_TYPE.rfc
-
-    def drop_na_inf(self, x, y):
-        # 1. 把 inf 換成 NaN
-        x.replace([np.inf, -np.inf], np.nan, inplace=True)
-        # 2. 找出哪些列是乾淨的（沒有 NaN）
-        # 注意：xtrain 和 ytrain 的列必須同步刪除，否則 index 會對不起來
-        clean_mask = x.isnull().any(axis=1) == False
-        x = x[clean_mask]
-        y = y[clean_mask]
-        return x, y
 
     # def load_stocks(self):
     #     all_close = []
@@ -201,7 +191,7 @@ class BaseModel(ABC):
         st = time()
         # train
         model = self.model
-        if self.run_type == RUN_TYPE.train or self.run_type == RUN_TYPE.create_model:
+        if self.model_run_type == MODEL_RUN_TYPE.train or self.model_run_type == MODEL_RUN_TYPE.create_model:
             if function_train:
                 if self.model_type == MODEL_TYPE.lgbm:
                     function_train(xtrain, xval, ytrain, yval, model)
@@ -212,11 +202,11 @@ class BaseModel(ABC):
             joblib.dump(model, self.get_full_name())
             print(f"訓練時間: {time()-st:.2f} 秒")
 
-        if self.run_type == RUN_TYPE.train or self.run_type == RUN_TYPE.predict:
+        if self.model_run_type == MODEL_RUN_TYPE.train or self.model_run_type == MODEL_RUN_TYPE.predict:
             # test
             expected_features = self.model.feature_names_in_
             xtest = xtest[expected_features]
-            if self.run_type == RUN_TYPE.train:
+            if self.model_run_type == MODEL_RUN_TYPE.train:
                 self.base_predict(xtest, ytest)
 
             accuracy = self.batter_predict(xtest, ytest)

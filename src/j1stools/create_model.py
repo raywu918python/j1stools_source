@@ -1,5 +1,5 @@
 from j1stools import parquet_db
-from j1stools.obj_base_model import RUN_TYPE
+from j1stools.obj_base_model import MODEL_RUN_TYPE
 
 
 def create_model(step=1):
@@ -16,7 +16,7 @@ def create_model(step=1):
             end="2021-01-01",
             is_del_atr=False,
             pick_import_feature=False,
-            run_type=RUN_TYPE.create_model,
+            run_type=MODEL_RUN_TYPE.create_model,
         )
     elif step == 2:
         """
@@ -32,7 +32,7 @@ def create_model(step=1):
             is_del_atr=False,
             pick_import_feature=False,
             is_using_rfc=True,
-            run_type=RUN_TYPE.create_model,
+            run_type=MODEL_RUN_TYPE.create_model,
         )
 
 

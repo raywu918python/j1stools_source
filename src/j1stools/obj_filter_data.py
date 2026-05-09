@@ -38,7 +38,7 @@ class FilterData:
         # df = FilterData.abcd(df)
 
         # 刪除 df
-        # df = FilterData.ichimoku(df, ichcfg)  # 做多比重提升
+        df = FilterData.ichimoku(df, ichcfg)  # 做多比重提升
         df = FilterData.always_del_limit_up(df)
         df = FilterData.always_del_atr(df, atrcfg)
 
@@ -428,7 +428,7 @@ class FilterData:
         if cfg == FILTER_CONFIG.none_:
             return df
 
-        df = df.sort_values(["stock_id", "date"])
+        df = df.sort_values(["date", "stock_id"])
         grouped = df.groupby("stock_id")
 
         # --- 1. 計算一目均衡表指標 ---
@@ -643,9 +643,14 @@ class FilterData:
         """
         刪除漲停的資料（以漲幅 9.9% 作為判定門檻，避免浮點數誤差）
         """
+        # 1. 確保資料按時間排序
+        df = df.sort_values(["stock_id", "date"])
 
-        condition = df["close"].pct_change() < 0.09
-        return df[condition]
+        # 2. 計算每檔股票的漲幅
+        df["pct"] = df.groupby("stock_id")["close"].pct_change()
+
+        # 3. 過濾漲幅小於 9% 的資料
+        return df[df["pct"] < 0.09]
 
     def print_log(before, after):
         try:

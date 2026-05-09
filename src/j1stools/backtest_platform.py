@@ -11,7 +11,7 @@ pd.set_option("future.no_silent_downcasting", True)
 from pandas_ta import ma
 import vectorbt as vbt
 
-from j1stools import j1s_chart, lgbm_main, parquet_db
+from j1stools import j1s_chart, parquet_db
 
 # ============================================================
 # 技術指標
@@ -19,7 +19,7 @@ from j1stools import j1s_chart, lgbm_main, parquet_db
 
 import os
 
-from j1stools.j1s_backtest import j1s_backtest
+from j1stools.backtest_engine import backtest_engine
 
 IS_USE_CACHE = False
 
@@ -163,7 +163,7 @@ def prepare_data_backtest(
 
     # 回測
     st = time()
-    portfolio_value, trades_df, positions = j1s_backtest(
+    portfolio_value, trades_df, positions = backtest_engine(
         close=p.close,
         entries=p.entries,
         exits=p.exits,
@@ -213,18 +213,18 @@ def optimize(signal):
 
     # ── 定義參數範圍 ──────────────────────────────────────
     param_grid = {
-        "top_n": [3, 5, 10],
-        "proba_threshold": [0.5, 0.6, 0.7],
-        "max_positions": [5, 10, 15, 20],
-        "group_limit": [2, 3, 5],
-        "use_sl_trail": [True, False],
-        "sl_trail": [0.05, 0.1, 0.15],
-        "use_fixed_sl": [True, False],
-        "sl_stop": [0.05, 0.1, 0.15],
-        "use_fixed_tp": [True, False],
-        "tp_stop": [0.05, 0.1, 0.15],
-        "use_hold_days": [True, False],
-        "hold_days": [3, 5, 10],
+        "top_n": [5, 10],
+        "proba_threshold": [0.7, 0.9],
+        "max_positions": [5, 10],
+        "group_limit": [2, 5],
+        "use_sl_trail": [True],
+        "sl_trail": [0.10, 0.20],
+        "use_fixed_sl": [True],
+        "sl_stop": [0.1, 0.20],
+        "use_fixed_tp": [True],
+        "tp_stop": [0.1, 0.20],
+        "use_hold_days": [True],
+        "hold_days": [5, 22],
         # "use_fixed_sl_tp": [True, False],
         # "use_proba_sizing": [True, False],  # 未實作
     }
@@ -253,7 +253,7 @@ def optimize(signal):
             proba_threshold=params["proba_threshold"],
         )
         exits = gen_exits(check_market(p.close), p.proba)
-        portfolio_value, trades_df, _ = j1s_backtest(
+        portfolio_value, trades_df, _ = backtest_engine(
             close=p.close,
             entries=entries,
             exits=exits,
@@ -315,60 +315,6 @@ def optimize(signal):
     results_df.to_csv("grid_search_results.csv", index=False)
     return results_df
 
-
-def web_backtest(stocks):
-    """for web"""
-    signal = lgbm_main.predict(stocks, "2025-01-01", "2099-01-01")
-    portfolio_value, trades_df, positions, close = prepare_data_backtest(
-        signal,
-        threshold=0.6,
-        max_positions=10,
-        group_limit=99,
-        tp_stop=0.15,
-        sl_stop=0.15,
-        use_sl_trail=False,
-    )
-
-    return j1s_chart.plot_performance(
-        portfolio_value=portfolio_value,
-        trades_df=trades_df,
-        is_web=True,
-    )
-
-
-def web_query_last(
-    st="2024-01",
-    end="2099-01",
-):
-    """for web"""
-    stocks = parquet_db.query_stocks_no_etf()
-    # stocks = random.sample(stocks, 100)
-    signal = lgbm_main.predict(stocks, st, end)
-    # portfolio_value, trades_df, positions =
-    portfolio_value, trades_df, positions, close = prepare_data_backtest(
-        # signal,
-        # threshold=0.6,
-        # max_positions=10,
-        # group_limit=3,
-        # tp_stop=0.15,
-        # sl_stop=0.15,
-        # use_sl_trail=False,
-        signal,
-        threshold=0.6,
-        max_positions=10,
-        group_limit=3,
-        tp_stop=0.15,
-        sl_stop=0.15,
-        sl_trail=0.10,
-        use_sl_trail=True,
-    )
-
-    # j1s_chart.plot_performance(
-    #     portfolio_value=portfolio_value,
-    #     trades_df=trades_df,
-    #     is_web=True,
-    # )
-    return portfolio_value, trades_df, positions
     # portfolio_value.to_csv("portfolio_value.csv")
     # signal.to_csv("query_last.csv", index=False)
 
@@ -385,31 +331,32 @@ def main(
     st="2024-01",
     end="2099-01",
 ):
-    # signal = lgbm_main.predict(parquet_db.query_stocks_no_etf(), st, end)
+    # signal = lgbm_main.predict(parquet_db.query_stocks_ids_list(), st, end)
+    # signal.to_csv("signal.csv", index=False)
     signal = local_signals()
     show_chart = Chart.N
     show_chart |= Chart.PF
-    # show_chart |= Chart.FLOW
+    show_chart |= Chart.FLOW
     # show_chart |= Chart.INFO
 
-    p = PrepareDate(signal, top_n=3, threshold=0.7)
+    p = PrepareDate(signal, top_n=5, threshold=0.7)
     #############################################################
     t1 = time()
-    portfolio_value, trades_df, positions = j1s_backtest(
+    portfolio_value, trades_df, positions = backtest_engine(
         use_sl_trail=False,
-        sl_trail=0.15,
+        sl_trail=0.2,
         use_fixed_sl=True,
-        sl_stop=0.20,
+        sl_stop=0.10,
         use_fixed_tp=True,
-        tp_stop=0.15,
+        tp_stop=0.10,
         use_hold_days=True,
-        hold_days=30,
+        hold_days=10,
         #############################################################
-        use_fixed_sl_tp=False,
+        use_fixed_sl_tp=True,
         use_proba_sizing=False,
         #############################################################
         max_positions=5,
-        group_limit=1,
+        group_limit=2,
         stock_group=p.stock_group,
         #############################################################
         init_cash=1_000_000,
@@ -448,6 +395,7 @@ def main(
         )
 
 
+#############################################################
 # optimize(local_signals())
 # main()
 
@@ -459,6 +407,5 @@ def main(
 #     is_web=True,
 # )
 
-main()
 # query()
 # query(good_search=True)

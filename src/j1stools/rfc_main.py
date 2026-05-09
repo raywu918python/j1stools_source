@@ -1,3 +1,4 @@
+from calendar import c
 from datetime import datetime, timedelta
 from pdb import run
 import random
@@ -11,12 +12,18 @@ from requests import head
 from sklearn.model_selection import train_test_split
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from websockets import Data
 
-from j1stools import feature_builder
-from j1stools.obj_filter_data import FilterData
+from j1stools.CONFIG import (
+    BaseDataBuilderConfig,
+    MACDDataBuilterConfig,
+    NormalDataBuilderConfig,
+    TodayDataBuilterConfig,
+)
+from j1stools.data_builder import DataBuilder
+from j1stools.obj_filter_data import FILTER_CONFIG
 import j1stools.parquet_db as parquet_db
-from j1stools.obj_base_model import MODEL_TYPE, RUN_TYPE, BaseModel
-from j1stools.obj_label import Label
+from j1stools.obj_base_model import MODEL_TYPE, MODEL_RUN_TYPE, BaseModel
 from j1stools.feature_builder import gen_feature, pick_feature
 import joblib
 
@@ -49,23 +56,6 @@ def gen_model():
     )
 
 
-def split_date(df: pd.DataFrame, trainging_idx=0.8, is_gen_train=True, is_gen_test=True):
-    # group
-    df.sort_values(by=["date", "stock_id"], inplace=True)
-    x = df[[col for col in df.columns if col.startswith("f_")]]
-    y = df["target"]
-
-    if trainging_idx and is_gen_train:
-        xtrain, xtest, ytrain, ytest = train_test_split(x, y, train_size=trainging_idx, random_state=42)
-        return xtrain, xtest, ytrain, ytest
-    elif is_gen_train:
-        return x, None, y, None
-    elif is_gen_test:
-        return None, x, None, y
-    else:
-        raise Exception("參數錯誤")
-
-
 def function_train(xtrain, ytrain, model, df):
     sample_weights = ytrain.map({0: 1, 1: 1, 2: 3})
     # m = xtrain["f_atr_just"]
@@ -81,69 +71,36 @@ def function_train(xtrain, ytrain, model, df):
 
 
 def exec(
-    stocks=parquet_db.query_stocks_no_etf(),
-    st="2015-01-01",
-    end="2099-01-01",
-    trainging_idx=0.8,
     model=None,
-    pick_import_feature=True,
-    is_del_atr=True,
-    run_type=RUN_TYPE.train,
+    cfg: BaseDataBuilderConfig = None,
 ):
     print(f"*" * 60, "rfc start")
     m = RFCModel()
-    m.trainging_idx = trainging_idx
-    m.run_type = run_type
+    m.trainging_idx = cfg.trainging_idx
+    m.model_run_type = cfg.model_run_type
     m.is_print_import_ft = True
     if model:
         m.model = model
     else:
         m.model = gen_model()
 
-    if run_type == RUN_TYPE.train:
-        is_gen_train_data = True
-        is_gen_test_data = True
-    elif run_type == RUN_TYPE.create_model:
-        is_gen_train_data = True
-        is_gen_test_data = False
-    elif run_type == RUN_TYPE.predict:
-        is_gen_train_data = False
-        is_gen_test_data = True
-
-    df = parquet_db.query_price(stocks, st, end)
-    print("delete.before:", df.shape)
-    df = feature_builder.gen_feature(df)
-    df = Label.add_label(df)
-    df = FilterData.get_data(df, True, False, is_del_atr)
-    # parquet_db.create_features(df)
-    # 資料在這裡刪
-    df.set_index(["date", "stock_id"], inplace=True)
-    xtrain, xtest, ytrain, ytest = split_date(df, trainging_idx, is_gen_train_data, is_gen_test_data)
-    if is_gen_train_data:
-        xtrain, ytrain = m.drop_na_inf(xtrain, ytrain)
-        if pick_import_feature:
-            xtrain = feature_builder.pick_feature(xtrain)
-    if is_gen_test_data:
-        xtest, ytest = m.drop_na_inf(xtest, ytest)
-        if pick_import_feature:
-            xtest = feature_builder.pick_feature(xtest)
+    d = DataBuilder(cfg).build()
 
     acc_list = []
     for i in range(1):
         y_proba = m.train_model(
-            xtrain,
-            xtest,
-            ytrain,
-            ytest,
+            d.xtrain,
+            d.xtest,
+            d.ytrain,
+            d.ytest,
             i,
             function_train=function_train,
-            df=df,
         )
-        if m.run_type == RUN_TYPE.create_model:
+        if m.model_run_type == MODEL_RUN_TYPE.create_model:
             return
         acc_list.append(y_proba[:, 2])
     # print(f"平均:", np.average(acc_list))
-    signal = m.gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
+    signal = m.gen_gold_signal(d.xtest, y_proba).iloc[:, [0, 1, 4]]
     signal.rename(columns={2: "y_proba"}, inplace=True)
     signal["date"] = pd.to_datetime(signal["date"])
     return signal
@@ -161,7 +118,7 @@ def predict_today():
         model=model,
         is_del_atr=True,
         pick_import_feature=False,
-        run_type=RUN_TYPE.predict,
+        run_type=MODEL_RUN_TYPE.predict,
     )
     signal = signal[signal["y_proba"] > 0.6]
     signal.sort_values(by=["date", "y_proba"], inplace=True)
@@ -182,7 +139,7 @@ def predict(
         trainging_idx=0,
         model=model,
         pick_import_feature=pick_import_feature,
-        run_type=RUN_TYPE.predict,
+        run_type=MODEL_RUN_TYPE.predict,
     )
 
 
@@ -203,16 +160,15 @@ def predict(
 
 
 def main():
-    # stocks = random.sample(parquet_db.query_stocks_ids_list(), 100)
-    stocks = parquet_db.query_stocks_ids_list()
+    cfg = MACDDataBuilterConfig()
+    cfg.is_continuous = True
+    cfg.st = "2018-01-01"
+    cfg.end = "2021-01-01"
+    # cfg = NormalDataBuilderConfig()
+    # cfg = TodayDataBuilterConfig()
     signal = exec(
-        stocks,
-        st="2024-01-01",  # 2024-01-01
-        end="2099-01-01",
-        trainging_idx=0.8,
         model=None,
-        pick_import_feature=False,
-        is_del_atr=False,
+        cfg=cfg,
     )
     signal = signal[signal["y_proba"] > 0.5]
     signal.sort_values(by=["date", "y_proba"], inplace=True)
@@ -226,7 +182,7 @@ def optimize():
         st="2024-01-01",
         end="2099-01-01",
         model=model,
-        run_type=RUN_TYPE.predict,
+        run_type=MODEL_RUN_TYPE.predict,
         pick_import_feature=True,
     )
 

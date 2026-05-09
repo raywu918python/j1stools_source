@@ -22,13 +22,13 @@ class TIME(Enum):
     m1 = "1m"
     m5 = "5m"
     day = "d"
-    allday = "allday"
+    day2015_2099 = "allday"
 
 
 def download_from_yf(stock, time: TIME, market: MARKET):
     template = None
 
-    if time == TIME.allday:
+    if time == TIME.day2015_2099:
         load_dotenv()
         s = os.getenv("START")
         e = os.getenv("END")
