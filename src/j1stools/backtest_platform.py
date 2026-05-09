@@ -201,7 +201,7 @@ def prepare_data_backtest(
 
 
 def local_signals():
-    signal = pd.read_csv("signal.csv", dtype={"stock_id": str})
+    signal = pd.read_csv("signal_today.csv", dtype={"stock_id": str})
     signal["date"] = pd.to_datetime(signal["date"])
     return signal
 

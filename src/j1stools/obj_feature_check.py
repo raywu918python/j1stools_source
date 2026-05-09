@@ -11,7 +11,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import pandas as pd
 
 from j1stools import feature_builder, parquet_db
-from j1stools.obj_base_model import BaseModel
+from j1stools.model_training_process import BaseTrainConfig
 
 
 from j1stools.obj_filter_data import FilterData
@@ -164,8 +164,8 @@ def check():
     df.set_index(["date", "stock_id"], inplace=True)
     xtrain, xtest, ytrain, ytest = rfc.split_date(df, 0.8)
 
-    xtrain, ytrain = BaseModel().drop_na_inf(xtrain, ytrain)
-    xtest, ytest = BaseModel().drop_na_inf(xtest, ytest)
+    xtrain, ytrain = BaseTrainConfig().drop_na_inf(xtrain, ytrain)
+    xtest, ytest = BaseTrainConfig().drop_na_inf(xtest, ytest)
 
     print(xtrain.select_dtypes(include="number").describe().T.round(2))
     xtrain: pd.DataFrame = fc.get_non_dup_ft_VIF(xtrain)

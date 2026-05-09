@@ -35,7 +35,7 @@ def f_macd_hist_divergences_with_atr(df: pd.DataFrame):
         return res
 
     # 批次處理指標 (使用長表格 groupby 再轉回寬表格，這在多指標計算時較穩健)
-    indicators = df.groupby("stock_id", group_keys=False).apply(get_indicators)
+    indicators = df.groupby("stock_id", group_keys=False).apply(get_indicators, include_groups=False)
 
     # 轉回寬表格供矩陣運算
     df_temp = df[["date", "stock_id"]].copy()
@@ -103,7 +103,7 @@ def f_macd_continuous_features(df: pd.DataFrame):
             res["hist"] = macd_df.iloc[:, 1]
         return res
 
-    indicators = df.groupby("stock_id", group_keys=False).apply(get_indicators)
+    indicators = df.groupby("stock_id", group_keys=False).apply(get_indicators, include_groups=False)
     df_temp = pd.concat([df[["date", "stock_id"]], indicators], axis=1)
 
     atr_wide = df_temp.pivot(index="date", columns="stock_id", values="atr")

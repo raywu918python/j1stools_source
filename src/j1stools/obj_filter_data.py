@@ -1,17 +1,9 @@
-from enum import Enum
-
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
+from j1stools.CONFIG import FILTER_CONFIG
 from j1stools.obj_macd_feature import MacdFeature
-
-
-class FILTER_CONFIG(Enum):
-    add_ = 1
-    del_ = 2
-    add_and_del = 3
-    none_ = 4
 
 
 class FilterData:

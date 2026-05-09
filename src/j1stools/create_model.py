@@ -1,5 +1,5 @@
 from j1stools import parquet_db
-from j1stools.obj_base_model import MODEL_RUN_TYPE
+from j1stools.TYPE import TRAIN_TYPE
 
 
 def create_model(step=1):
@@ -8,15 +8,15 @@ def create_model(step=1):
     "2015-01-01", "2020-12-31"
     """
     if step == 1:
-        import j1stools.rfc_main as rfc
+        import j1stools.model_training_process as rfc
 
-        rfc.exec(
+        rfc.run_train_process(
             parquet_db.query_stocks_ids_list(),
             st="2015-01-01",
             end="2021-01-01",
             is_del_atr=False,
             pick_import_feature=False,
-            run_type=MODEL_RUN_TYPE.create_model,
+            run_type=TRAIN_TYPE.create_model,
         )
     elif step == 2:
         """
@@ -32,7 +32,7 @@ def create_model(step=1):
             is_del_atr=False,
             pick_import_feature=False,
             is_using_rfc=True,
-            run_type=MODEL_RUN_TYPE.create_model,
+            run_type=TRAIN_TYPE.create_model,
         )
 
 

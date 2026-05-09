@@ -162,7 +162,7 @@ class MyappStocksmargin(BaseModel):
     short_sale_sell = FloatField()
     short_sale_today_balance = FloatField()
     short_sale_yesterday_balance = FloatField()
-    stock_id = CharField(primary_key=True)
+    stock_id = CharField()
 
     class Meta:
         table_name = 'myapp_stocksmargin'
@@ -174,7 +174,7 @@ class MyappStocksupdateflag(BaseModel):
     date = DateField()
     flag = IntegerField()
     note = CharField()
-    stock_id = CharField(primary_key=True)
+    stock_id = CharField()
 
     class Meta:
         table_name = 'myapp_stocksupdateflag'
