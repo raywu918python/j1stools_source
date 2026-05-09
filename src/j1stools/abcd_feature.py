@@ -3,7 +3,7 @@ import numpy as np
 from numba import njit
 
 # ── 狀態定義 ──────────────────────────────────────────────────────────────── #
-IDLE = 0  # 等待起漲
+IDLE = 0
 AB = 1  # A→B 上漲段
 BC = 2  # B→C 回調段
 CD = 3  # C→D 再漲段
@@ -16,25 +16,20 @@ def _run_state_machine(
     low: np.ndarray,
     close: np.ndarray,
     volume: np.ndarray,
-    max_ab_bars: int = 20,  # AB 上漲段最多幾根，超時 reset
-    max_bc_bars: int = 15,  # BC 回調段最多幾根，超時 reset
-    max_cd_bars: int = 20,  # CD 再漲段最多幾根，超時 reset
-    min_ab_gain: float = 0.05,  # AB 段最低漲幅門檻（預設 5%），不足則繼續等更高 B
+    max_ab_bars: int = 10,  # AB 段必須在 N 根內完成上漲
+    max_bc_bars: int = 10,  # BC 回調必須在 N 根內止跌
+    max_cd_bars: int = 10,  # CD 再漲必須在 N 根內突破 B
 ):
     """
-    逐 bar 執行 N 字型狀態機，回傳每根 bar 的狀態與 ABCD 關鍵價位。
+    N 字型狀態機：
+        AB：max_ab_bars 根內持續上漲，找到 B 高點
+        BC：max_bc_bars 根內回調止跌，不跌破 A，找到 C 低點（C > A）
+        CD：max_cd_bars 根內再漲，D 突破 B → D1 確認
 
     破壞條件：
-      1. 任何階段跌破 A → reset
-      2. CD 段尚未突破 B 卻跌破 C → reset
-      3. 各段待超過 bar 上限 → reset（動能已散）
-
-    Parameters
-    ----------
-    high, low, close, volume : np.ndarray  shape=(T,)
-    max_ab_bars : AB 段最大 bar 數（預設 20）
-    max_bc_bars : BC 段最大 bar 數（預設 15）
-    max_cd_bars : CD 段最大 bar 數（預設 20）
+        1. 任何階段跌破 A → reset
+        2. CD 段未突破 B 卻跌破 C → reset
+        3. 各段超過 bar 上限 → reset
     """
     T = len(close)
     state_arr = np.full(T, np.nan)
@@ -48,26 +43,26 @@ def _run_state_machine(
     B = np.nan
     C = np.nan
     D = np.nan
-    bar_count = 0  # 當前 state 已待幾根
+    bar_count = 0
 
     for i in range(T):
         h = high[i]
         l = low[i]
         c = close[i]
 
-        # ── IDLE：以當根作為起點，立即進 AB ─────────────────────────── #
+        # ── IDLE → AB ────────────────────────────────────────────────── #
         if state == IDLE:
             A = l
             B = h
             bar_count = 0
             state = AB
 
-        # ── AB 段：找 B 高點，等待回調 ──────────────────────────────── #
+        # ── AB 段：在 max_ab_bars 根內找到高點 B ─────────────────────── #
         elif state == AB:
             bar_count += 1
 
-            # 超時：AB 漲太久，動能拖散，以當根重設起點
-            if bar_count > max_ab_bars:
+            # 超時：N 根內沒完成上漲，以當根重設起點（含第 N 根）
+            if bar_count >= max_ab_bars:
                 A = l
                 B = h
                 C = np.nan
@@ -90,30 +85,23 @@ def _run_state_machine(
                 B_arr[i] = B
                 continue
 
+            # 持續更新 B 高點
             if h > B:
                 B = h
 
-            # 收盤跌破 B 的 1% → 回調開始，進 BC
-            # 但 AB 漲幅必須達到門檻，否則繼續在 AB 等更高的 B
+            # 收盤回調（跌破 B 的 1%）→ 進入 BC
+            # 不要求漲幅，只要在 N 根內有上漲且開始回調即可
             if c < B * 0.99:
-                if (B - A) / (A + 1e-9) >= min_ab_gain:
-                    state = BC
-                    bar_count = 0
-                    C = l
-                else:
-                    # 漲幅不足，視為假突破，重設起點繼續找
-                    A = l
-                    B = h
-                    C = np.nan
-                    D = np.nan
-                    bar_count = 0
+                state = BC
+                bar_count = 0
+                C = l
 
-        # ── BC 段：找 C 低點，等待止跌回升 ─────────────────────────── #
+        # ── BC 段：max_bc_bars 根內止跌，不跌破 A ────────────────────── #
         elif state == BC:
             bar_count += 1
 
-            # 超時：回調拖太久，結構渙散，重設
-            if bar_count > max_bc_bars:
+            # 超時：回調超過 N 根，reset（含第 N 根）
+            if bar_count >= max_bc_bars:
                 A = l
                 B = h
                 C = np.nan
@@ -136,12 +124,13 @@ def _run_state_machine(
                 B_arr[i] = B
                 continue
 
+            # 更新 C 低點
             if l < C:
                 C = l
 
-            # 收盤站回 C 上方 1% → 止跌，進 CD
+            # 收盤站回 C 上方 → 止跌，準備進 CD
             if c > C * 1.01:
-                # C 必須高於 A，否則 N 字結構無效
+                # C 必須高於 A
                 if C <= A:
                     A = l
                     B = h
@@ -156,12 +145,12 @@ def _run_state_machine(
                 bar_count = 0
                 D = h
 
-        # ── CD 段：找 D 突破 B ───────────────────────────────────────── #
+        # ── CD 段：max_cd_bars 根內 D 突破 B ─────────────────────────── #
         elif state == CD:
             bar_count += 1
 
-            # 超時：再漲段遲遲不突破，動能盡了，重設
-            if bar_count > max_cd_bars:
+            # 超時：N 根內沒突破 B，reset（含第 N 根，所以用 >=）
+            if bar_count >= max_cd_bars:
                 A = l
                 B = h
                 C = np.nan
@@ -184,7 +173,7 @@ def _run_state_machine(
                 B_arr[i] = B
                 continue
 
-            # 破壞 2：尚未突破 B 卻跌破 C
+            # 破壞 2：未突破 B 卻跌破 C
             if D < B and l < C:
                 A = l
                 B = h
@@ -204,11 +193,11 @@ def _run_state_machine(
                 state = D1
                 bar_count = 0
 
-        # ── D1 段：N 字確認後，持續追蹤 ────────────────────────────── #
+        # ── D1：確認後持續追蹤 ───────────────────────────────────────── #
         elif state == D1:
             bar_count += 1
 
-            # 破壞：跌破 A，結構全毀
+            # 破壞：跌破 A
             if l < A:
                 A = l
                 B = h
@@ -231,27 +220,20 @@ def _run_state_machine(
 
 def detect_n_shape_features(
     df: pd.DataFrame,
-    max_ab_bars: int = 20,
-    max_bc_bars: int = 15,
-    max_cd_bars: int = 20,
-    min_ab_gain: float = 0.05,  # AB 段最低漲幅，預設 5%，可手動調整
+    max_ab_bars: int = 10,  # AB 段最多幾根
+    max_bc_bars: int = 10,  # BC 段最多幾根
+    max_cd_bars: int = 10,  # CD 段最多幾根
 ) -> pd.DataFrame:
     """
-    基於狀態機的 N 字型特徵，支援結構破壞 + 超時自動 reset。
+    基於狀態機的 N 字型特徵。
 
     Parameters
     ----------
     df : pd.DataFrame
         長表格，需包含欄位: date, stock_id, close, high, low, volume
-    max_ab_bars : AB 段最大 bar 數（預設 20）
-    max_bc_bars : BC 段最大 bar 數（預設 15）
-    max_cd_bars : CD 段最大 bar 數（預設 20）
-    min_ab_gain : AB 段最低漲幅門檻（預設 0.05 = 5%），不足則不進 BC
-
-    Returns
-    -------
-    pd.DataFrame
-        原始長表格 + f_ 開頭特徵欄位
+    max_ab_bars : AB 段最大 bar 數（預設 10）
+    max_bc_bars : BC 段最大 bar 數（預設 10）
+    max_cd_bars : CD 段最大 bar 數（預設 10）
     """
     close_wide = df.pivot(index="date", columns="stock_id", values="close")
     high_wide = df.pivot(index="date", columns="stock_id", values="high")
@@ -261,7 +243,6 @@ def detect_n_shape_features(
     stocks = close_wide.columns.tolist()
     dates = close_wide.index
 
-    # 每個股票跑一次狀態機
     results = {}
     for sid in stocks:
         h = high_wide[sid].values.astype(np.float64)
@@ -269,9 +250,7 @@ def detect_n_shape_features(
         c = close_wide[sid].values.astype(np.float64)
         v = volume_wide[sid].values.astype(np.float64)
 
-        state_arr, A_arr, B_arr, C_arr, D_arr = _run_state_machine(
-            h, l, c, v, max_ab_bars, max_bc_bars, max_cd_bars, min_ab_gain
-        )
+        state_arr, A_arr, B_arr, C_arr, D_arr = _run_state_machine(h, l, c, v, max_ab_bars, max_bc_bars, max_cd_bars)
         results[sid] = {
             "state": state_arr,
             "A": A_arr,
@@ -293,30 +272,40 @@ def detect_n_shape_features(
 
     # ── 特徵計算 ──────────────────────────────────────────────────────── #
 
+    # AB 漲幅
     f_n_ab_gain = (B_wide - A_wide) / (A_wide + 1e-9)
 
+    # BC 回調比例（相對 AB 幅度）
     ab_range = (B_wide - A_wide).clip(lower=1e-9)
     f_n_bc_retracement = (B_wide - C_wide) / ab_range
 
+    # C 高於 A 的幅度
     f_n_c_above_a = (C_wide - A_wide) / (A_wide + 1e-9)
 
+    # D 突破 B 的力道
     f_n_d_breakout_strength = (D_wide - B_wide) / (B_wide + 1e-9)
 
+    # CD 漲幅 vs AB 漲幅
     cd_gain = (D_wide - C_wide) / (C_wide + 1e-9)
     f_n_cd_vs_ab_momentum = cd_gain / (f_n_ab_gain + 1e-9)
 
+    # 收盤相對 B 的位置
     f_n_close_vs_b = (close_wide - B_wide) / (B_wide + 1e-9)
 
+    # 綜合品質分（只在 D1 有值）
     f_n_structure_score = (
         (1 - f_n_bc_retracement.clip(0, 1)) * 0.3 + f_n_c_above_a.clip(0) * 0.3 + f_n_d_breakout_strength.clip(0) * 0.4
     ).where(d1_mask)
 
+    # D1 旗標
     f_n_d1_confirmed = d1_mask.astype(float)
 
+    # 突破段量 vs 回調段量
     vol_roll = volume_wide.rolling(max_cd_bars).mean()
     vol_roll_prev = vol_roll.shift(max_bc_bars)
     f_n_volume_on_breakout = (vol_roll / (vol_roll_prev + 1e-9)).where(state_wide.isin([CD, D1]))
 
+    # D1 確認後幾根
     def days_since_signal(bool_wide: pd.DataFrame) -> pd.DataFrame:
         arr = bool_wide.values.astype(float)
         out = np.full_like(arr, np.nan)
@@ -329,9 +318,10 @@ def detect_n_shape_features(
 
     f_n_days_since_d1 = days_since_signal(d1_mask)
 
+    # 當前所在階段
     f_n_state = state_wide.where(state_wide > IDLE)
 
-    # ── 有效結構 mask：非 IDLE 才輸出 ────────────────────────────────── #
+    # ── 有效結構 mask ─────────────────────────────────────────────────── #
     valid = state_wide > IDLE
 
     feature_wides_raw = {
@@ -354,7 +344,7 @@ def detect_n_shape_features(
     feature_longs = []
     for feat_name, feat_wide in feature_wides.items():
         feat_long = feat_wide.stack().reset_index()
-        feat_long.columns = ["date", "stock_id", feat_name]  # 強制命名，避免 KeyError
+        feat_long.columns = ["date", "stock_id", feat_name]
         feature_longs.append(feat_long.set_index(["date", "stock_id"]))
 
     features_df = pd.concat(feature_longs, axis=1).reset_index()
