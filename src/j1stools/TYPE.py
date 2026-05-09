@@ -5,6 +5,7 @@ class FEATURE_TYPE(Enum):
     normal = 1
     macd = 2
     today = 3
+    abcd = 4
 
 
 class MODEL_TYPE(Enum):
