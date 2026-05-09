@@ -94,18 +94,6 @@ class FilterData:
         df = df.set_index("date", drop=False).rename_axis("Date")
         return df
 
-    def find_pivots_n(df, n=5):
-        df = df.copy()
-
-        # center=True
-        df["pivot_high"] = df["high"] == df["high"].rolling(n, center=True).max()
-
-        df["pivot_low"] = df["low"] == df["low"].rolling(n, center=True).min()
-
-        df["pivot"] = np.where(df["pivot_high"], "H", np.where(df["pivot_low"], "L", None))
-
-        return df
-
     def filter_volume(df):
         df["vol20"] = df["volume"].rolling(20).mean()
         df = df[df["volume"] < (df["vol20"] * 0.5)]
@@ -183,21 +171,6 @@ class FilterData:
 
         return signals
 
-    def abcd(df: pd.DataFrame):
-
-        df = FilterData.find_pivots_n(df, n=7)  # ← 這裡調整天數
-        # signals = FilterData.detect_n_pattern(df)
-        date_list = FilterData.detect_n_pattern_fast(df, max_days=20)
-        # print(len(signals))
-        # for s in signals:
-        #     print(s)
-
-        if FilterData.IS_DELETE_DATA:
-            df = df[df["date"].isin(date_list)]
-        else:
-            df["f_is_abcd"] = np.where(df["date"].isin(date_list), 1, 0)
-        return df
-
     def test_abcd():
         pass
         # df = stock("2330")
@@ -205,60 +178,6 @@ class FilterData:
         # df: pd.DataFrame = FilterData.abcd(df)
         # print("df.shape[0]", df.shape[0], sep="\n")
         # print("df.shape[0]", df.tail(), sep="\n")
-
-    def detect_n_pattern_fast(df, min_rise=0.10, min_pullback=0.03, max_days=5):
-        # 1. 向量化取得 A, B 點資訊
-        pivots = df.dropna(subset=["pivot"]).copy()
-        pivots["A_low"] = pivots["low"].shift(2)
-        pivots["B_high"] = pivots["high"].shift(1)
-        pivots["A_pivot"] = pivots["pivot"].shift(2)
-        pivots["B_pivot"] = pivots["pivot"].shift(1)
-
-        # 2. 篩選符合條件的 C 點 (L-H-L)
-        mask = (
-            (pivots["A_pivot"] == "L")
-            & (pivots["B_pivot"] == "H")
-            & (pivots["pivot"] == "L")
-            & ((pivots["B_high"] - pivots["A_low"]) / pivots["A_low"] >= min_rise)
-            & ((pivots["low"] - pivots["A_low"]) / pivots["A_low"] >= min_pullback)
-        )
-        valid_c_points = pivots[mask]
-
-        signals = []
-
-        # 3. 遍歷符合條件的 C 點尋找突破
-        for c_idx_label, c_row in valid_c_points.iterrows():
-            c_pos = df.index.get_loc(c_idx_label)
-            b_high = c_row["B_high"]
-
-            # 搜尋範圍：從 C 的下一筆開始，長度為 max_days
-            # 但不能超過 df 總長度
-            search_end = min(c_pos + 1 + max_days, len(df))
-            future = df.iloc[c_pos + 1 : search_end]
-
-            if future.empty:
-                continue
-
-            # 檢查區間內是否出現新的 pivot (結構失效)
-            # 找出第一個 pivot 的「整數位置」
-            pivot_in_future = future["pivot"].dropna()
-            if not pivot_in_future.empty:
-                # 如果有新 pivot，只看新 pivot 之前的資料
-                first_pivot_label = pivot_in_future.index[0]
-                limit_pos = df.index.get_loc(first_pivot_label)
-                # 更新搜尋區間 (只到新 pivot 出現那一列為止)
-                future = df.iloc[c_pos + 1 : limit_pos + 1]
-
-            # 尋找第一次收盤價突破 B 高點
-            breakout = future[future["close"] > b_high]
-
-            if not breakout.empty:
-                # log = str(breakout.index[0]) + " " + str(c_row["date"])
-                # print(log)
-
-                signals.append(breakout.index[0])  # 取得突破當日的 Index
-        df.drop(columns=["pivot_high", "pivot_low", "pivot"], inplace=True)
-        return signals
 
     import pandas as pd
 
