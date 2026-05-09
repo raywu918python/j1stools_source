@@ -117,8 +117,13 @@ def detect_n_shape_features(df: pd.DataFrame) -> pd.DataFrame:
 
     f_n_days_since_d1 = days_since_signal(d1_confirmed)
 
+    # ── 有效結構 mask：C >= A，否則所有特徵設為 NaN ───────────────────── #
+    # C < A 代表回調已跌破起漲點，N 字結構不成立
+    # 讓 LGBM 的缺失值機制忽略這些無效樣本，避免學到錯誤規律
+    valid_structure = C >= A  # DataFrame[bool]
+
     # ── 整合回長表格 ──────────────────────────────────────────────────── #
-    feature_wides = {
+    feature_wides_raw = {
         "f_n_ab_gain": f_n_ab_gain,
         "f_n_bc_retracement": f_n_bc_retracement,
         "f_n_c_above_a": f_n_c_above_a,
@@ -130,6 +135,9 @@ def detect_n_shape_features(df: pd.DataFrame) -> pd.DataFrame:
         "f_n_volume_on_breakout": f_n_volume_on_breakout,
         "f_n_days_since_d1": f_n_days_since_d1,
     }
+
+    # C < A 的列全部遮成 NaN，讓 LGBM 視為缺失值
+    feature_wides = {name: feat.where(valid_structure) for name, feat in feature_wides_raw.items()}
 
     feature_longs = []
     for feat_name, feat_wide in feature_wides.items():
