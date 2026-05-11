@@ -1,13 +1,15 @@
 import pandas as pd
 
 
-def top_label(df: pd.DataFrame, hold_days=10, profit_target=0.10, stop_loss=-0.10) -> pd.DataFrame:
+def profit_label(df: pd.DataFrame, hold_days=10, profit_target=0.10, stop_loss=-0.10) -> pd.DataFrame:
     """
     三分類標籤方案：
     2: 成功（漲）- 達到 profit_target 且過程中未觸及 stop_loss
     1: 失敗（跌）- 觸及 stop_loss
     0: 盤整（不漲不跌）- 持有期滿，既未達標也未停損
     """
+    print("qqqqqqqqqqqqqqqq")
+    print(df.head().T)
     # 1. 進場基準價 (以今日收盤預期明日進場)
     df["entry_price"] = df["close"]
 
@@ -55,7 +57,7 @@ def top_label(df: pd.DataFrame, hold_days=10, profit_target=0.10, stop_loss=-0.1
 
 def power_label(
     df: pd.DataFrame,
-    hold_days: int = 1,
+    hold_days: int = 5,
 ) -> pd.DataFrame:
     """
     LGBM 排名用 label：未來 N 日報酬率在當天全市場的排名（0~1）。

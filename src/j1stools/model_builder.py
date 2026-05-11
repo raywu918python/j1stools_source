@@ -56,3 +56,9 @@ def gen_lgbm_c_model():
         n_jobs=-1,
     )
     return model
+
+
+def gen_lgbm_orgin_model():
+    import lightgbm as lgb
+
+    return lgb

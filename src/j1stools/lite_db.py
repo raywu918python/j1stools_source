@@ -12,6 +12,24 @@ def query():
 
 
 def margin(stocks, st, end):
+    """
+    日期	# date
+    股票代碼	# stock_id
+    融資買進	# margin_purchase_buy
+    融資現金償還	# margin_purchase_cash_repayment
+    融資限額	# margin_purchase_limit
+    融資賣出	# margin_purchase_sell
+    融資今日餘額	# margin_purchase_today_balance
+    融資昨日餘額	# margin_purchase_yesterday_balance
+    資券互抵	# offset_loan_and_short
+    融券買進	# short_sale_buy
+    融券償還	# short_sale_cash_repayment
+    融券限額	# short_sale_limit
+    融券賣出	# short_sale_sell
+    融券今日餘額	# short_sale_today_balance
+    融券昨日餘額	# short_sale_yesterday_balance
+    """
+
     data = (
         MyappStocksmargin.select()
         .where(
@@ -39,9 +57,19 @@ def group(stocks, st, end):
     group = group[["stock_id", "group"]]
     price = parquet_db.query_price(stocks, st, end)
     df = pd.merge(price, group, on=["stock_id"], how="left")
+    print(df.head().T)
     return df
 
 
-# query(["2330", "2308", "3105"], "2024-01-01", "2099-01-01")
+def margin_group(stocks, st, end):
+    df_margin = margin(stocks, st, end)
+    df_group = MyappStocksinfo().select().where(MyappStocksinfo.stock_id.in_(stocks)).dicts()
+    df_group = pd.DataFrame(df_group)
+    df = pd.merge(df_margin, df_group, on=["stock_id"], how="left")
+    print(df.head().T)
+    return df
+
+
+# margin_group(["2330", "2308", "3105"], "2024-01-01", "2099-01-01")
 
 # margin(["2330"], "2025-05-01", "2099-01-01")

@@ -69,7 +69,7 @@ def predict(stocks, st, end):
 def main():
     train = LgbmTrainConfig()
     train.is_use_rfc = False
-    train.model_type = MODEL_TYPE.lgbm_c
+    train.model_type = MODEL_TYPE.lgbm_r
     train.model = gen_lgbm_r_model()
     # train.rfc_proba = add_rfc_feature(df, data)
     # train.model = (joblib.load("models/rfc_macd.joblib"),)
@@ -82,15 +82,15 @@ def main():
     data = MACDDataBuilterConfig()
     # data.is_continuous = True
     # data.label_cfg = l
-    data.feature_type = FEATURE_TYPE.power
+    data.feature_type = FEATURE_TYPE.power | FEATURE_TYPE.today | FEATURE_TYPE.abcd | FEATURE_TYPE.normal
     # data.feature_type = FEATURE_TYPE.today
-    data.atrcfg = FILTER_TYPE.none_
+    data.atrcfg = FILTER_TYPE.add_
     data.train_config = train
-    data.st = "2024-01-01"
+    data.st = "2015-01-01"
     data.end = "2099-01-01"
     signal = start_train(cfg=data)
     #############################################################
-    top = signal[signal["predicted_rank"] >= 0.8]
+    top = signal[signal["predicted_rank"] >= 0.5]
     print(f"選出股票數：{len(top)}")
     print(f"平均未來報酬：{top['future_return'].mean():.2%}")
     print(f"勝率（>0）：{(top['future_return'] > 0).mean():.2%}")

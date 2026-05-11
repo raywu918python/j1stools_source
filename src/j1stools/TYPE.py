@@ -8,6 +8,7 @@ class FEATURE_TYPE(Flag):
     abcd = auto()
     margin = auto()
     power = auto()
+    test_lgbm_feature = auto()
 
 
 class MODEL_TYPE(Enum):

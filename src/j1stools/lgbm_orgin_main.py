@@ -16,6 +16,7 @@ from j1stools.CONFIG import (
 from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 
+from j1stools.model_builder import gen_lgbm_c_model, gen_lgbm_orgin_model
 from j1stools.train_flow import start_train
 import joblib
 
@@ -68,6 +69,7 @@ def predict(stocks, st, end):
 def main():
     train = LgbmTrainConfig()
     train.is_use_rfc = False
+    train.model = gen_lgbm_orgin_model()
     # train.rfc_proba = add_rfc_feature(df, data)
     # train.model = (joblib.load("models/rfc_macd.joblib"),)
     ##############################################################
@@ -92,7 +94,7 @@ def main():
     signal.to_csv("signal_today.csv", index=False)
 
 
-# main()
+main()
 # predict(
 #     stocks=random.sample(parquet_db.query_stocks_no_etf(), 500),
 #     st="2024-01-01",

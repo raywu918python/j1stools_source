@@ -7,7 +7,7 @@ from j1stools.j1s_split_date import lgbm_split_date, rfc_split_date
 from j1stools.model_utils import drop_na_inf
 from j1stools.TYPE import FEATURE_TYPE, MODEL_TYPE, TRAIN_TYPE
 from j1stools.obj_filter_data import FilterData
-from j1stools.label_builder import power_label, top_label
+from j1stools.label_builder import power_label, profit_label
 
 
 class DataBuilder:
@@ -26,7 +26,9 @@ class DataBuilder:
             is_gen_train_data = False
             is_gen_test_data = True
         #############################################################gen df
-        if FEATURE_TYPE.power in data.feature_type:
+        if FEATURE_TYPE.test_lgbm_feature in data.feature_type:
+            df = lite_db.margin_group(data.stocks, data.st, data.end)
+        elif FEATURE_TYPE.power in data.feature_type:
             df = lite_db.group(data.stocks, data.st, data.end)
         elif FEATURE_TYPE.margin in data.feature_type:
             df = lite_db.margin(data.stocks, data.st, data.end)
@@ -40,7 +42,7 @@ class DataBuilder:
         if self.cfg.train_config.model_type == MODEL_TYPE.lgbm_r:
             df = power_label(df)
         else:
-            df = top_label(df, data.label_cfg.hold_days, data.label_cfg.profit_target, data.label_cfg.stop_loss)
+            df = profit_label(df, data.label_cfg.hold_days, data.label_cfg.profit_target, data.label_cfg.stop_loss)
         #############################################################filter data
         print("delete.before:", df.shape)
         df = FilterData.get_data(

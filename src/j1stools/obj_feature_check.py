@@ -11,7 +11,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import pandas as pd
 
 from j1stools import feature_builder, parquet_db
-from j1stools.label_builder import top_label
+from j1stools.label_builder import profit_label
 from j1stools.train_flow import BaseTrainConfig
 
 
@@ -157,7 +157,7 @@ def check():
     df = feature_builder.gen_feature(df)
     import pandas as pd
 
-    df = top_label(df)
+    df = profit_label(df)
     df = FilterData.get_data(df, True, False)
     # parquet_db.create_features(df)
     # 資料在這裡刪

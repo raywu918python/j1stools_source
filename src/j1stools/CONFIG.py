@@ -6,7 +6,7 @@ from sympy import rf
 from j1stools import parquet_db
 from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, MODEL_TYPE
 from j1stools.TYPE import TRAIN_TYPE
-from j1stools.label_builder import top_label
+from j1stools.label_builder import profit_label
 from j1stools.model_builder import gen_lgbm_c_model, gen_lgbm_r_model, gen_rfc_model
 
 
