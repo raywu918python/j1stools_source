@@ -12,7 +12,7 @@ import pandas as pd
 
 from j1stools import feature_builder, parquet_db
 from j1stools.label_builder import top_label
-from j1stools.train_process import BaseTrainConfig
+from j1stools.train_flow import BaseTrainConfig
 
 
 from j1stools.obj_filter_data import FilterData

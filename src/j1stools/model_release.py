@@ -2,13 +2,13 @@ from j1stools import parquet_db
 from j1stools.TYPE import TRAIN_TYPE
 
 
-def create_model(step=1):
+def create_release(step=1):
     """
     訓練模型並儲存
     "2015-01-01", "2020-12-31"
     """
     if step == 1:
-        import j1stools.train_process as rfc
+        import j1stools.train_flow as rfc
 
         rfc.exec(
             parquet_db.query_stocks_ids_list(),
