@@ -7,12 +7,12 @@ from j1stools import parquet_db
 from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, MODEL_TYPE
 from j1stools.TYPE import TRAIN_TYPE
 from j1stools.label_builder import top_label
-from j1stools.model_builder import gen_lgbm_r_model, gen_rfc_model
+from j1stools.model_builder import gen_lgbm_c_model, gen_lgbm_r_model, gen_rfc_model
 
 
 import random
 
-from j1stools.train_function_builder import lgbm_function_train, lgbm_r_function_train, rfc_train_function
+from j1stools.train_function import lgbm_function_train, lgbm_r_function_train, rfc_train_function
 
 
 class BaseDataBuilderConfig:
@@ -120,9 +120,9 @@ class RfcTrainConfig(BaseTrainConfig):
 class LgbmTrainConfig(BaseTrainConfig):
     def __init__(self):
         super().__init__()
-        self.model_type = MODEL_TYPE.lgbm_r
+        self.model_type = MODEL_TYPE.lgbm_c
         self.model_run_type = TRAIN_TYPE.train
         self.is_print_import_ft = True
-        self.model = gen_lgbm_r_model()
+        self.model = gen_lgbm_c_model()
         self.function_train = lgbm_r_function_train
         self.is_use_rfc = False

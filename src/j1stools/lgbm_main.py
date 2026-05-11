@@ -16,7 +16,7 @@ from j1stools.CONFIG import (
 from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 
-from j1stools.train_process import main_train
+from j1stools.train_flow import start_train
 import joblib
 
 
@@ -85,7 +85,7 @@ def main():
     data.train_config = train
     data.st = "2024-01-01"
     data.end = "2099-01-01"
-    signal = main_train(cfg=data)
+    signal = start_train(cfg=data)
     #############################################################
     signal = signal[signal["y_proba"] > 0.5]
     signal.sort_values(by=["date", "y_proba"], inplace=True)

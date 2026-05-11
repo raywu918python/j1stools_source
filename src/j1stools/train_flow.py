@@ -114,13 +114,17 @@ def batter_predict(train_cfg: BaseTrainConfig, xtest, ytest):
     return yproba
 
 
-def train_model(data: DataBuilderResult, train_cfg: BaseTrainConfig):
+def flow(data: DataBuilderResult, train_cfg: BaseTrainConfig):
     keep_latest_ten_files("./model")
 
-    data.xtest = data.xtest[[col for col in data.xtest.columns if col.startswith("f_")]]
-    data.xtrain = data.xtrain[[col for col in data.xtrain.columns if col.startswith("f_")]]
-    if data.xval is not None:
-        data.xval = data.xval[[col for col in data.xval.columns if col.startswith("f_")]]
+    data.xtest = (
+        data.xtest[[col for col in data.xtest.columns if col.startswith("f_")]] if data.xtest is not None else None
+    )
+    data.xtrain = (
+        data.xtrain[[col for col in data.xtrain.columns if col.startswith("f_")]] if data.xtrain is not None else None
+    )
+    data.xval = data.xval[[col for col in data.xval.columns if col.startswith("f_")]] if data.xval is not None else None
+
     print(f"*" * 30, f"第 {train_cfg.n} 次訓練")
     st = time()
     # train
@@ -233,23 +237,23 @@ def keep_latest_ten_files(directory_path: str):
             print(f"已刪除舊檔案: {file.name}")
 
 
-def main_train(cfg: BaseDataBuilderConfig):
+def start_train(cfg: BaseDataBuilderConfig):
     print(f"*" * 60, f"{cfg.train_config.model_type.value} start")
 
-    databuilder = DataBuilder(cfg).build()
+    data = DataBuilder(cfg).build()
     train = cfg.train_config
     for i in range(1):
         train.n = i
-        data: TrainResult = train_model(databuilder, train)
-        result = data.result
-        y_proba = data.yproba
+        result: TrainResult = flow(data, train)
+        top = result.top
+        y_proba = result.yproba
         if train.train_type == TRAIN_TYPE.create_model:
             return
 
     if train.model_type == MODEL_TYPE.lgbm_r:
-        return result
+        return top
     else:
-        signal = gen_gold_signal(databuilder.xtest, y_proba).iloc[:, [0, 1, 4]]
+        signal = gen_gold_signal(data.xtest, y_proba).iloc[:, [0, 1, 4]]
         signal.rename(columns={2: "y_proba"}, inplace=True)
         signal["date"] = pd.to_datetime(signal["date"])
 

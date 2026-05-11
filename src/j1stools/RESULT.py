@@ -10,6 +10,6 @@ class DataBuilderResult:
 
 
 class TrainResult:
-    def __init__(self, result, yproba):
-        self.result = result
+    def __init__(self, top, yproba):
+        self.top = top
         self.yproba = yproba

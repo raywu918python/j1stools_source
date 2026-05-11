@@ -16,7 +16,8 @@ from j1stools.CONFIG import (
 from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 
-from j1stools.train_process import main_train
+from j1stools.model_builder import gen_lgbm_r_model
+from j1stools.train_flow import start_train
 import joblib
 
 
@@ -68,6 +69,8 @@ def predict(stocks, st, end):
 def main():
     train = LgbmTrainConfig()
     train.is_use_rfc = False
+    train.model_type = MODEL_TYPE.lgbm_c
+    train.model = gen_lgbm_r_model()
     # train.rfc_proba = add_rfc_feature(df, data)
     # train.model = (joblib.load("models/rfc_macd.joblib"),)
     ##############################################################
@@ -85,7 +88,7 @@ def main():
     data.train_config = train
     data.st = "2024-01-01"
     data.end = "2099-01-01"
-    signal = main_train(cfg=data)
+    signal = start_train(cfg=data)
     #############################################################
     top = signal[signal["predicted_rank"] >= 0.8]
     print(f"選出股票數：{len(top)}")
