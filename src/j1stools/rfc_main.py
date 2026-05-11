@@ -14,16 +14,16 @@ from sympy import rf
 from websockets import Data
 
 from j1stools.CONFIG import (
-    FILTER_CONFIG,
     MACDDataBuilterConfig,
     NormalDataBuilderConfig,
     RfcTrainConfig,
     TodayDataBuilterConfig,
 )
-from j1stools.TYPE import FEATURE_TYPE, TRAIN_TYPE
-from j1stools.model_training_process import run_train_process
+from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, MODEL_TYPE, TRAIN_TYPE
 import j1stools.parquet_db as parquet_db
 import joblib
+
+from j1stools.train_process import main_train
 
 
 def predict_today():
@@ -31,7 +31,7 @@ def predict_today():
     # stocks = parquet_db.query_stocks_ids_list()
     # today = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
     # model = joblib.load("models/rfct0.joblib")
-    signal = run_train_process(
+    signal = exec(
         stocks,
         today,
         "2099-01-01",
@@ -61,7 +61,7 @@ def predict(
     data.st = st
     data.end = end
     data.pick_import_feature = pick_import_feature
-    return run_train_process(cfg=data)
+    return train(cfg=data)
 
 
 #
@@ -82,6 +82,7 @@ def predict(
 
 def main():
     train = RfcTrainConfig()
+    train.model_type = MODEL_TYPE.rfc
     # train.model = (joblib.load("models/rfc_macd.joblib"),)
     #############################################################
     data = MACDDataBuilterConfig()
@@ -91,7 +92,7 @@ def main():
     data.train_config = train
     data.st = "2024-01-01"
     data.end = "2099-01-01"
-    signal = run_train_process(cfg=data)
+    signal = main_train(cfg=data)
     #############################################################
     signal = signal[signal["y_proba"] > 0.5]
     signal.sort_values(by=["date", "y_proba"], inplace=True)
@@ -100,7 +101,7 @@ def main():
 
 def optimize():
     model = joblib.load("model/rfc20260504_233715_0.joblib")
-    run_train_process(
+    exec(
         stocks=parquet_db.query_stocks_no_etf(),
         st="2024-01-01",
         end="2099-01-01",
@@ -111,6 +112,6 @@ def optimize():
 
 
 # predict_today()
-# main()
+main()
 # predict()
 # optimize()

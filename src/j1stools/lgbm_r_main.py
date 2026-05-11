@@ -87,9 +87,12 @@ def main():
     data.end = "2099-01-01"
     signal = main_train(cfg=data)
     #############################################################
-    signal = signal[signal["y_proba"] > 0.5]
-    signal.sort_values(by=["date", "y_proba"], inplace=True)
-    signal.to_csv("signal_today.csv", index=False)
+    top = signal[signal["predicted_rank"] >= 0.8]
+    print(f"選出股票數：{len(top)}")
+    print(f"平均未來報酬：{top['future_return'].mean():.2%}")
+    print(f"勝率（>0）：{(top['future_return'] > 0).mean():.2%}")
+    # 看結果
+    print(top.reset_index()[["date", "stock_id", "predicted_rank"]])
 
 
 # main()

@@ -12,8 +12,8 @@ from pathlib import Path
 import joblib
 
 from j1stools.CONFIG import BaseDataBuilderConfig, BaseTrainConfig
-from j1stools.RESULT import DataBuilderResult
-from j1stools.TYPE import TRAIN_TYPE
+from j1stools.RESULT import DataBuilderResult, TrainResult
+from j1stools.TYPE import MODEL_TYPE, TRAIN_TYPE
 from j1stools.data_builder import DataBuilder
 
 
@@ -116,6 +116,11 @@ def batter_predict(train_cfg: BaseTrainConfig, xtest, ytest):
 
 def train_model(data: DataBuilderResult, train_cfg: BaseTrainConfig):
     keep_latest_ten_files("./model")
+
+    data.xtest = data.xtest[[col for col in data.xtest.columns if col.startswith("f_")]]
+    data.xtrain = data.xtrain[[col for col in data.xtrain.columns if col.startswith("f_")]]
+    if data.xval is not None:
+        data.xval = data.xval[[col for col in data.xval.columns if col.startswith("f_")]]
     print(f"*" * 30, f"第 {train_cfg.n} 次訓練")
     st = time()
     # train
@@ -130,10 +135,29 @@ def train_model(data: DataBuilderResult, train_cfg: BaseTrainConfig):
         expected_features = train_cfg.model.feature_names_in_
         data.xtest = data.xtest[expected_features]
         if train_cfg.train_type == TRAIN_TYPE.train:
-            base_predict(train_cfg.model, data.xtest, data.ytest)
-        accuracy = batter_predict(train_cfg, data.xtest, data.ytest)
+            if train_cfg.model_type == MODEL_TYPE.lgbm_r:
+                y_pred = model.predict(data.xtest)  # 輸出 0~1 的排名預測值
+
+                print(data.xtrain.isna().mean().sort_values(ascending=False))
+
+                corr = data.xtrain.corrwith(data.ytrain)
+                print(corr.sort_values())
+
+                print(data.ytrain.describe())
+
+                print(pd.Series(y_pred).describe())
+                print(f">=0.8 的數量：{(y_pred >= 0.8).sum()}")
+
+                result = data.xtest.copy()
+                result["predicted_rank"] = y_pred
+                result["future_return"] = data.xtest_future_return
+
+                return TrainResult(result, None)
+            else:
+                base_predict(train_cfg.model, data.xtest, data.ytest)
+                accuracy = batter_predict(train_cfg, data.xtest, data.ytest)
         print(f"回測時間: {time()-st:.2f} 秒")
-        return accuracy
+        return TrainResult(None, accuracy)
 
 
 def print_target_counts(ytest):
@@ -209,20 +233,24 @@ def keep_latest_ten_files(directory_path: str):
             print(f"已刪除舊檔案: {file.name}")
 
 
-def run_train_process(cfg: BaseDataBuilderConfig):
+def main_train(cfg: BaseDataBuilderConfig):
     print(f"*" * 60, f"{cfg.train_config.model_type.value} start")
 
-    data = DataBuilder(cfg).build()
+    databuilder = DataBuilder(cfg).build()
     train = cfg.train_config
-    acc_list = []
     for i in range(1):
         train.n = i
-        y_proba = train_model(data, train)
+        data: TrainResult = train_model(databuilder, train)
+        result = data.result
+        y_proba = data.yproba
         if train.train_type == TRAIN_TYPE.create_model:
             return
-        acc_list.append(y_proba[:, 2])
-    # print(f"平均:", np.average(acc_list))
-    signal = gen_gold_signal(data.xtest, y_proba).iloc[:, [0, 1, 4]]
-    signal.rename(columns={2: "y_proba"}, inplace=True)
-    signal["date"] = pd.to_datetime(signal["date"])
-    return signal
+
+    if train.model_type == MODEL_TYPE.lgbm_r:
+        return result
+    else:
+        signal = gen_gold_signal(databuilder.xtest, y_proba).iloc[:, [0, 1, 4]]
+        signal.rename(columns={2: "y_proba"}, inplace=True)
+        signal["date"] = pd.to_datetime(signal["date"])
+
+        return signal

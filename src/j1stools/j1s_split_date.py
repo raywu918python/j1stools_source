@@ -8,7 +8,8 @@ from j1stools.CONFIG import BaseDataBuilderConfig
 def rfc_split_date(df: pd.DataFrame, is_gen_train=True, is_gen_test=True, cfg: BaseDataBuilderConfig = None):
     # group
     df = df.sort_values(by=cfg.index_cols)
-    x = df[[col for col in df.columns if col.startswith("f_")]]
+    # x = df[[col for col in df.columns if col.startswith("f_")]]
+    x = df
     y = df["target"]
     if is_gen_test and is_gen_train:
         xtrain, xtest, ytrain, ytest = train_test_split(x, y, train_size=cfg.trainging_idx, shuffle=False)
@@ -30,7 +31,8 @@ def lgbm_split_date(
     # group
     df.sort_values(by=cfg.index_cols, inplace=True)
 
-    x = df[[col for col in df.columns if col.startswith("f_")]]
+    # x = df[[col for col in df.columns if col.startswith("f_")]]
+    x = df
     y = df["target"]
     if is_gen_train_data and is_gen_test_data:
         xremain, xtest, yremain, ytest = train_test_split(x, y, test_size=0.15, shuffle=False)

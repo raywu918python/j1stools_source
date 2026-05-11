@@ -20,15 +20,34 @@ def rfc_train_function(d: DataBuilderResult, model):
 
 def lgbm_function_train(d: DataBuilderResult, model):
     # sample_weights = ytrain.map({0: 1, 1: 1, 2: 3})
-    sample_weight = np.where(d.ytrain == 2, 3.0, np.where(d.ytrain == 1, 2.0, 1.0))
+    # sample_weight = np.where(d.ytrain == 2, 3.0, np.where(d.ytrain == 1, 2.0, 1.0))
+
     model.fit(
         d.xtrain,
         d.ytrain,
-        sample_weight=sample_weight,
+        # sample_weight=sample_weight,
         eval_set=[(d.xval, d.yval)],
         eval_metric="multi_logloss",
         callbacks=[
             # 如果 50 輪內沒進步就停止
+            lgb.early_stopping(stopping_rounds=50),
+            lgb.log_evaluation(period=100),
+        ],
+    )
+
+
+def lgbm_r_function_train(d: DataBuilderResult, model):
+
+    print(d.xtrain.dtypes)
+    print(d.ytrain.dtypes)
+
+    # print(d.xtrain.index)
+    model.fit(
+        d.xtrain,
+        d.ytrain,
+        eval_set=[(d.xval, d.yval)],
+        eval_metric="rmse",  # 改這裡
+        callbacks=[
             lgb.early_stopping(stopping_rounds=50),
             lgb.log_evaluation(period=100),
         ],

@@ -3,7 +3,7 @@ from time import time
 
 import pandas as pd
 
-from j1stools import abcd_feature, margin_feature
+from j1stools import abcd_feature, margin_feature, parquet_db, power_feature
 from j1stools.CONFIG import BaseDataBuilderConfig
 from j1stools.TYPE import FEATURE_TYPE
 from j1stools.lite_db import margin
@@ -38,7 +38,6 @@ def gen_feature(df, cfg: BaseDataBuilderConfig) -> pd.DataFrame:
         df = abcd_feature.detect_n_shape_features(df, seg=9)
     if FEATURE_TYPE.margin in cfg.feature_type:
         # df = abcd_feature.detect_trend_features(df)
-
         df = margin_feature.detect_short_squeeze_features(df)
 
         feature_cols = [
@@ -72,6 +71,9 @@ def gen_feature(df, cfg: BaseDataBuilderConfig) -> pd.DataFrame:
             "f_n_confirmed",
         ]
 
+    if FEATURE_TYPE.power in cfg.feature_type:
+        markget_df = parquet_db.query_price(["0050"], cfg.st, cfg.end)
+        df = power_feature.detect_relative_strength_features(df, markget_df)
         # df = df[feature_cols]
     if FEATURE_TYPE.normal in cfg.feature_type:
         df = HvFeature.add_feature(df)

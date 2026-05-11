@@ -8,9 +8,9 @@ def create_model(step=1):
     "2015-01-01", "2020-12-31"
     """
     if step == 1:
-        import j1stools.model_training_process as rfc
+        import j1stools.train_process as rfc
 
-        rfc.run_train_process(
+        rfc.exec(
             parquet_db.query_stocks_ids_list(),
             st="2015-01-01",
             end="2021-01-01",

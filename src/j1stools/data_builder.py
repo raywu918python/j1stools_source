@@ -7,7 +7,7 @@ from j1stools.j1s_split_date import lgbm_split_date, rfc_split_date
 from j1stools.model_utils import drop_na_inf
 from j1stools.TYPE import FEATURE_TYPE, MODEL_TYPE, TRAIN_TYPE
 from j1stools.obj_filter_data import FilterData
-from j1stools.obj_label import Label
+from j1stools.label_builder import power_label, top_label
 
 
 class DataBuilder:
@@ -25,42 +25,54 @@ class DataBuilder:
         elif data.model_run_type == TRAIN_TYPE.predict:
             is_gen_train_data = False
             is_gen_test_data = True
-
-        if FEATURE_TYPE.margin in data.feature_type:
+        #############################################################gen df
+        if FEATURE_TYPE.power in data.feature_type:
+            df = lite_db.group(data.stocks, data.st, data.end)
+        elif FEATURE_TYPE.margin in data.feature_type:
             df = lite_db.margin(data.stocks, data.st, data.end)
         else:
             df = parquet_db.query_price(data.stocks, data.st, data.end)
-        print("delete.before:", df.shape)
+        #############################################################gen feature
         df = feature_builder.gen_feature(df, data)
-        if data.train_config.model_type == MODEL_TYPE.lgbm and data.train_config.is_use_rfc:
+        if data.train_config.model_type == MODEL_TYPE.lgbm_c and data.train_config.is_use_rfc:
             df = feature_builder.add_rfc_feature(df, data)
-
-        if FEATURE_TYPE.abcd in data.feature_type:
-            print("#################################################################")
-            print(df.shape)
-            mask = df["f_n_confirmed"] == 1
-            df = df[mask]
-            df.drop(columns=["f_n_confirmed"], inplace=True)
-            print(df.shape)
-
-        df = Label.add_label(df, data.label_cfg.hold_days, data.label_cfg.profit_target, data.label_cfg.stop_loss)
+        #############################################################gel label
+        if self.cfg.train_config.model_type == MODEL_TYPE.lgbm_r:
+            df = power_label(df)
+        else:
+            df = top_label(df, data.label_cfg.hold_days, data.label_cfg.profit_target, data.label_cfg.stop_loss)
+        #############################################################filter data
+        print("delete.before:", df.shape)
         df = FilterData.get_data(
             df,
             log=True,
             ichcfg=data.ichcfg,
             atrcfg=data.atrcfg,
         )
-        # parquet_db.create_features(df)
+        if FEATURE_TYPE.abcd in data.feature_type:
+            mask = df["f_n_confirmed"] == 1
+            df = df[mask]
+            df.drop(columns=["f_n_confirmed"], inplace=True)
+        print("delete.after:", df.shape)
         # 資料在這裡刪
         df.set_index(data.index_cols, inplace=True)
-
+        #############################################################split_date data
         if data.train_config.model_type == MODEL_TYPE.rfc:
             xtrain, xtest, ytrain, ytest = rfc_prepare_data(df, is_gen_train_data, is_gen_test_data, data)
             return DataBuilderResult(xtrain, xtest, ytrain, ytest)
-        elif data.train_config.model_type == MODEL_TYPE.lgbm:
+        elif data.train_config.model_type == MODEL_TYPE.lgbm_c or data.train_config.model_type == MODEL_TYPE.lgbm_r:
+            xtest_future_return = df["future_return"]  # 實際報酬率
             xtrain, xval, xtest, ytrain, yval, ytest = lgbm_prepare_data(df, is_gen_train_data, is_gen_test_data, data)
 
-            return DataBuilderResult(xtrain, xtest, ytrain, ytest, xval=xval, yval=yval)
+            return DataBuilderResult(
+                xtrain,
+                xtest,
+                ytrain,
+                ytest,
+                xval=xval,
+                yval=yval,
+                xtest_future_return=xtest_future_return,
+            )
         else:
             raise Exception("未知的模型類型")
 

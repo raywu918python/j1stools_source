@@ -1,24 +1,18 @@
 from datetime import datetime
-from enum import Enum
 
-from regex import F
+from sympy import rf
+
 
 from j1stools import parquet_db
-from j1stools.TYPE import FEATURE_TYPE, MODEL_TYPE
+from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, MODEL_TYPE
 from j1stools.TYPE import TRAIN_TYPE
-from j1stools.model_builder import gen_rfc_model, gen_lgbm_model
+from j1stools.label_builder import top_label
+from j1stools.model_builder import gen_lgbm_r_model, gen_rfc_model
 
 
 import random
 
-from j1stools.train_function_builder import lgbm_function_train, rfc_train_function
-
-
-class FILTER_CONFIG(Enum):
-    add_ = 1
-    del_ = 2
-    add_and_del = 3
-    none_ = 4
+from j1stools.train_function_builder import lgbm_function_train, lgbm_r_function_train, rfc_train_function
 
 
 class BaseDataBuilderConfig:
@@ -29,8 +23,8 @@ class BaseDataBuilderConfig:
         self.end = "2099-01-01"
         self.trainging_idx = 0.8
         self.pick_import_feature = True
-        self.ichcfg = FILTER_CONFIG.none_
-        self.atrcfg = FILTER_CONFIG.add_
+        self.ichcfg = FILTER_TYPE.none_
+        self.atrcfg = FILTER_TYPE.add_
         self.pick_import_feature = True
         self.is_using_rfc = False
         self.index_cols = ["date", "stock_id"]
@@ -61,8 +55,8 @@ class NormalDataBuilderConfig(BaseDataBuilderConfig):
         self.end = "2099-01-01"
         self.trainging_idx = 0.8
         self.pick_import_feature = True
-        self.ichcfg = FILTER_CONFIG.none_
-        self.atrcfg = FILTER_CONFIG.add_
+        self.ichcfg = FILTER_TYPE.none_
+        self.atrcfg = FILTER_TYPE.add_
         self.pick_import_feature = True
         self.is_using_rfc = False
         self.index_cols = ["date", "stock_id"]
@@ -77,8 +71,8 @@ class MACDDataBuilterConfig(BaseDataBuilderConfig):
         self.st = "2015-01-01"
         self.end = "2018-01-01"
         self.trainging_idx = 0.8
-        self.ichcfg = FILTER_CONFIG.none_
-        self.atrcfg = FILTER_CONFIG.add_
+        self.ichcfg = FILTER_TYPE.none_
+        self.atrcfg = FILTER_TYPE.add_
         self.pick_import_feature = False
         self.feature_type: FEATURE_TYPE = FEATURE_TYPE.macd
         self.is_continuous = False
@@ -92,8 +86,8 @@ class TodayDataBuilterConfig(BaseDataBuilderConfig):
         self.st = "2015-01-01"
         self.end = "2018-01-01"
         self.trainging_idx = 0.8
-        self.ichcfg = FILTER_CONFIG.none_
-        self.atrcfg = FILTER_CONFIG.add_
+        self.ichcfg = FILTER_TYPE.none_
+        self.atrcfg = FILTER_TYPE.add_
         self.model_run_type = TRAIN_TYPE.train
         self.pick_import_feature = False
         self.feature_type: FEATURE_TYPE = FEATURE_TYPE.today
@@ -119,16 +113,16 @@ class RfcTrainConfig(BaseTrainConfig):
         self.model_type = MODEL_TYPE.rfc
         self.model_run_type = TRAIN_TYPE.train
         self.is_print_import_ft = True
-        self.model = gen_rfc_model()
         self.function_train = rfc_train_function
+        self.model = gen_rfc_model()
 
 
 class LgbmTrainConfig(BaseTrainConfig):
     def __init__(self):
         super().__init__()
-        self.model_type = MODEL_TYPE.lgbm
+        self.model_type = MODEL_TYPE.lgbm_r
         self.model_run_type = TRAIN_TYPE.train
         self.is_print_import_ft = True
-        self.model = gen_lgbm_model()
-        self.function_train = lgbm_function_train
+        self.model = gen_lgbm_r_model()
+        self.function_train = lgbm_r_function_train
         self.is_use_rfc = False

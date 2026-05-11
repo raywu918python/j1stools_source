@@ -24,7 +24,25 @@ def gen_rfc_model():
     )
 
 
-def gen_lgbm_model():
+def gen_lgbm_r_model():
+    from lightgbm import LGBMRegressor  # 不是 LGBMClassifier
+
+    return LGBMRegressor(
+        n_estimators=1000,
+        learning_rate=0.05,
+        num_leaves=31,
+        max_depth=-1,
+        min_child_samples=20,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+        n_jobs=-1,
+        objective="regression",  # 明確指定回歸
+        metric="rmse",  # 回歸用 rmse
+    )
+
+
+def gen_lgbm_c_model():
     model = LGBMClassifier(
         class_weight="balanced",
         n_estimators=1000,

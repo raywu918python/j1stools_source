@@ -11,11 +11,11 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import pandas as pd
 
 from j1stools import feature_builder, parquet_db
-from j1stools.model_training_process import BaseTrainConfig
+from j1stools.label_builder import top_label
+from j1stools.train_process import BaseTrainConfig
 
 
 from j1stools.obj_filter_data import FilterData
-from j1stools.obj_label import Label
 from j1stools import rfc_main as rfc
 
 
@@ -157,7 +157,7 @@ def check():
     df = feature_builder.gen_feature(df)
     import pandas as pd
 
-    df = Label.add_label(df)
+    df = top_label(df)
     df = FilterData.get_data(df, True, False)
     # parquet_db.create_features(df)
     # 資料在這裡刪

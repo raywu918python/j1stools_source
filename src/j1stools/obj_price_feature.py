@@ -4,7 +4,6 @@ from pandas import DataFrame
 import pandas
 
 from j1stools.feature_utils import add_lag
-from j1stools.obj_label import Label
 
 
 class PriceFeature:
