@@ -1,6 +1,8 @@
 from datetime import datetime
 from enum import Enum
 
+from regex import F
+
 from j1stools import parquet_db
 from j1stools.TYPE import FEATURE_TYPE, MODEL_TYPE
 from j1stools.TYPE import TRAIN_TYPE
@@ -111,7 +113,7 @@ class BaseTrainConfig:
         self.model = None
 
 
-class RFCTrainConfig(BaseTrainConfig):
+class RfcTrainConfig(BaseTrainConfig):
     def __init__(self):
         super().__init__()
         self.model_type = MODEL_TYPE.rfc

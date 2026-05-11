@@ -14,12 +14,13 @@ from sympy import rf
 from websockets import Data
 
 from j1stools.CONFIG import (
+    FILTER_CONFIG,
     MACDDataBuilterConfig,
     NormalDataBuilderConfig,
-    RFCTrainConfig,
+    RfcTrainConfig,
     TodayDataBuilterConfig,
 )
-from j1stools.TYPE import TRAIN_TYPE
+from j1stools.TYPE import FEATURE_TYPE, TRAIN_TYPE
 from j1stools.model_training_process import run_train_process
 import j1stools.parquet_db as parquet_db
 import joblib
@@ -51,7 +52,7 @@ def predict(
     pick_import_feature=True,
 ):
 
-    train = RFCTrainConfig()
+    train = RfcTrainConfig()
     train.model = joblib.load("models/rfc_macd.joblib")
     #############################################################
     data = MACDDataBuilterConfig()
@@ -80,10 +81,13 @@ def predict(
 
 
 def main():
-    train = RFCTrainConfig()
+    train = RfcTrainConfig()
     # train.model = (joblib.load("models/rfc_macd.joblib"),)
     #############################################################
     data = MACDDataBuilterConfig()
+    data.feature_type = FEATURE_TYPE.macd
+    # data.atrcfg = FILTER_CONFIG.none_
+    # data.feature_type = FEATURE_TYPE.abcd
     data.train_config = train
     data.st = "2024-01-01"
     data.end = "2099-01-01"

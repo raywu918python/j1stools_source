@@ -97,21 +97,21 @@ def detect_short_squeeze_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def filter_short_squeeze(
     df: pd.DataFrame,
-    min_cover_days: float = 3.0,  # 回補天數下限
-    min_short_growth: float = 0.1,  # 融券增加比例下限（10%）
-    min_short_ratio: float = 0.05,  # 券資比下限（5%）
+    cover_days_pct: float = 0.90,  # 回補天數百分位數門檻（前10%）
+    short_ratio_pct: float = 0.90,  # 券資比百分位數門檻（前10%）
+    min_short_growth: float = 0.05,  # 融券增加比例下限（5%）
     price_must_up: bool = True,  # 當日價格是否必須不跌
 ) -> pd.DataFrame:
     """
-    規則篩選軋空候選股。
+    規則篩選軋空候選股（使用百分位數門檻，自動適應市場環境）。
 
     Parameters
     ----------
     df : pd.DataFrame
         需已執行 detect_short_squeeze_features，包含 f_sq_ 特徵
-    min_cover_days : 融券回補天數下限
-    min_short_growth : 融券增加比例下限
-    min_short_ratio : 券資比下限
+    cover_days_pct : 回補天數的百分位數門檻（預設 0.90 = 前10%）
+    short_ratio_pct : 券資比的百分位數門檻（預設 0.90 = 前10%）
+    min_short_growth : 融券增加比例下限（固定值，預設 5%）
     price_must_up : 是否要求當日價格不跌
 
     Returns
@@ -119,12 +119,18 @@ def filter_short_squeeze(
     pd.DataFrame
         符合條件的候選股
     """
+    threshold_cover = df["f_sq_cover_days"].quantile(cover_days_pct)
+    threshold_ratio = df["f_sq_short_ratio"].quantile(short_ratio_pct)
+
+    print(f"cover_days 門檻（{cover_days_pct:.0%}）：{threshold_cover:.3f}")
+    print(f"short_ratio 門檻（{short_ratio_pct:.0%}）：{threshold_ratio:.3f}")
+
     price_chg = df.groupby("stock_id")["close"].pct_change(1)
 
     mask = (
-        (df["f_sq_cover_days"] >= min_cover_days)
+        (df["f_sq_cover_days"] >= threshold_cover)
+        & (df["f_sq_short_ratio"] >= threshold_ratio)
         & (df["f_sq_short_growth"] >= min_short_growth)
-        & (df["f_sq_short_ratio"] >= min_short_ratio)
     )
 
     if price_must_up:
@@ -195,17 +201,12 @@ def print_squeeze_report(signals: pd.DataFrame, hold_days_list: list = [3, 5, 10
 
 def test():
     stocks = parquet_db.query_stocks_ids_list()
-    df = lite_db.margin(stocks, "2021-05-01", "2024-01-01")
+    df = lite_db.margin(stocks, "2021-05-01", "2099-01-01")
     # 1. 計算特徵
     df = detect_short_squeeze_features(df)
 
     # 2. 規則篩選
-    signals = filter_short_squeeze(
-        df,
-        min_cover_days=3.0,
-        min_short_growth=0.1,
-        min_short_ratio=0.05,
-    )
+    signals = filter_short_squeeze(df)
 
     # 3. 加上未來報酬
     signals = evaluate_squeeze_signals(
@@ -224,5 +225,18 @@ def test():
     print("short_ratio >= 0.05:", (df["f_sq_short_ratio"] >= 0.05).sum())
     print("price_up:", (df.groupby("stock_id")["close"].pct_change(1) > 0).sum())
 
+    signals["score_group"] = pd.qcut(signals["f_sq_squeeze_score"], q=3, labels=["低", "中", "高"])
 
-test()
+    for g in ["低", "中", "高"]:
+        ret = signals[signals["score_group"] == g]["return_5d"]
+        print(f"{g}分組：勝率={( ret>0).mean():.2%}, 中位數={ret.median():.2%}, 筆數={len(ret)}")
+
+    print(signals[["date", "stock_id", "return_5d"]].head(10))
+    print(signals["return_5d"].isna().sum())  # 有多少 NaN
+
+    for g in ["低", "中", "高"]:
+        ret = signals[signals["score_group"] == g]["return_5d"].dropna()  # 加 dropna
+        print(f"{g}分組：勝率={(ret>0).mean():.2%}, 中位數={ret.median():.2%}, 筆數={len(ret)}")
+
+
+# test()

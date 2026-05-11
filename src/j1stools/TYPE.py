@@ -1,11 +1,12 @@
-from enum import Enum
+from enum import Enum, Flag, auto
 
 
-class FEATURE_TYPE(Enum):
-    normal = 1
-    macd = 2
-    today = 3
-    abcd = 4
+class FEATURE_TYPE(Flag):
+    normal = auto()
+    macd = auto()
+    today = auto()
+    abcd = auto()
+    margin = auto()
 
 
 class MODEL_TYPE(Enum):

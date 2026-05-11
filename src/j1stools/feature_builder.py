@@ -3,8 +3,10 @@ from time import time
 
 import pandas as pd
 
+from j1stools import abcd_feature, margin_feature
 from j1stools.CONFIG import BaseDataBuilderConfig
 from j1stools.TYPE import FEATURE_TYPE
+from j1stools.lite_db import margin
 from j1stools.macdh_divergences import f_macd_continuous_features, f_macd_hist_divergences_with_atr
 from j1stools.obj_hv_feature import HvFeature
 from j1stools.obj_ma_feature import MaFeature
@@ -22,15 +24,56 @@ def gen_feature(df, cfg: BaseDataBuilderConfig) -> pd.DataFrame:
     #
     # df = AtrFeature.add_feature(df)
     #############################################################
-    if cfg.feature_type == FEATURE_TYPE.today:
+    if FEATURE_TYPE.today in cfg.feature_type:
         # return generate_features_t1(df)
-        return generate_features_today(df)
-    elif cfg.feature_type == FEATURE_TYPE.macd:
+        df = generate_features_today(df)
+    if FEATURE_TYPE.macd in cfg.feature_type:
         if cfg.is_continuous:
-            return f_macd_continuous_features(df)
+            df = f_macd_continuous_features(df)
         else:
-            return f_macd_hist_divergences_with_atr(df)
-    else:
+            df = f_macd_hist_divergences_with_atr(df)
+    if FEATURE_TYPE.abcd in cfg.feature_type:
+        # df = abcd_feature.detect_n_shape_features(df, seg=9)
+        # df = abcd_feature.detect_trend_features(df)
+        df = abcd_feature.detect_n_shape_features(df, seg=9)
+    if FEATURE_TYPE.margin in cfg.feature_type:
+        # df = abcd_feature.detect_trend_features(df)
+
+        df = margin_feature.detect_short_squeeze_features(df)
+
+        feature_cols = [
+            #
+            "close",
+            "volume",
+            "high",
+            "low",
+            "open",
+            "stock_id",
+            "date",
+            # N 字特徵
+            "f_n_ab_gain",
+            "f_n_bc_retracement",
+            "f_n_c_above_a",
+            "f_n_d_breakout_strength",
+            "f_n_cd_vs_ab_momentum",
+            "f_n_close_vs_b",
+            "f_n_structure_score",
+            "f_n_volume_confirm",
+            # 軋空特徵
+            "f_sq_short_ratio",
+            "f_sq_cover_days",
+            "f_sq_short_growth",
+            "f_sq_short_utilization",
+            "f_sq_net_short",
+            "f_sq_price_resilience",
+            "f_sq_short_ma5_growth",
+            "f_sq_offset_ratio",
+            "f_sq_squeeze_score",
+            "f_n_confirmed",
+        ]
+
+        # df = df[feature_cols]
+    if FEATURE_TYPE.normal in cfg.feature_type:
         df = HvFeature.add_feature(df)
         df = MaFeature.add_feature(df)
         df = MacdFeature.add_feature(df)

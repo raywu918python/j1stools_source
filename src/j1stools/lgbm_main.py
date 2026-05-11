@@ -7,7 +7,13 @@ from numpy import add
 import pandas as pd
 
 from j1stools import rfc_main
-from j1stools.CONFIG import BaseDataBuilderConfig, LgbmTrainConfig, MACDDataBuilterConfig
+from j1stools.CONFIG import (
+    FILTER_CONFIG,
+    BaseDataBuilderConfig,
+    BaseLabelConfig,
+    LgbmTrainConfig,
+    MACDDataBuilterConfig,
+)
 from j1stools.TYPE import FEATURE_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 
@@ -65,12 +71,18 @@ def main():
     train.is_use_rfc = False
     # train.rfc_proba = add_rfc_feature(df, data)
     # train.model = (joblib.load("models/rfc_macd.joblib"),)
+    ##############################################################
+    # l = BaseLabelConfig()
+    # l.hold_days = 20
+    # l.profit_target = 0.1
+    # l.stop_loss = -0.1
     #############################################################
     data = MACDDataBuilterConfig()
-    data.is_continuous = True
-    data.feature_type = FEATURE_TYPE.normal
+    # data.is_continuous = True
+    # data.label_cfg = l
+    data.feature_type = FEATURE_TYPE.abcd | FEATURE_TYPE.margin
     # data.feature_type = FEATURE_TYPE.today
-    # data.atrcfg = FILTER_CONFIG.del_
+    data.atrcfg = FILTER_CONFIG.none_
     data.train_config = train
     data.st = "2024-01-01"
     data.end = "2099-01-01"

@@ -1,4 +1,5 @@
 import lightgbm as lgb
+import numpy as np
 
 from j1stools.RESULT import DataBuilderResult
 
@@ -19,10 +20,11 @@ def rfc_train_function(d: DataBuilderResult, model):
 
 def lgbm_function_train(d: DataBuilderResult, model):
     # sample_weights = ytrain.map({0: 1, 1: 1, 2: 3})
-
+    sample_weight = np.where(d.ytrain == 2, 3.0, np.where(d.ytrain == 1, 2.0, 1.0))
     model.fit(
         d.xtrain,
         d.ytrain,
+        sample_weight=sample_weight,
         eval_set=[(d.xval, d.yval)],
         eval_metric="multi_logloss",
         callbacks=[
