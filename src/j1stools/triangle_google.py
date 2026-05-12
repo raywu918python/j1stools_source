@@ -27,60 +27,101 @@ import numpy as np
 from scipy.signal import argrelextrema
 import plotly.graph_objects as go
 
-
-def detect_strict_triangle(group, order=7):
-    df = group.sort_values("date").reset_index(drop=True)
-    for col in ["h1_idx", "h2_idx", "l1_idx", "l2_idx"]:
-        df[col] = np.nan
-    df["is_triangle"] = False
-
-    high_idx = argrelextrema(df["high"].values, np.greater, order=order)[0]
-    low_idx = argrelextrema(df["low"].values, np.less, order=order)[0]
-
-    if len(high_idx) < 2 or len(low_idx) < 2:
-        return df
-
-    for i in range(len(df)):
-        curr_highs = high_idx[high_idx < i]
-        curr_lows = low_idx[low_idx < i]
-
-        if len(curr_highs) < 2 or len(curr_lows) < 2:
-            continue
-
-        h1_idx, h2_idx = curr_highs[-2], curr_highs[-1]
-        l1_idx, l2_idx = curr_lows[-2], curr_lows[-1]
-
-        # --- 新增：時間重疊判斷 ---
-        # 確保高點區間與低點區間不是前後分開，而是交錯的
-        if not (max(h1_idx, l1_idx) < min(h2_idx, l2_idx)):
-            continue
-
-        h1, h2 = df.loc[h1_idx, "high"], df.loc[h2_idx, "high"]
-        l1, l2 = df.loc[l1_idx, "low"], df.loc[l2_idx, "low"]
-
-        # 基本收斂判定
-        if h1 > h2 and l1 < l2 and h2 > l2:
-            # 趨勢線斜率
-            slope_h = (h2 - h1) / (h2_idx - h1_idx)
-            slope_l = (l2 - l1) / (l2_idx - l1_idx)
-
-            # 檢查區間內無突破 (檢查範圍改為四點的最早到最晚)
-            start_check = min(h1_idx, l1_idx)
-            check_h = all(df.loc[idx, "high"] <= h1 + slope_h * (idx - h1_idx) for idx in range(h1_idx + 1, h2_idx))
-            check_l = all(df.loc[idx, "low"] >= l1 + slope_l * (idx - l1_idx) for idx in range(l1_idx + 1, l2_idx))
-
-            if check_h and check_l:
-                df.at[i, "is_triangle"] = True
-                df.at[i, "h1_idx"], df.at[i, "h2_idx"] = h1_idx, h2_idx
-                df.at[i, "l1_idx"], df.at[i, "l2_idx"] = l1_idx, l2_idx
-
-    return df
+import pandas as pd
+import numpy as np
+from scipy.signal import argrelextrema
 
 
-def find_convergence(df):
-    # 依照 stock_id 分組處理
-    result = df.groupby("stock_id", group_keys=False).apply(detect_strict_triangle)
-    return result
+def detect_strict_triangle(
+    df, order=7, min_reduction=0.4, max_slope_ratio=3.0, min_overlap_ratio=0.5
+):  # 新增：重疊比例參數
+
+    def process_group(group):
+        group = group.sort_values("date").reset_index(drop=True)
+        group["is_triangle"] = False
+        group["is_refined_triangle"] = False
+        group["width_reduction"] = np.nan
+        group["overlap_ratio"] = np.nan  # 存下重疊率方便觀察
+        for col in ["h1_idx", "h2_idx", "l1_idx", "l2_idx"]:
+            group[col] = np.nan
+
+        high_idx = argrelextrema(group["high"].values, np.greater, order=order)[0]
+        low_idx = argrelextrema(group["low"].values, np.less, order=order)[0]
+
+        if len(high_idx) < 2 or len(low_idx) < 2:
+            return group
+
+        for i in range(len(group)):
+            curr_highs = high_idx[high_idx < i]
+            curr_lows = low_idx[low_idx < i]
+            if len(curr_highs) < 2 or len(curr_lows) < 2:
+                continue
+
+            h1_idx, h2_idx = curr_highs[-2], curr_highs[-1]
+            l1_idx, l2_idx = curr_lows[-2], curr_lows[-1]
+
+            # --- 計算重疊程度 ---
+            start_point = min(h1_idx, l1_idx)
+            end_point = max(h2_idx, l2_idx)
+            total_span = end_point - start_point
+
+            overlap_start = max(h1_idx, l1_idx)
+            overlap_end = min(h2_idx, l2_idx)
+            overlap_len = overlap_end - overlap_start
+
+            # 只要 overlap_len <= 0 代表完全沒交集，直接過濾
+            if overlap_len <= 0:
+                continue
+
+            actual_overlap_ratio = overlap_len / total_span
+
+            # 檢查交錯順序 (HLHL 或 LHLH)
+            combined = sorted([(h1_idx, "H"), (h2_idx, "H"), (l1_idx, "L"), (l2_idx, "L")])
+            pattern = "".join([x[1] for x in combined])
+            if pattern not in ["HLHL", "LHLH"]:
+                continue
+
+            h1, h2 = group.loc[h1_idx, "high"], group.loc[h2_idx, "high"]
+            l1, l2 = group.loc[l1_idx, "low"], group.loc[l2_idx, "low"]
+
+            # 基礎收斂與無突破判定
+            if h1 > h2 and l1 < l2 and h2 > l2:
+                slope_h = (h2 - h1) / (h2_idx - h1_idx)
+                slope_l = (l2 - l1) / (l2_idx - l1_idx)
+
+                check_h = all(
+                    group.loc[idx, "high"] <= h1 + slope_h * (idx - h1_idx) for idx in range(h1_idx + 1, h2_idx)
+                )
+                check_l = all(
+                    group.loc[idx, "low"] >= l1 + slope_l * (idx - l1_idx) for idx in range(l1_idx + 1, l2_idx)
+                )
+
+                if check_h and check_l:
+                    group.at[i, "is_triangle"] = True  # 原始標記 (只要有交集就標記)
+                    group.at[i, "overlap_ratio"] = round(actual_overlap_ratio, 2)
+                    group.at[i, "h1_idx"], group.at[i, "h2_idx"] = h1_idx, h2_idx
+                    group.at[i, "l1_idx"], group.at[i, "l2_idx"] = l1_idx, l2_idx
+
+                    # 精選標記：必須符合重疊比例與其他幾何參數
+                    reduction = 1 - ((h2 - l2) / (h1 - l1))
+                    group.at[i, "width_reduction"] = round(reduction, 2)
+
+                    s_ratio = (
+                        max(abs(slope_h), abs(slope_l)) / min(abs(slope_h), abs(slope_l))
+                        if min(abs(slope_h), abs(slope_l)) > 0
+                        else 99
+                    )
+
+                    if (
+                        actual_overlap_ratio >= min_overlap_ratio
+                        and reduction >= min_reduction
+                        and s_ratio <= max_slope_ratio
+                    ):
+                        group.at[i, "is_refined_triangle"] = True
+
+        return group
+
+    return df.groupby("stock_id", group_keys=False).apply(process_group)
 
 
 import plotly.graph_objects as go
@@ -91,7 +132,7 @@ from plotly.subplots import make_subplots
 
 
 def draw_multiple_triangles_clean(df_triangle, n_plots=9):
-    all_matches = df_triangle[df_triangle["is_triangle"] == True].sort_values("date", ascending=False)
+    all_matches = df_triangle[df_triangle["is_refined_triangle"] == True].sort_values("date", ascending=False)
     if all_matches.empty:
         return print("No triangle found.")
 
@@ -155,10 +196,16 @@ def draw_multiple_triangles_clean(df_triangle, n_plots=9):
 def test():
     stocks = parquet_db.query_stocks_ids_list()
     # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2015-01-01", "2099-01-01")
-    df_triangle = find_convergence(df)
-    print("找到標記的三角形數量：", len(df_triangle))
-    print(df_triangle.head())
+    df = parquet_db.query_price(stocks, "2026-01-01", "2099-01-01")
+    df_triangle = detect_strict_triangle(df)
+    print(
+        "找到標記的三角形數量：",
+        len(df_triangle),
+        len(df_triangle[df_triangle["is_triangle"] == True]),
+        len(df_triangle[df_triangle["is_refined_triangle"] == True]),
+    )
+    print(df_triangle.head().T)
+    # is_refined_triangle
     draw_multiple_triangles_clean(df_triangle)
 
 
