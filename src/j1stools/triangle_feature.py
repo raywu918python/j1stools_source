@@ -520,10 +520,19 @@ def test():
     for ax, idx in zip(axes.flatten(), list(true_idx) + list(false_idx)):
         m = meta.iloc[idx]
 
-        ax.plot(X[idx, :, 3], color="blue")
-        ax.plot(m["upper_plot"], "r--", alpha=0.7, label="壓力線")
-        ax.plot(m["lower_plot"], "g--", alpha=0.7, label="支撐線")
+        close_data = X[idx, :, 3]
+        upper = m["upper_plot"]
+        lower = m["lower_plot"]
+
+        ax.plot(close_data, color="blue")
+        ax.plot(upper, "r--", alpha=0.7)
+        ax.plot(lower, "g--", alpha=0.7)
         ax.axvline(x=29, color="r", linestyle=":", alpha=0.5)
+
+        # 固定 y 軸範圍，只看價格附近
+        y_min = min(close_data.min(), min(lower)) * 0.99
+        y_max = max(close_data.max(), max(upper)) * 1.01
+        ax.set_ylim(y_min, y_max)
 
         label_str = "真突破✅" if y[idx] == 1 else "假突破❌"
         ax.set_title(f"{label_str} {m['stock_id']} {str(m['date'])[:10]}")
@@ -531,6 +540,24 @@ def test():
     plt.tight_layout()
     plt.savefig("triangle/triangle_v4.png")
     plt.show()
+    #############################################################
+    # 取第一個樣本，直接印出關鍵數字
+    idx = 0
+    m = meta.iloc[idx]
+    sid = m["stock_id"]
+    date = m["date"]
+
+    # 原始資料
+    mask = (df_triangle["stock_id"] == sid) & (df_triangle["date"] <= date)
+    grp = df_triangle[mask].tail(30).reset_index(drop=True)
+
+    print("收盤價範圍：", grp["close"].min(), "~", grp["close"].max())
+    print("突破日收盤：", grp["close"].iloc[-1])
+    print()
+    print("upper_plot 範圍：", min(m["upper_plot"]), "~", max(m["upper_plot"]))
+    print("lower_plot 範圍：", min(m["lower_plot"]), "~", max(m["lower_plot"]))
+    print()
+    print("X[0,:,3] 範圍：", X[idx, :, 3].min(), "~", X[idx, :, 3].max())
 
 
 test()
