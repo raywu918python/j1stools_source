@@ -3,6 +3,14 @@ import numpy as np
 
 from j1stools import parquet_db
 
+import pandas as pd
+import numpy as np
+
+import pandas as pd
+import numpy as np
+import pandas as pd
+import numpy as np
+
 
 def detect_triangle_samples(
     df: pd.DataFrame,
@@ -109,8 +117,24 @@ def detect_triangle_samples(
             search_start = last_pivot_bar + 1
             search_end = min(last_pivot_bar + 20, n - hold_days - 1)
 
+            # 確認三角的第一個轉折點在 lookback 窗口內
+            first_pivot_bar = recent_idx[0]
+
+            # 計算兩條趨勢線的交叉點
+            # upper: y = a1*x + b1, lower: y = a2*x + b2
+            # 交叉：x = (b2 - b1) / (a1 - a2)
+            denom = upper_coef[0] - lower_coef[0]
+            if abs(denom) < 1e-9:
+                continue  # 平行線，不收斂
+            cross_x = (lower_coef[1] - upper_coef[1]) / denom
+
+            # 交叉點必須在最後一個轉折點之後、合理範圍內（不能太遠）
+            if cross_x < last_pivot_bar or cross_x > last_pivot_bar + 40:
+                continue  # 收斂點太遠或已過，不是有效三角
+
             for bar in range(search_start, search_end):
-                upper_price = np.polyval(upper_coef, bar)
+                upper_price = np.polyval(upper_coef, bar - base)
+                lower_price = np.polyval(lower_coef, bar - base)
 
                 # 突破條件：收盤站上趨勢線
                 if grp.loc[bar, "close"] > upper_price:
@@ -118,6 +142,24 @@ def detect_triangle_samples(
                     # ── 取樣本 ─────────────────────────────────────── #
                     sample_start = bar - lookback + 1
                     if sample_start < 0:
+                        break
+
+                    # 確認所有轉折點都在 lookback 窗口內
+                    if first_pivot_bar < sample_start:
+                        break  # 三角太老，轉折點不在窗口內
+
+                    # 確認突破點在交叉點之前（還沒完全收斂就突破）
+                    if bar >= cross_x_abs:
+                        break  # 已過收斂點，不算有效突破
+
+                    # 確認價格大部分時間在兩條趨勢線之間（用相對座標）
+                    bars_in_window = np.arange(sample_start - base, bar - base + 1, dtype=float)
+                    upper_line = np.polyval(upper_coef, bars_in_window)
+                    lower_line = np.polyval(lower_coef, bars_in_window)
+                    close_arr = grp.loc[sample_start:bar, "close"].values
+
+                    in_channel = (close_arr <= upper_line * 1.02) & (close_arr >= lower_line * 0.98)  # 允許2%誤差
+                    if in_channel.mean() < 0.5:  # 至少50%的時間在通道內
                         break
 
                     ohlcv = grp.loc[sample_start:bar, ["open", "high", "low", "close", "volume"]].values.astype(
@@ -153,6 +195,12 @@ def detect_triangle_samples(
                             "stock_id": sid,
                             "upper_slope": upper_slope_norm,
                             "lower_slope": lower_slope_norm,
+                            "base": base,
+                            "bar": bar,
+                            "upper_coef_0": upper_coef[0],
+                            "upper_coef_1": upper_coef[1],
+                            "lower_coef_0": lower_coef[0],
+                            "lower_coef_1": lower_coef[1],
                         }
                     )
                     break  # 每個三角只取一個突破點
@@ -432,7 +480,7 @@ def test():
     plt.tight_layout()
     plt.savefig("triangle/triangle_samples.png")
     plt.show()
-
+    #############################################################
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -448,6 +496,77 @@ def test():
     plt.axvline(x=29, color="r", linestyle="--", label="突破點")
     plt.title(f"{meta.iloc[idx]['stock_id']} {meta.iloc[idx]['date']}")
     plt.legend()
+    plt.show()
+    #############################################################
+    # 找這個樣本對應的原始資料
+    sid = meta.iloc[idx]["stock_id"]
+    date = meta.iloc[idx]["date"]
+
+    # 取原始資料（含 f_zz_type）
+    mask = (df_triangle["stock_id"] == sid) & (df_triangle["date"] <= date)
+    grp = df_triangle[mask].tail(30).reset_index(drop=True)
+
+    plt.figure(figsize=(12, 5))
+    plt.plot(grp["close"], label="收盤價")
+
+    # 標記高點
+    highs = grp[grp["f_zz_type"] == 1]
+    plt.scatter(highs.index, highs["close"], color="red", marker="^", s=100, label="高點")
+
+    # 標記低點
+    lows = grp[grp["f_zz_type"] == -1]
+    plt.scatter(lows.index, lows["close"], color="green", marker="v", s=100, label="低點")
+
+    plt.axvline(x=29, color="r", linestyle="--", label="突破點")
+    plt.title(f"{sid} {date}")
+    plt.legend()
+    plt.show()
+    #############################################################
+    fig, axes = plt.subplots(3, 3, figsize=(18, 12))
+
+    true_idx = np.where(y == 1)[0][:5]
+    false_idx = np.where(y == 0)[0][:4]
+    all_idx = list(true_idx) + list(false_idx)
+
+    for ax, idx in zip(axes.flatten(), all_idx):
+        sid = meta.iloc[idx]["stock_id"]
+        date = meta.iloc[idx]["date"]
+
+        mask = (df_triangle["stock_id"] == sid) & (df_triangle["date"] <= date)
+        grp = df_triangle[mask].tail(30).reset_index(drop=True)
+
+        ax.plot(grp["close"], label="收盤價", color="blue")
+
+        # 高點
+        highs = grp[grp["f_zz_type"] == 1]
+        ax.scatter(highs.index, highs["f_zz_price"], color="red", marker="^", s=100, zorder=5)
+
+        # 低點
+        lows = grp[grp["f_zz_type"] == -1]
+        ax.scatter(lows.index, lows["f_zz_price"], color="green", marker="v", s=100, zorder=5)
+
+        # 畫上方趨勢線（高點連線）
+        if len(highs) >= 2:
+            x = highs.index.values.astype(float)
+            y_h = highs["f_zz_price"].values
+            coef = np.polyfit(x, y_h, 1)
+            x_line = np.arange(0, 30)
+            ax.plot(x_line, np.polyval(coef, x_line), "r--", alpha=0.6, label="壓力線")
+
+        # 畫下方趨勢線（低點連線）
+        if len(lows) >= 2:
+            x = lows.index.values.astype(float)
+            y_l = lows["f_zz_price"].values
+            coef = np.polyfit(x, y_l, 1)
+            x_line = np.arange(0, 30)
+            ax.plot(x_line, np.polyval(coef, x_line), "g--", alpha=0.6, label="支撐線")
+
+        label_str = "真突破✅" if y[idx] == 1 else "假突破❌"
+        ax.set_title(f"{label_str} {sid} {str(date)[:10]}")
+        ax.axvline(x=29, color="r", linestyle=":", alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig("triangle/triangle_with_trendlines.png")
     plt.show()
 
 
