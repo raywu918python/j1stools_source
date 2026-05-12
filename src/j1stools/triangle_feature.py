@@ -19,6 +19,9 @@ import numpy as np
 import pandas as pd
 import numpy as np
 
+import pandas as pd
+import numpy as np
+
 
 def detect_triangle_samples(
     df: pd.DataFrame,
@@ -102,18 +105,24 @@ def detect_triangle_samples(
             if not all(low_prices[i] < low_prices[i + 1] for i in range(len(low_prices) - 1)):
                 continue
 
-            # 用相對位置計算趨勢線，避免絕對 index 造成錯位
+            # 只用最近兩個高點和最近兩個低點連線
+            # 這樣趨勢線一定過轉折點，不會偏移
             base = recent_idx[0]
 
-            # 計算上方趨勢線斜率（高點連線，x 為相對 base 的位置）
-            high_x = np.array([h[0] - base for h in highs], dtype=float)
-            high_y = np.array([h[1] for h in highs], dtype=float)
-            upper_coef = np.polyfit(high_x, high_y, 1)
+            h1_x, h1_y = highs[-1]  # 最近高點
+            h2_x, h2_y = highs[-2]  # 次近高點
+            l1_x, l1_y = lows[-1]  # 最近低點
+            l2_x, l2_y = lows[-2]  # 次近低點
 
-            # 計算下方趨勢線斜率（低點連線，x 為相對 base 的位置）
-            low_x = np.array([l[0] - base for l in lows], dtype=float)
-            low_y = np.array([l[1] for l in lows], dtype=float)
-            lower_coef = np.polyfit(low_x, low_y, 1)
+            # 用兩點決定直線：y = slope * (x - x1) + y1
+            upper_slope = (h1_y - h2_y) / (h1_x - h2_x + 1e-9)
+            lower_slope = (l1_y - l2_y) / (l1_x - l2_x + 1e-9)
+
+            # 轉成 np.polyfit 格式 (slope, intercept)，x 用相對 base
+            h1_x_rel = h1_x - base
+            l1_x_rel = l1_x - base
+            upper_coef = np.array([upper_slope, h1_y - upper_slope * h1_x_rel])
+            lower_coef = np.array([lower_slope, l1_y - lower_slope * l1_x_rel])
 
             price_scale = grp.loc[recent_idx[-1], "close"]
             upper_slope_norm = upper_coef[0] / (price_scale + 1e-9)
@@ -503,203 +512,6 @@ def test():
     print(f"假突破（0）：{(y==0).sum()}")
     print(f"真突破比例：{y.mean():.2%}")
     print(f"X shape：{X.shape}")  # 應該是 (N, 30, 5)
-
-    # import matplotlib.pyplot as plt
-    # import numpy as np
-
-    # fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-
-    # true_idx = np.where(y == 1)[0][:3]
-    # false_idx = np.where(y == 0)[0][:3]
-
-    # for i, idx in enumerate(true_idx):
-    #     axes[0, i].plot(X[idx, :, 3])  # 收盤價
-    #     stock = meta.iloc[idx]["stock_id"]
-    #     date = meta.iloc[idx]["date"]
-    #     axes[0, i].set_title(f"真突破 {stock} {date}")
-    #     axes[0, i].axvline(x=29, color="r", linestyle="--")  # 突破點
-
-    # for i, idx in enumerate(false_idx):
-    #     axes[1, i].plot(X[idx, :, 3])
-    #     stock = meta.iloc[idx]["stock_id"]
-    #     date = meta.iloc[idx]["date"]
-    #     axes[1, i].set_title(f"假突破 {stock} {date}")
-    #     axes[1, i].axvline(x=29, color="r", linestyle="--")
-
-    # plt.tight_layout()
-    # plt.savefig("triangle/triangle_samples.png")
-    # plt.show()
-    # #############################################################
-    # import matplotlib.pyplot as plt
-    # import numpy as np
-
-    # # 取一個真突破樣本，畫出高低點和趨勢線
-    # idx = np.where(y == 1)[0][0]
-    # sample = X[idx, :, 3]  # 收盤價
-
-    # # 從 meta 取 stock_id 和 date
-    # print(meta.iloc[idx])
-
-    # plt.figure(figsize=(12, 5))
-    # plt.plot(sample, label="收盤價")
-    # plt.axvline(x=29, color="r", linestyle="--", label="突破點")
-    # plt.title(f"{meta.iloc[idx]['stock_id']} {meta.iloc[idx]['date']}")
-    # plt.legend()
-    # plt.show()
-    # #############################################################
-    # # 找這個樣本對應的原始資料
-    # sid = meta.iloc[idx]["stock_id"]
-    # date = meta.iloc[idx]["date"]
-
-    # # 取原始資料（含 f_zz_type）
-    # mask = (df_triangle["stock_id"] == sid) & (df_triangle["date"] <= date)
-    # grp = df_triangle[mask].tail(30).reset_index(drop=True)
-
-    # plt.figure(figsize=(12, 5))
-    # plt.plot(grp["close"], label="收盤價")
-
-    # # 標記高點
-    # highs = grp[grp["f_zz_type"] == 1]
-    # plt.scatter(highs.index, highs["close"], color="red", marker="^", s=100, label="高點")
-
-    # # 標記低點
-    # lows = grp[grp["f_zz_type"] == -1]
-    # plt.scatter(lows.index, lows["close"], color="green", marker="v", s=100, label="低點")
-
-    # plt.axvline(x=29, color="r", linestyle="--", label="突破點")
-    # plt.title(f"{sid} {date}")
-    # plt.legend()
-    # plt.show()
-    # #############################################################
-    # fig, axes = plt.subplots(3, 3, figsize=(18, 12))
-
-    # true_idx = np.where(y == 1)[0][:5]
-    # false_idx = np.where(y == 0)[0][:4]
-    # all_idx = list(true_idx) + list(false_idx)
-
-    # for ax, idx in zip(axes.flatten(), all_idx):
-    #     sid = meta.iloc[idx]["stock_id"]
-    #     date = meta.iloc[idx]["date"]
-
-    #     mask = (df_triangle["stock_id"] == sid) & (df_triangle["date"] <= date)
-    #     grp = df_triangle[mask].tail(30).reset_index(drop=True)
-
-    #     ax.plot(grp["close"], label="收盤價", color="blue")
-
-    #     # 高點
-    #     highs = grp[grp["f_zz_type"] == 1]
-    #     ax.scatter(highs.index, highs["f_zz_price"], color="red", marker="^", s=100, zorder=5)
-
-    #     # 低點
-    #     lows = grp[grp["f_zz_type"] == -1]
-    #     ax.scatter(lows.index, lows["f_zz_price"], color="green", marker="v", s=100, zorder=5)
-
-    #     # 畫上方趨勢線（高點連線）
-    #     if len(highs) >= 2:
-    #         x = highs.index.values.astype(float)
-    #         y_h = highs["f_zz_price"].values
-    #         coef = np.polyfit(x, y_h, 1)
-    #         x_line = np.arange(0, 30)
-    #         ax.plot(x_line, np.polyval(coef, x_line), "r--", alpha=0.6, label="壓力線")
-
-    #     # 畫下方趨勢線（低點連線）
-    #     if len(lows) >= 2:
-    #         x = lows.index.values.astype(float)
-    #         y_l = lows["f_zz_price"].values
-    #         coef = np.polyfit(x, y_l, 1)
-    #         x_line = np.arange(0, 30)
-    #         ax.plot(x_line, np.polyval(coef, x_line), "g--", alpha=0.6, label="支撐線")
-
-    #     label_str = "真突破✅" if y[idx] == 1 else "假突破❌"
-    #     ax.set_title(f"{label_str} {sid} {str(date)[:10]}")
-    #     ax.axvline(x=29, color="r", linestyle=":", alpha=0.5)
-
-    # plt.tight_layout()
-    # plt.savefig("triangle/triangle_with_trendlines.png")
-    # plt.show()
-
-    # fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-
-    # true_idx = np.where(y == 1)[0][:3]
-    # false_idx = np.where(y == 0)[0][:3]
-    # all_idx = list(true_idx) + list(false_idx)
-
-    # for ax, idx in zip(axes.flatten(), all_idx):
-    #     m = meta.iloc[idx]
-    #     sid = m["stock_id"]
-    #     date = m["date"]
-
-    #     mask = (df_triangle["stock_id"] == sid) & (df_triangle["date"] <= date)
-    #     grp = df_triangle[mask].tail(30).reset_index(drop=True)
-
-    #     ax.plot(grp["close"], color="blue")
-
-    #     # 高低點
-    #     highs = grp[grp["f_zz_type"] == 1]
-    #     lows = grp[grp["f_zz_type"] == -1]
-    #     ax.scatter(highs.index, highs["f_zz_price"], color="red", marker="^", s=100, zorder=5)
-    #     ax.scatter(lows.index, lows["f_zz_price"], color="green", marker="v", s=100, zorder=5)
-
-    #     # 趨勢線（用 meta 存的係數，x 從 0~29）
-    #     x_line = np.arange(0, 30, dtype=float)
-    #     base = m["base"]
-    #     bar = m["bar"]
-    #     offset = bar - 29  # sample_start 對應的 base 偏移
-
-    #     upper_line = m["upper_coef_0"] * (x_line + offset - base) + m["upper_coef_1"]
-    #     lower_line = m["lower_coef_0"] * (x_line + offset - base) + m["lower_coef_1"]
-
-    #     ax.plot(x_line, upper_line, "r--", alpha=0.6)
-    #     ax.plot(x_line, lower_line, "g--", alpha=0.6)
-    #     ax.axvline(x=29, color="r", linestyle=":", alpha=0.5)
-
-    #     label_str = "真突破✅" if y[idx] == 1 else "假突破❌"
-    #     ax.set_title(f"{label_str} {sid} {str(date)[:10]}")
-
-    # plt.tight_layout()
-    # plt.savefig("triangle/triangle_v2.png")
-    # plt.show()
-    # #############################################################
-
-    # fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    # true_idx = np.where(y == 1)[0][:3]
-    # false_idx = np.where(y == 0)[0][:3]
-
-    # for ax, idx in zip(axes.flatten(), list(true_idx) + list(false_idx)):
-    #     m = meta.iloc[idx]
-
-    #     # 收盤價（已歸一化）
-    #     ax.plot(X[idx, :, 3], color="blue")
-
-    #     # 趨勢線：x 從 0~29，係數直接用
-    #     # 轉折點的相對位置 = 原始位置 - base
-    #     # sample_start = bar - 29，所以 x 的起點 = sample_start - base = bar - 29 - base
-    #     x_start = m["bar"] - 29 - m["base"]
-    #     x_line = np.arange(x_start, x_start + 30, dtype=float)
-
-    #     upper_line = m["upper_coef_0"] * x_line + m["upper_coef_1"]
-    #     lower_line = m["lower_coef_0"] * x_line + m["lower_coef_1"]
-
-    #     # 歸一化（除以突破日收盤價）
-    #     close_ref = upper_line[-1] / (1 + 0)  # 突破日收盤已是1.0
-    #     # 直接用原始價格除以突破日收盤
-    #     bar_close = meta.iloc[idx]  # 已在 X 裡歸一化了
-    #     # 趨勢線也要除以同樣的 close_ref
-    #     # close_ref 就是突破當天的原始收盤價，需要從 df 取
-    #     sid = m["stock_id"]
-    #     date = m["date"]
-    #     close_ref = df_triangle[(df_triangle["stock_id"] == sid) & (df_triangle["date"] == date)]["close"].values[0]
-
-    #     ax.plot(np.arange(30), upper_line / close_ref, "r--", alpha=0.7, label="壓力線")
-    #     ax.plot(np.arange(30), lower_line / close_ref, "g--", alpha=0.7, label="支撐線")
-    #     ax.axvline(x=29, color="r", linestyle=":", alpha=0.5)
-
-    #     label_str = "真突破✅" if y[idx] == 1 else "假突破❌"
-    #     ax.set_title(f"{label_str} {sid} {str(date)[:10]}")
-
-    # plt.tight_layout()
-    # plt.savefig("triangle/triangle_v3.png")
-    # plt.show()
     #############################################################
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     true_idx = np.where(y == 1)[0][:3]
