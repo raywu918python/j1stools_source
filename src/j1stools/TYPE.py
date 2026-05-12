@@ -15,6 +15,7 @@ class MODEL_TYPE(Enum):
     rfc = "rfc"
     lgbm_c = "lgbm_c"
     lgbm_r = "lgbm_r"
+    lgbm_orgin = "lgbm_orgin"
 
 
 class TRAIN_TYPE(Enum):

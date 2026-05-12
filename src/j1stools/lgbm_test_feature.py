@@ -68,4 +68,72 @@ def lgbm_feature(df: pd.DataFrame, market_df: pd.DataFrame) -> pd.DataFrame:
     # LGBM 可處理 NaN，但若要做信心評分，建議至少保留有 10 日資料後的樣本
     df = df.dropna(subset=["f_bias_10"]).reset_index(drop=True)
 
+    return clean_f_features(df)
+
+
+def lgbm_all_f_features(df: pd.DataFrame, market_df: pd.DataFrame) -> pd.DataFrame:
+    # 確保排序
+    df = df.sort_values(["stock_id", "date"]).reset_index(drop=True)
+    group_obj = df.groupby("stock_id")
+
+    # --- [A. 信用交易轉化為比例 (解決規模問題)] ---
+    # 融資/融券使用率 (相對於限額)
+    df["f_margin_utilization"] = df["margin_purchase_today_balance"] / (df["margin_purchase_limit"] + 1)
+    df["f_short_utilization"] = df["short_sale_today_balance"] / (df["short_sale_limit"] + 1)
+
+    # 券資比
+    df["f_short_to_margin_ratio"] = df["short_sale_today_balance"] / (df["margin_purchase_today_balance"] + 1)
+
+    # 籌碼集中度 (資券互抵佔成交量比)
+    df["f_offset_ratio"] = df["offset_loan_and_short"] / (df["volume"] + 1)
+
+    # --- [B. 信用交易轉化為動能 (解決趨勢問題)] ---
+    # 融資 3 日增加率
+    df["f_margin_buy_slope"] = group_obj["margin_purchase_today_balance"].pct_change(3)
+    # 融券 3 日增加率
+    df["f_short_sell_slope"] = group_obj["short_sale_today_balance"].pct_change(3)
+
+    # --- [C. 量價特徵 (f_ 化)] ---
+    # 價格位置：10日乖離
+    ma10 = group_obj["close"].transform(lambda x: x.rolling(10).mean())
+    df["f_price_bias_10"] = (df["close"] - ma10) / ma10
+
+    # 成交量能：今日 vs 5日均量
+    vma5 = group_obj["volume"].transform(lambda x: x.rolling(5).mean())
+    df["f_volume_ratio"] = df["volume"] / (vma5 + 1)
+
+    # --- [D. 類別特徵] ---
+    df["f_group"] = df["group"].astype("category")
+
+    # --- [E. 整理輸出] ---
+    # 只保留 f_ 開頭以及必要的識別欄位
+    f_cols = [c for c in df.columns if c.startswith("f_")]
+    essential_cols = ["date", "stock_id", "close", "high", "low", "open"]  # 保留 high/close 用來算 label 或對答案
+
+    return clean_f_features(df[essential_cols + f_cols])
+
+
+import numpy as np
+
+
+def clean_f_features(df):
+    f_cols = [c for c in df.columns if c.startswith("f_")]
+
+    for col in f_cols:
+        # 1. 檢查是否為數值型，如果不是就跳過 (排除 f_group 等類別欄位)
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            print(f"跳過類別欄位: {col}")
+            continue
+
+        # 2. 處理 inf
+        df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+
+        # 3. 處理 NaN
+        df[col] = df[col].fillna(0)
+
+        # 4. 處理離群值 (只針對數值進行 clip)
+        lower_bound = df[col].quantile(0.01)
+        upper_bound = df[col].quantile(0.99)
+        df[col] = df[col].clip(lower_bound, upper_bound)
+
     return df

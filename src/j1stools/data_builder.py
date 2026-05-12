@@ -1,3 +1,4 @@
+from regex import E
 import scipy as sp
 
 from j1stools import feature_builder, lite_db, parquet_db
@@ -7,7 +8,7 @@ from j1stools.j1s_split_date import lgbm_split_date, rfc_split_date
 from j1stools.model_utils import drop_na_inf
 from j1stools.TYPE import FEATURE_TYPE, MODEL_TYPE, TRAIN_TYPE
 from j1stools.obj_filter_data import FilterData
-from j1stools.label_builder import power_label, profit_label
+from j1stools.label_builder import create_label, power_label, profit_label
 
 
 class DataBuilder:
@@ -39,7 +40,10 @@ class DataBuilder:
         if data.train_config.model_type == MODEL_TYPE.lgbm_c and data.train_config.is_use_rfc:
             df = feature_builder.add_rfc_feature(df, data)
         #############################################################gel label
-        if self.cfg.train_config.model_type == MODEL_TYPE.lgbm_r:
+
+        if self.cfg.train_config.model_type == MODEL_TYPE.lgbm_orgin:
+            df = create_label(df)
+        elif self.cfg.train_config.model_type == MODEL_TYPE.lgbm_r:
             df = power_label(df)
         else:
             df = profit_label(df, data.label_cfg.hold_days, data.label_cfg.profit_target, data.label_cfg.stop_loss)
@@ -62,8 +66,17 @@ class DataBuilder:
         if data.train_config.model_type == MODEL_TYPE.rfc:
             xtrain, xtest, ytrain, ytest = rfc_prepare_data(df, is_gen_train_data, is_gen_test_data, data)
             return DataBuilderResult(xtrain, xtest, ytrain, ytest)
-        elif data.train_config.model_type == MODEL_TYPE.lgbm_c or data.train_config.model_type == MODEL_TYPE.lgbm_r:
-            xtest_future_return = df["future_return"]  # 實際報酬率
+        elif (
+            data.train_config.model_type == MODEL_TYPE.lgbm_c
+            or data.train_config.model_type == MODEL_TYPE.lgbm_r
+            or data.train_config.model_type == MODEL_TYPE.lgbm_orgin
+        ):
+
+            if MODEL_TYPE.lgbm_r == data.train_config.model_type:
+                xtest_future_return = df["future_return"]  # 實際報酬率 (只有 lgbm_r 才有)
+            else:
+                xtest_future_return = None
+
             xtrain, xval, xtest, ytrain, yval, ytest = lgbm_prepare_data(df, is_gen_train_data, is_gen_test_data, data)
 
             return DataBuilderResult(

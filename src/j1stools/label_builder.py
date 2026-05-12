@@ -8,8 +8,6 @@ def profit_label(df: pd.DataFrame, hold_days=10, profit_target=0.10, stop_loss=-
     1: 失敗（跌）- 觸及 stop_loss
     0: 盤整（不漲不跌）- 持有期滿，既未達標也未停損
     """
-    print("qqqqqqqqqqqqqqqq")
-    print(df.head().T)
     # 1. 進場基準價 (以今日收盤預期明日進場)
     df["entry_price"] = df["close"]
 
@@ -81,6 +79,27 @@ def power_label(
     df["target"] = df.groupby("date")["future_return"].rank(pct=True)
 
     # future_return 保留在 df，不要 drop
+    return df
+
+
+def create_label(df: pd.DataFrame, threshold=0.1, period=1):
+    # 確保排序
+    df = df.sort_values(["stock_id", "date"])
+
+    # 計算未來 10 日的最高價 (注意要 shift(-period) 往回拉)
+    # 我們在 T 日，要看 T+1 到 T+10 的最高價
+    def get_future_max(group):
+        # 滾動取得未來 N 天最大值，並往回推移
+        return group["high"].shift(-period).rolling(window=period, min_periods=1).max()
+
+    df["future_max"] = df.groupby("stock_id").apply(lambda x: get_future_max(x)).reset_index(0, drop=True)
+
+    # 建立標籤：未來最高價比今日收盤價高出 threshold
+    df["target"] = (df["future_max"] / df["close"] > (1 + threshold)).astype(int)
+
+    # 重要：最後 N 天的資料沒有未來資訊，必須刪除，不能參與訓練
+    df = df.dropna(subset=["future_max"])
+
     return df
 
 

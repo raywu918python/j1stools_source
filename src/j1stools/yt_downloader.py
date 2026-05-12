@@ -13,22 +13,27 @@ import pandas as pd
 from dotenv import load_dotenv
 from db_models.peewee_models import MyappActivestocks, MyappStocksinfo
 from j1stools import lite_db
-from j1stools.utils import get_base_url
+from j1stools.utils import get_base_url, stock
 
 
 class INTERVAL(Enum):
     m1 = "1m"
     m5 = "5m"
     day = "1d"
-    day2015_2099 = "allday"
 
 
-def download(interval: INTERVAL):
+def download(
+    interval: INTERVAL,
+    select_tickers: list = None,
+    period="5d",
+):
 
-    def tickers_to_download():
-
-        stocks = MyappActivestocks.select(MyappActivestocks.stock_id)
-        stocks = list([x.stock_id for x in stocks])
+    def tickers_to_download(select_tickers: list = None):
+        if select_tickers is None:
+            stocks = MyappActivestocks.select(MyappActivestocks.stock_id)
+            stocks = list([x.stock_id for x in stocks])
+        else:
+            stocks = select_tickers
 
         info = (
             MyappStocksinfo.select(MyappStocksinfo.stock_id, MyappStocksinfo.market_type)
@@ -47,7 +52,7 @@ def download(interval: INTERVAL):
 
     interval_value = interval.value
 
-    all_tickers = tickers_to_download()
+    all_tickers = tickers_to_download(select_tickers)
     chunk_size = 50  # 每次下載 50 檔
 
     for i in range(0, len(all_tickers), chunk_size):
@@ -55,15 +60,15 @@ def download(interval: INTERVAL):
 
         df = yf.download(
             batch,
-            period="5d",
+            period=period,
             auto_adjust=True,
             repair=True,
             interval=interval_value,
             group_by="ticker",
             threads=True,
         )
-
-        df.index = df.index.tz_convert("Asia/Taipei")
+        if interval == INTERVAL.m1 or interval == INTERVAL.m5:
+            df.index = df.index.tz_convert("Asia/Taipei")
 
         save(batch, df, interval)
 
@@ -88,7 +93,8 @@ def save(all_path, dfall, interval: INTERVAL):
                 index_col=0,
                 parse_dates=True,
             )
-            old_data.index = old_data.index.tz_localize("Asia/Taipei")
+            if interval == INTERVAL.m1 or interval == INTERVAL.m5:
+                old_data.index = old_data.index.tz_convert("Asia/Taipei")
 
             # 更好的做法是 combine_first：它會以新資料為主，補足舊資料沒有的部分
             combined = new_data.combine_first(old_data)
@@ -109,4 +115,8 @@ def save(all_path, dfall, interval: INTERVAL):
         save_and_merge(stock, df)
 
 
-# download(INTERVAL.m5)
+download(INTERVAL.day)
+
+# download(INTERVAL.day, ["1609"], period="2500d")
+# download(INTERVAL.m1, ["1609"], period="60d")
+# download(INTERVAL.m5, ["1609"], period="60d")

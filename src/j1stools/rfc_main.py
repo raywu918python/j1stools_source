@@ -23,7 +23,7 @@ from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, MODEL_TYPE, TRAIN_TYPE
 import j1stools.parquet_db as parquet_db
 import joblib
 
-from j1stools.train_flow import start_train
+from j1stools.train_flow import start_train_flow
 
 
 def predict_today():
@@ -92,7 +92,7 @@ def main():
     data.train_config = train
     data.st = "2024-01-01"
     data.end = "2099-01-01"
-    signal = start_train(cfg=data)
+    signal = start_train_flow(cfg=data)
     #############################################################
     signal = signal[signal["y_proba"] > 0.5]
     signal.sort_values(by=["date", "y_proba"], inplace=True)

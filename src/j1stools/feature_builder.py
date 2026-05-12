@@ -6,7 +6,7 @@ import pandas as pd
 from j1stools import abcd_feature, margin_feature, parquet_db, power_feature
 from j1stools.CONFIG import BaseDataBuilderConfig
 from j1stools.TYPE import FEATURE_TYPE
-from j1stools.lgbm_test_feature import lgbm_feature
+from j1stools.lgbm_test_feature import lgbm_all_f_features, lgbm_feature
 from j1stools.lite_db import margin
 from j1stools.macdh_divergences import f_macd_continuous_features, f_macd_hist_divergences_with_atr
 from j1stools.obj_hv_feature import HvFeature
@@ -39,7 +39,8 @@ def gen_feature(df, cfg: BaseDataBuilderConfig) -> pd.DataFrame:
         df = abcd_feature.detect_n_shape_features(df, seg=9)
     if FEATURE_TYPE.test_lgbm_feature in cfg.feature_type:
         market_df = parquet_db.query_price(["0050"], cfg.st, cfg.end)
-        df = lgbm_feature(df, market_df)
+        # df = lgbm_feature(df, market_df)
+        df = lgbm_all_f_features(df, market_df)
     if FEATURE_TYPE.margin in cfg.feature_type:
         # df = abcd_feature.detect_trend_features(df)
         df = margin_feature.detect_short_squeeze_features(df)

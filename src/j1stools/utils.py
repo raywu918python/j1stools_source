@@ -24,7 +24,7 @@ def get_base_url():
 
 def stock(stock_id: str, is_to_lower=True, is_add_noise=False):
     df = pd.read_csv(
-        get_base_url() + f"{stock_id}_d1.csv",
+        get_base_url() + f"{stock_id}_1d.csv",
         dtype={"代號": str},
         parse_dates=["Date"],  # 這裡請填入你 CSV 裡的日期欄位名
         index_col="Date",

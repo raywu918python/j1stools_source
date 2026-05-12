@@ -8,7 +8,7 @@ import pyarrow.dataset as ds
 import j1stools.utils as utils
 
 
-def create_now_price(yyyy, mm):
+def update_last_price(yyyy, mm):
 
     my_schema = pa.schema(
         [
@@ -473,7 +473,7 @@ def query_stocks_no_etf():
 
 
 #############################################################
-# create_now_price(2026, 5)
+# update_last_price(2026, 5)
 # read_features()
 
 # create_info()

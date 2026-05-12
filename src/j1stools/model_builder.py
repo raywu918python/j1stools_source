@@ -61,4 +61,5 @@ def gen_lgbm_c_model():
 def gen_lgbm_orgin_model():
     import lightgbm as lgb
 
+    train_data = lgb.Dataset(X, label=y, categorical_feature=["f_group"], free_raw_data=False)
     return lgb

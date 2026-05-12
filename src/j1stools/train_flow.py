@@ -237,7 +237,7 @@ def keep_latest_ten_files(directory_path: str):
             print(f"已刪除舊檔案: {file.name}")
 
 
-def start_train(cfg: BaseDataBuilderConfig):
+def start_train_flow(cfg: BaseDataBuilderConfig):
     print(f"*" * 60, f"{cfg.train_config.model_type.value} start")
 
     data = DataBuilder(cfg).build()
