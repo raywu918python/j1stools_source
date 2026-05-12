@@ -378,7 +378,7 @@ def backtest_validation(df, model, features, threshold=0.05, confidence_cutoff=0
 
 # 執行驗證
 
-main()
+# main()
 # predict(
 #     stocks=random.sample(parquet_db.query_stocks_no_etf(), 500),
 #     st="2024-01-01",

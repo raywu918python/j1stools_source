@@ -7,9 +7,6 @@ import pandas as pd
 import numpy as np
 from numba import njit
 
-import pandas as pd
-import numpy as np
-
 
 def detect_triangle_samples(
     df: pd.DataFrame,
@@ -116,14 +113,18 @@ def detect_triangle_samples(
             upper_slope_norm = upper_coef[0] / (price_scale + 1e-9)
             lower_slope_norm = lower_coef[0] / (price_scale + 1e-9)
 
-            # 上斜率為負，下斜率為正 → 對稱三角
-            if upper_slope_norm >= 0 or lower_slope_norm <= 0:
+            # 只要求兩線收斂（上斜率 < 下斜率），支援對稱/上升/下降三角
+            if upper_slope >= lower_slope:
+                continue  # 兩線發散，不是三角
+
+            # 上方線必須在下方線之上（起點時）
+            upper_at_0 = np.polyval(upper_coef, 0)
+            lower_at_0 = np.polyval(lower_coef, 0)
+            if upper_at_0 <= lower_at_0:
                 continue
 
             # 初始寬度不能太大（超過價格的 15% 代表通道太鬆）
             price_ref = grp.loc[recent_idx[-1], "close"]
-            upper_at_0 = np.polyval(upper_coef, 0)
-            lower_at_0 = np.polyval(lower_coef, 0)
             width_init_check = upper_at_0 - lower_at_0
             if width_init_check <= 0 or width_init_check / price_ref > 0.15:
                 continue
@@ -166,7 +167,7 @@ def detect_triangle_samples(
 
                 # 突破點的收盤要在兩條線附近（綠線不能比收盤低超過 15%）
                 close_at_bar = grp.loc[bar, "close"]
-                if lower_price < close_at_bar * 0.85:
+                if lower_price < close_at_bar * 0.90:
                     continue  # 支撐線太低，不是有效三角
 
                 # 突破條件：收盤站上趨勢線
@@ -474,10 +475,10 @@ def get_pivot_history(df: pd.DataFrame, n_pivots: int = 6) -> pd.DataFrame:
 
 def test():
 
-    # df = parquet_db.query_price(["0050"], "2015-01-01", "2099-01-01")
+    # df = parquet_db.query_price(["0050"], "2015-01-01", "2099-0   1-01")
     stocks = parquet_db.query_stocks_ids_list()
-    # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2015-01-01", "2099-01-01")
+    stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
+    df = parquet_db.query_price(stocks, "2025-01-01", "2099-01-01")
 
     df_triangle = detect_zigzag(df, min_bars=5, min_change=0.02)
     # 看有沒有任何轉折點
@@ -548,4 +549,4 @@ def test():
     print("X[0,:,3] 範圍：", X[idx, :, 3].min(), "~", X[idx, :, 3].max())
 
 
-test()
+# test()
