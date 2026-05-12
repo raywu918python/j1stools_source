@@ -154,9 +154,10 @@ def draw_multiple_triangles_clean(df_triangle, n_plots=9):
 # draw_multiple_triangles(df_triangle, n_plots=9)
 def test():
     stocks = parquet_db.query_stocks_ids_list()
-    stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2021-01-01", "2099-01-01")
+    # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
+    df = parquet_db.query_price(stocks, "2015-01-01", "2099-01-01")
     df_triangle = find_convergence(df)
+    print("找到標記的三角形數量：", len(df_triangle))
     print(df_triangle.head())
     draw_multiple_triangles_clean(df_triangle)
 
