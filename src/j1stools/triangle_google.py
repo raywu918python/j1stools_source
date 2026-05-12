@@ -2,34 +2,11 @@ import random
 
 import pandas as pd
 import numpy as np
+import mplfinance as mpf
+import plotly.graph_objects as go
 from scipy.signal import argrelextrema
 
 from j1stools import parquet_db
-
-import mplfinance as mpf
-import numpy as np
-
-import pandas as pd
-import numpy as np
-import mplfinance as mpf
-from scipy.signal import argrelextrema
-
-import pandas as pd
-import numpy as np
-
-
-import pandas as pd
-import numpy as np
-from scipy.signal import argrelextrema
-
-import pandas as pd
-import numpy as np
-from scipy.signal import argrelextrema
-import plotly.graph_objects as go
-
-import pandas as pd
-import numpy as np
-from scipy.signal import argrelextrema
 
 
 def detect_strict_triangle(
@@ -131,10 +108,17 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-def draw_multiple_triangles_clean(df_triangle, n_plots=9):
-    all_matches = df_triangle[df_triangle["is_refined_triangle"] == True].sort_values("date", ascending=False)
+def draw_multiple_triangles_safe(df_source, df_signals, n_plots=9):
+    """
+    df_source: 原始完整大表 (包含所有歷史資料)
+    df_signals: 過濾後只有 True 的標籤表
+    """
+    # 按照日期由新到舊排序
+    all_matches = df_signals.sort_values("date", ascending=False)
+
     if all_matches.empty:
-        return print("No triangle found.")
+        print("沒有符合條件的訊號。")
+        return
 
     n_plots = min(len(all_matches), n_plots)
     rows = (n_plots + 2) // 3
@@ -146,16 +130,19 @@ def draw_multiple_triangles_clean(df_triangle, n_plots=9):
 
     for idx, (original_idx, target) in enumerate(all_matches.head(n_plots).iterrows()):
         r, c = (idx // 3) + 1, (idx % 3) + 1
-        stock_data = (
-            df_triangle[df_triangle["stock_id"] == target["stock_id"]].sort_values("date").reset_index(drop=True)
-        )
 
-        # 定義繪圖區間：取四個點的最寬範圍再加一點緩衝
+        # --- 關鍵修正：去 source 大表抓該股票的連續資料 ---
+        stock_data = df_source[df_source["stock_id"] == target["stock_id"]].sort_values("date")
+
+        # 設定繪圖範圍 (取前後緩衝)
         p_min = int(min(target["h1_idx"], target["l1_idx"]))
         p_max = int(max(target["h2_idx"], target["l2_idx"]))
-        df_crop = stock_data.iloc[max(0, p_min - 10) : min(len(stock_data), p_max + 20)]
 
-        # K線圖
+        # 使用 iloc 前後切片，確保 K 線連續
+        # 這裡假設你的 index 是重置過的 0,1,2...
+        df_crop = stock_data.loc[max(0, p_min - 10) : min(len(stock_data), p_max + 20)]
+
+        # 繪製 K 線
         fig.add_trace(
             go.Candlestick(
                 x=df_crop.index,
@@ -169,12 +156,13 @@ def draw_multiple_triangles_clean(df_triangle, n_plots=9):
             col=c,
         )
 
-        # 壓力線與支撐線
+        # 繪製紅綠線 (使用 target 存下的座標)
         for pts, color in [
             ([target["h1_idx"], target["h2_idx"]], "red"),
             ([target["l1_idx"], target["l2_idx"]], "green"),
         ]:
             p1, p2 = int(pts[0]), int(pts[1])
+            # 從 stock_data (大表) 抓取精確價格
             y1 = stock_data.loc[p1, "high" if color == "red" else "low"]
             y2 = stock_data.loc[p2, "high" if color == "red" else "low"]
             fig.add_trace(
@@ -185,8 +173,7 @@ def draw_multiple_triangles_clean(df_triangle, n_plots=9):
                 col=c,
             )
 
-    fig.update_layout(height=250 * rows, template="plotly_dark", showlegend=False)
-    # 關鍵：強制關閉所有子圖的 rangeslider
+    fig.update_layout(height=250 * rows, template="plotly_dark")
     fig.update_xaxes(rangeslider_visible=False)
     fig.show()
 
@@ -196,17 +183,17 @@ def draw_multiple_triangles_clean(df_triangle, n_plots=9):
 def test():
     stocks = parquet_db.query_stocks_ids_list()
     # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2026-01-01", "2099-01-01")
-    df_triangle = detect_strict_triangle(df)
+    df = parquet_db.query_price(stocks, "2026-01-01", "2026-04-01")
+    df_triangle = detect_strict_triangle(df, order=5, max_slope_ratio=99)
     print(
         "找到標記的三角形數量：",
         len(df_triangle),
         len(df_triangle[df_triangle["is_triangle"] == True]),
         len(df_triangle[df_triangle["is_refined_triangle"] == True]),
     )
-    print(df_triangle.head().T)
-    # is_refined_triangle
-    draw_multiple_triangles_clean(df_triangle)
+    # print(df_triangle.head().T)
+    refined_triangle = df_triangle[df_triangle["is_refined_triangle"] == True]
+    draw_multiple_triangles_safe(df_triangle, refined_triangle)
 
 
 test()
