@@ -11,6 +11,20 @@ import numpy as np
 import pandas as pd
 import numpy as np
 
+import pandas as pd
+import numpy as np
+
+
+import pandas as pd
+import numpy as np
+from numba import njit
+
+import pandas as pd
+import numpy as np
+
+import pandas as pd
+import numpy as np
+
 
 def detect_triangle_samples(
     df: pd.DataFrame,
@@ -94,13 +108,16 @@ def detect_triangle_samples(
             if not all(low_prices[i] < low_prices[i + 1] for i in range(len(low_prices) - 1)):
                 continue
 
-            # 計算上方趨勢線斜率（高點連線）
-            high_x = np.array([h[0] for h in highs], dtype=float)
+            # 用相對位置計算趨勢線，避免絕對 index 造成錯位
+            base = recent_idx[0]
+
+            # 計算上方趨勢線斜率（高點連線，x 為相對 base 的位置）
+            high_x = np.array([h[0] - base for h in highs], dtype=float)
             high_y = np.array([h[1] for h in highs], dtype=float)
             upper_coef = np.polyfit(high_x, high_y, 1)
 
-            # 計算下方趨勢線斜率（低點連線）
-            low_x = np.array([l[0] for l in lows], dtype=float)
+            # 計算下方趨勢線斜率（低點連線，x 為相對 base 的位置）
+            low_x = np.array([l[0] - base for l in lows], dtype=float)
             low_y = np.array([l[1] for l in lows], dtype=float)
             lower_coef = np.polyfit(low_x, low_y, 1)
 
@@ -126,10 +143,11 @@ def detect_triangle_samples(
             denom = upper_coef[0] - lower_coef[0]
             if abs(denom) < 1e-9:
                 continue  # 平行線，不收斂
-            cross_x = (lower_coef[1] - upper_coef[1]) / denom
+            cross_x_rel = (lower_coef[1] - upper_coef[1]) / denom
+            cross_x_abs = cross_x_rel + base
 
             # 交叉點必須在最後一個轉折點之後、合理範圍內（不能太遠）
-            if cross_x < last_pivot_bar or cross_x > last_pivot_bar + 40:
+            if cross_x_abs < last_pivot_bar or cross_x_abs > last_pivot_bar + 40:
                 continue  # 收斂點太遠或已過，不是有效三角
 
             for bar in range(search_start, search_end):
@@ -218,11 +236,6 @@ def detect_triangle_samples(
     print(f"真突破比例：{y.mean():.2%}")
 
     return X, y, meta
-
-
-import pandas as pd
-import numpy as np
-from numba import njit
 
 
 @njit
@@ -567,6 +580,48 @@ def test():
 
     plt.tight_layout()
     plt.savefig("triangle/triangle_with_trendlines.png")
+    plt.show()
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+
+    true_idx = np.where(y == 1)[0][:3]
+    false_idx = np.where(y == 0)[0][:3]
+    all_idx = list(true_idx) + list(false_idx)
+
+    for ax, idx in zip(axes.flatten(), all_idx):
+        m = meta.iloc[idx]
+        sid = m["stock_id"]
+        date = m["date"]
+
+        mask = (df_triangle["stock_id"] == sid) & (df_triangle["date"] <= date)
+        grp = df_triangle[mask].tail(30).reset_index(drop=True)
+
+        ax.plot(grp["close"], color="blue")
+
+        # 高低點
+        highs = grp[grp["f_zz_type"] == 1]
+        lows = grp[grp["f_zz_type"] == -1]
+        ax.scatter(highs.index, highs["f_zz_price"], color="red", marker="^", s=100, zorder=5)
+        ax.scatter(lows.index, lows["f_zz_price"], color="green", marker="v", s=100, zorder=5)
+
+        # 趨勢線（用 meta 存的係數，x 從 0~29）
+        x_line = np.arange(0, 30, dtype=float)
+        base = m["base"]
+        bar = m["bar"]
+        offset = bar - 29  # sample_start 對應的 base 偏移
+
+        upper_line = m["upper_coef_0"] * (x_line + offset - base) + m["upper_coef_1"]
+        lower_line = m["lower_coef_0"] * (x_line + offset - base) + m["lower_coef_1"]
+
+        ax.plot(x_line, upper_line, "r--", alpha=0.6)
+        ax.plot(x_line, lower_line, "g--", alpha=0.6)
+        ax.axvline(x=29, color="r", linestyle=":", alpha=0.5)
+
+        label_str = "真突破✅" if y[idx] == 1 else "假突破❌"
+        ax.set_title(f"{label_str} {sid} {str(date)[:10]}")
+
+    plt.tight_layout()
+    plt.savefig("triangle/triangle_v2.png")
     plt.show()
 
 
