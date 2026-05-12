@@ -12,6 +12,11 @@ from j1stools import parquet_db
 def detect_strict_triangle(
     df, order=7, min_reduction=0.4, max_slope_ratio=3.0, min_overlap_ratio=0.5
 ):  # 新增：重疊比例參數
+    """
+    min_reduction 收鍊比例
+    max_slope_ratio 平均斜率
+    min_overlap_ratio 重疊比例
+    """
 
     def process_group(group):
         group = group.sort_values("date").reset_index(drop=True)
@@ -28,6 +33,7 @@ def detect_strict_triangle(
         if len(high_idx) < 2 or len(low_idx) < 2:
             return group
 
+        marked_structures = set()
         for i in range(len(group)):
             curr_highs = high_idx[high_idx < i]
             curr_lows = low_idx[low_idx < i]
@@ -73,6 +79,12 @@ def detect_strict_triangle(
                     group.loc[idx, "low"] >= l1 + slope_l * (idx - l1_idx) for idx in range(l1_idx + 1, l2_idx)
                 )
 
+                # 如果這組座標已經被標記過了，就跳過這一天
+                structure_id = (h1_idx, h2_idx, l1_idx, l2_idx)
+                if structure_id in marked_structures:
+                    continue
+
+                # --- 通過所有基礎與優化檢查後 ---
                 if check_h and check_l:
                     group.at[i, "is_triangle"] = True  # 原始標記 (只要有交集就標記)
                     group.at[i, "overlap_ratio"] = round(actual_overlap_ratio, 2)
@@ -95,6 +107,9 @@ def detect_strict_triangle(
                         and s_ratio <= max_slope_ratio
                     ):
                         group.at[i, "is_refined_triangle"] = True
+
+                    # 標記完成後，把這組結構加入 set，之後的日子就不會再重複標記它
+                    marked_structures.add(structure_id)
 
         return group
 
@@ -183,16 +198,24 @@ def draw_multiple_triangles_safe(df_source, df_signals, n_plots=9):
 def test():
     stocks = parquet_db.query_stocks_ids_list()
     # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2026-01-01", "2026-04-01")
-    df_triangle = detect_strict_triangle(df, order=5, max_slope_ratio=99)
+    df = parquet_db.query_price(stocks, "2026-04-01", "2099-01-01")
+    df_triangle = detect_strict_triangle(
+        df,
+        order=5,
+        max_slope_ratio=99,
+        min_overlap_ratio=0.4,
+        min_reduction=0.3,
+    )
     print(
         "找到標記的三角形數量：",
         len(df_triangle),
         len(df_triangle[df_triangle["is_triangle"] == True]),
         len(df_triangle[df_triangle["is_refined_triangle"] == True]),
     )
+
     # print(df_triangle.head().T)
     refined_triangle = df_triangle[df_triangle["is_refined_triangle"] == True]
+    print("5515 = ", len(refined_triangle[refined_triangle["stock_id"] == "5515"]))
     draw_multiple_triangles_safe(df_triangle, refined_triangle)
 
 
