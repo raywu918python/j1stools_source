@@ -24,6 +24,10 @@ def detect_strict_triangle(
         group["is_refined_triangle"] = False
         group["width_reduction"] = np.nan
         group["overlap_ratio"] = np.nan  # 存下重疊率方便觀察
+        group["h1_date"] = pd.NaT
+        group["h2_date"] = pd.NaT
+        group["l1_date"] = pd.NaT
+        group["l2_date"] = pd.NaT
         for col in ["h1_idx", "h2_idx", "l1_idx", "l2_idx"]:
             group[col] = np.nan
 
@@ -90,6 +94,11 @@ def detect_strict_triangle(
                     group.at[i, "overlap_ratio"] = round(actual_overlap_ratio, 2)
                     group.at[i, "h1_idx"], group.at[i, "h2_idx"] = h1_idx, h2_idx
                     group.at[i, "l1_idx"], group.at[i, "l2_idx"] = l1_idx, l2_idx
+                    # 當判定成功時存入：
+                    group.at[i, "h1_date"] = group.loc[h1_idx, "date"]
+                    group.at[i, "h2_date"] = group.loc[h2_idx, "date"]
+                    group.at[i, "l1_date"] = group.loc[l1_idx, "date"]
+                    group.at[i, "l2_date"] = group.loc[l2_idx, "date"]
 
                     # 精選標記：必須符合重疊比例與其他幾何參數
                     reduction = 1 - ((h2 - l2) / (h1 - l1))
@@ -198,11 +207,11 @@ def draw_multiple_triangles_safe(df_source, df_signals, n_plots=9):
 def test():
     stocks = parquet_db.query_stocks_ids_list()
     # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2026-04-01", "2099-01-01")
+    df = parquet_db.query_price(stocks, "2025-01-01", "2026-03-01")
     df_triangle = detect_strict_triangle(
         df,
-        order=5,
-        max_slope_ratio=99,
+        order=7,
+        max_slope_ratio=5,
         min_overlap_ratio=0.4,
         min_reduction=0.3,
     )
@@ -213,10 +222,11 @@ def test():
         len(df_triangle[df_triangle["is_refined_triangle"] == True]),
     )
 
-    # print(df_triangle.head().T)
-    refined_triangle = df_triangle[df_triangle["is_refined_triangle"] == True]
-    print("5515 = ", len(refined_triangle[refined_triangle["stock_id"] == "5515"]))
-    draw_multiple_triangles_safe(df_triangle, refined_triangle)
+    # print(df_triangle[df_triangle["is_triangle"] == True].head().T)
+    draw_multiple_triangles_safe(
+        df_triangle,
+        df_triangle[df_triangle["is_triangle"] == True],
+    )
 
 
 test()
