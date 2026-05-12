@@ -10,18 +10,6 @@ from numba import njit
 import pandas as pd
 import numpy as np
 
-import pandas as pd
-import numpy as np
-
-import pandas as pd
-import numpy as np
-
-import pandas as pd
-import numpy as np
-
-import pandas as pd
-import numpy as np
-
 
 def detect_triangle_samples(
     df: pd.DataFrame,
@@ -487,7 +475,7 @@ def get_pivot_history(df: pd.DataFrame, n_pivots: int = 6) -> pd.DataFrame:
 def test():
 
     # df = parquet_db.query_price(["0050"], "2015-01-01", "2099-01-01")
-    stocks = parquet_db.query_stocks_no_etf()
+    stocks = parquet_db.query_stocks_ids_list()
     # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
     df = parquet_db.query_price(stocks, "2015-01-01", "2099-01-01")
 
