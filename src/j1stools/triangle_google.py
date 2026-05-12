@@ -47,20 +47,19 @@ def detect_strict_triangle(
             h1_idx, h2_idx = curr_highs[-2], curr_highs[-1]
             l1_idx, l2_idx = curr_lows[-2], curr_lows[-1]
 
-            # --- 計算重疊程度 ---
-            start_point = min(h1_idx, l1_idx)
-            end_point = max(h2_idx, l2_idx)
-            total_span = end_point - start_point
-
+            # 1. 計算交集與聯集
             overlap_start = max(h1_idx, l1_idx)
             overlap_end = min(h2_idx, l2_idx)
             overlap_len = overlap_end - overlap_start
 
-            # 只要 overlap_len <= 0 代表完全沒交集，直接過濾
-            if overlap_len <= 0:
+            # 2. 提早攔截：如果沒交集或交集太短，直接跳過（節省運算資源）
+            # 這裡比 0 更嚴格一點，因為重疊不到 1 天根本連線都畫不出來
+            if overlap_len <= 1:
                 continue
 
-            actual_overlap_ratio = overlap_len / total_span
+            # 3. 計算聯集長度與比例
+            union_len = max(h2_idx, l2_idx) - min(h1_idx, l1_idx)
+            actual_overlap_ratio = overlap_len / union_len
 
             # 檢查交錯順序 (HLHL 或 LHLH)
             combined = sorted([(h1_idx, "H"), (h2_idx, "H"), (l1_idx, "L"), (l2_idx, "L")])
@@ -225,7 +224,7 @@ def test():
     # print(df_triangle[df_triangle["is_triangle"] == True].head().T)
     draw_multiple_triangles_safe(
         df_triangle,
-        df_triangle[df_triangle["is_triangle"] == True],
+        df_triangle[df_triangle["is_refined_triangle"] == True],
     )
 
 
