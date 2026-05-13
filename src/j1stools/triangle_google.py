@@ -201,12 +201,8 @@ def draw_multiple_triangles_safe(df_source, df_signals, n_plots=9):
     fig.show()
 
 
-# 呼叫方式
-# draw_multiple_triangles(df_triangle, n_plots=9)
-def test():
-    stocks = parquet_db.query_stocks_ids_list()
-    # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2025-01-01", "2026-03-01")
+def find_triangle(df):
+    # stocks = parquet_db.query_stocks_ids_list()
     df_triangle = detect_strict_triangle(
         df,
         order=7,
@@ -214,18 +210,37 @@ def test():
         min_overlap_ratio=0.4,
         min_reduction=0.3,
     )
+    return df_triangle
+
+
+# 呼叫方式
+# draw_multiple_triangles(df_triangle, n_plots=9)
+def test():
+    stocks = parquet_db.query_stocks_ids_list()
+    # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
+    df = parquet_db.query_price(stocks, "2026-01-01", "2026-03-01")
+    df_triangle = detect_strict_triangle(
+        df,
+        order=7,
+        max_slope_ratio=5,
+        min_overlap_ratio=0.4,
+        min_reduction=0.3,
+    )
+
+    df_refined_triangle = df_triangle[df_triangle["is_refined_triangle"] == True]
     print(
         "找到標記的三角形數量：",
         len(df_triangle),
         len(df_triangle[df_triangle["is_triangle"] == True]),
-        len(df_triangle[df_triangle["is_refined_triangle"] == True]),
+        len(df_refined_triangle),
     )
+    print(df_refined_triangle.head().T)
 
     # print(df_triangle[df_triangle["is_triangle"] == True].head().T)
     draw_multiple_triangles_safe(
         df_triangle,
-        df_triangle[df_triangle["is_refined_triangle"] == True],
+        df_refined_triangle,
     )
 
 
-test()
+# test()
