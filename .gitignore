@@ -19,3 +19,4 @@ model/
 tmp.txt
 *.pyc
 src/db_models/__pycache__/peewee_models.cpython-313.pyc
+*.png
