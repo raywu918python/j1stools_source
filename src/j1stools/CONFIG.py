@@ -17,7 +17,7 @@ from j1stools.train_function import lgbm_function_train, lgbm_r_function_train, 
 class BaseDataBuilderConfig:
     def __init__(self):
         self.stocks = random.sample(parquet_db.query_stocks_ids_list(), 100)
-        self.model_run_type = TRAIN_TYPE.train
+        self.train_type = TRAIN_TYPE.train
         self.st = "2024-01-01"
         self.end = "2099-01-01"
         self.trainging_idx = 0.8
@@ -101,16 +101,15 @@ class BaseTrainConfig:
         self.n = 0
         now = datetime.now()
         self.t = now.strftime("%Y%m%d_%H%M%S")
-        self.train_type = TRAIN_TYPE.train
         self.model_type = MODEL_TYPE.rfc
         self.model = None
+        self.train_type = TRAIN_TYPE.train
 
 
 class RfcTrainConfig(BaseTrainConfig):
     def __init__(self):
         super().__init__()
         self.model_type = MODEL_TYPE.rfc
-        self.model_run_type = TRAIN_TYPE.train
         self.is_print_import_ft = True
         self.function_train = rfc_train_function
         self.model = gen_rfc_model()
@@ -120,7 +119,6 @@ class LgbmTrainConfig(BaseTrainConfig):
     def __init__(self):
         super().__init__()
         self.model_type = MODEL_TYPE.lgbm_c
-        self.model_run_type = TRAIN_TYPE.train
         self.is_print_import_ft = True
         self.model = gen_lgbm_c_model()
         self.function_train = lgbm_r_function_train

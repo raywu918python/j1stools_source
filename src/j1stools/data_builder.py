@@ -17,13 +17,13 @@ class DataBuilder:
 
     def build(self):
         data = self.cfg
-        if data.model_run_type == TRAIN_TYPE.train:
+        if data.train_type == TRAIN_TYPE.train:
             is_gen_train_data = True
             is_gen_test_data = True
-        elif data.model_run_type == TRAIN_TYPE.create_model:
+        elif data.train_type == TRAIN_TYPE.create_model:
             is_gen_train_data = True
             is_gen_test_data = False
-        elif data.model_run_type == TRAIN_TYPE.predict:
+        elif data.train_type == TRAIN_TYPE.predict:
             is_gen_train_data = False
             is_gen_test_data = True
         #############################################################gen df

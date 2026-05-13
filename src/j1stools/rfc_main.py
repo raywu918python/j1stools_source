@@ -49,19 +49,23 @@ def predict(
     stocks,
     st,
     end,
-    pick_import_feature=True,
+    pick_import_feature=False,
 ):
 
     train = RfcTrainConfig()
+    train.train_type = TRAIN_TYPE.predict
+    train.model_type = MODEL_TYPE.rfc
     train.model = joblib.load("models/rfc_macd.joblib")
     #############################################################
     data = MACDDataBuilterConfig()
+    data.train_type = TRAIN_TYPE.predict
     data.stocks = stocks
     data.train_config = train
+    data.trainging_idx = 0
     data.st = st
     data.end = end
     data.pick_import_feature = pick_import_feature
-    return train(cfg=data)
+    return start_train_flow(cfg=data)
 
 
 #

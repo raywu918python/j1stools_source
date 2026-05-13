@@ -157,9 +157,10 @@ def flow(data: DataBuilderResult, train_cfg: BaseTrainConfig):
                 result["future_return"] = data.xtest_future_return
 
                 return TrainResult(result, None)
-            else:
-                base_predict(train_cfg.model, data.xtest, data.ytest)
-                accuracy = batter_predict(train_cfg, data.xtest, data.ytest)
+        else:
+            print("222 base_predict")
+            base_predict(train_cfg.model, data.xtest, data.ytest)
+            accuracy = batter_predict(train_cfg, data.xtest, data.ytest)
         print(f"回測時間: {time()-st:.2f} 秒")
         return TrainResult(None, accuracy)
 

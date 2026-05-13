@@ -7,6 +7,7 @@ from j1stools.CONFIG import BaseDataBuilderConfig
 
 def rfc_split_date(df: pd.DataFrame, is_gen_train=True, is_gen_test=True, cfg: BaseDataBuilderConfig = None):
     # group
+    print("333is_gen_test", is_gen_test, "is_gen_train", is_gen_train)
     df = df.sort_values(by=cfg.index_cols)
     # x = df[[col for col in df.columns if col.startswith("f_")]]
     x = df
@@ -17,6 +18,7 @@ def rfc_split_date(df: pd.DataFrame, is_gen_train=True, is_gen_test=True, cfg: B
     elif is_gen_train:
         return x, None, y, None
     elif is_gen_test:
+        print("222is_gen_test", is_gen_test, "is_gen_train", is_gen_train)
         return None, x, None, y
     else:
         raise Exception("參數錯誤")

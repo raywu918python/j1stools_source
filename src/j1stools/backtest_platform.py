@@ -11,7 +11,7 @@ pd.set_option("future.no_silent_downcasting", True)
 from pandas_ta import ma
 import vectorbt as vbt
 
-from j1stools import j1s_chart, parquet_db
+from j1stools import j1s_chart, parquet_db, rfc_main
 
 # ============================================================
 # 技術指標
@@ -328,11 +328,11 @@ class Chart(IntFlag):
 
 
 def main(
-    st="2024-01",
-    end="2099-01",
+    st="2024-01-01",
+    end="2099-01-01",
 ):
-    # signal = lgbm_main.predict(parquet_db.query_stocks_ids_list(), st, end)
-    # signal.to_csv("signal.csv", index=False)
+    signal = rfc_main.predict(parquet_db.query_stocks_ids_list(), st, end)
+    signal.to_csv("signal.csv", index=False)
     signal = local_signals()
     show_chart = Chart.N
     show_chart |= Chart.PF
@@ -397,7 +397,7 @@ def main(
 
 #############################################################
 # optimize(local_signals())
-# main()
+main()
 
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()
