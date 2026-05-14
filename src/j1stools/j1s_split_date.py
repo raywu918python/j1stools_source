@@ -5,7 +5,7 @@ from sklearn.model_selection import train_test_split
 from j1stools.CONFIG import BaseDataBuilderConfig
 
 
-def rfc_split_date(df: pd.DataFrame, is_gen_train=True, is_gen_test=True, trainging_idx=0.8):
+def rfc_split_date(df: pd.DataFrame, is_gen_train=False, is_gen_test=False, trainging_idx=0.8):
     """
     xtrain, xtest, ytrain, ytest
     """

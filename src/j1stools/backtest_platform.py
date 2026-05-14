@@ -2,6 +2,7 @@ from enum import IntFlag
 import random
 from time import time
 
+import joblib
 import numpy as np
 import pandas as pd
 from regex import P
@@ -41,14 +42,14 @@ class PrepareDate:
         full_df["date"] = pd.to_datetime(full_df["date"])
         input = pd.merge(
             full_df,
-            signal[["date", "stock_id", "y_proba"]],
+            signal[["date", "stock_id", 2]],
             on=["date", "stock_id"],
             how="left",  # 只取索引部分  # 以全時段為準
         ).fillna(
             0
         )  # 沒預測到的（ATR太小的）補 0
 
-        self.proba = input.pivot(index="date", columns="stock_id", values="y_proba").fillna(0)
+        self.proba = input.pivot(index="date", columns="stock_id", values=2).fillna(0)
         self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
         self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
         self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
@@ -331,9 +332,11 @@ def main(
     st="2024-01-01",
     end="2099-01-01",
 ):
-    signal = rfc_main.test(parquet_db.query_stocks_ids_list(), st, end)
-    signal.to_csv("signal.csv", index=False)
-    signal = local_signals()
+    model = joblib.load("models/rfc_macd.joblib")
+    signal = rfc_main.predict(model, parquet_db.query_stocks_ids_list(), st, end)
+    print(signal.head())
+    # signal.to_csv("signal.csv", index=False)
+    # signal = local_signals()
     show_chart = Chart.N
     show_chart |= Chart.PF
     show_chart |= Chart.FLOW

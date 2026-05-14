@@ -4,7 +4,6 @@ from pdb import run
 import random
 from time import time
 from math import e
-from venv import create
 
 
 from attr import field
@@ -55,7 +54,7 @@ def predict_today():
         pick_import_feature=False,
         run_type=TRAIN_TYPE.predict,
     )
-    signal = signal[signal["y_proba"] > 0.6]
+    signal = signal[signal[2] > 0.6]
     signal.sort_values(by=["date", "y_proba"], inplace=True)
     signal.to_csv("signal_today.csv", index=False)
 
@@ -192,12 +191,22 @@ def predict(model, stocks, st, end):
     return batter_predict(model, x, y)
 
 
-def create_model():
-    pass
+def model_release():
+    stocks = parquet_db.query_stocks_ids_list()
+    st = "2015-01-01"
+    end = "2024-01-01"
+    df = prepare_data(stocks, st, end)
+    x, _, y, _ = rfc_split_date(df, is_gen_train=True, trainging_idx=1)
+    x = x[[col for col in x.columns if col.startswith("f_")]] if x is not None else None
+    x, y = drop_na_inf(x, y)
+    model = gen_rfc_model()
+    model.fit(x, y)
+    joblib.dump(model, get_full_name("rfc"))
 
 
 # predict_today()
 # main()
 # predict()
 # optimize()
-main()
+# model_release()
+# main()
