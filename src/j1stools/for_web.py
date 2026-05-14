@@ -1,4 +1,4 @@
-from j1stools import j1s_chart, lgbm_main, parquet_db
+from j1stools import j1s_chart, lgbm_main, parquet_db, rfc_main
 from j1stools.backtest_engine import backtest_engine
 from j1stools.backtest_platform import PrepareDate, prepare_data_backtest
 

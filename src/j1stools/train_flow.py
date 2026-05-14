@@ -86,6 +86,7 @@ def batter_predict(model, xtest, ytest, threshold=0.5):
     yproba = model.predict_proba(xtest)
     dfyproba = pd.DataFrame(yproba, index=xtest.index)
     dfyproba.reset_index(drop=False, inplace=True)
+    dfyproba.columns = dfyproba.columns.astype(str)
     y_pred_threshold = (yproba >= threshold).astype(int)
     y_test_binarized = label_binarize(ytest, classes=[0, 1, 2])
     try:
