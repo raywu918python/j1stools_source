@@ -4,6 +4,7 @@ from enum import Enum, Flag, auto
 class FEATURE_TYPE(Flag):
     normal = auto()
     macd = auto()
+    macd_is_continuous = auto()
     today = auto()
     abcd = auto()
     margin = auto()

@@ -63,25 +63,12 @@ def print_matrix(ytest, yproba, accuracy_label2, is_better=False):
         print(f"進場勝率: {accuracy_label2:.2%}")
 
 
-def get_full_name(train_cfg: BaseTrainConfig):
-    return f"model/{train_cfg.model_type.name}{train_cfg.t}_{train_cfg.n}.joblib"
+def get_full_name(model_name: str):
+    now = datetime.now()
+    t = now.strftime("%Y%m%d_%H%M%S")
+    return f"model/{model_name}{t}.joblib"
 
 
-# def prepare_df(self):
-#     df: pd.DataFrame = self.load_stocks()
-#     if (df.shape[0]) < 500:
-#         raise Exception("no data")
-#     # check df
-#     df.dropna(inplace=True)
-#     df = df.sort_values("date")
-#     features = self.__get_features_name(df)
-#     split_date_df = self.__split_date(df)
-#     self.train_df, self.test_df = split_date_df[0], split_date_df[1]
-#     # X_train = self.train_df[features]
-#     # y_train = self.train_df["target"]
-#     X_test = self.test_df[features]
-#     y_test = self.test_df["target"]
-#     return None, None, X_test, y_test
 def base_predict(model, xtest, ytest):
     # base
     y_proba = model.predict(xtest)
@@ -95,9 +82,10 @@ def base_predict(model, xtest, ytest):
     return accuracy
 
 
-def batter_predict(train_cfg: BaseTrainConfig, xtest, ytest):
-    yproba = train_cfg.model.predict_proba(xtest)
-    y_pred_threshold = (yproba >= train_cfg.threshold).astype(int)
+def batter_predict(model, xtest, ytest, threshold=0.5):
+    yproba = model.predict_proba(xtest)
+    dfyproba = pd.DataFrame(yproba, index=xtest.index)
+    y_pred_threshold = (yproba >= threshold).astype(int)
     y_test_binarized = label_binarize(ytest, classes=[0, 1, 2])
     try:
         accuracy = precision_score(y_test_binarized, y_pred_threshold, average=None, zero_division=0)[2]
@@ -106,24 +94,73 @@ def batter_predict(train_cfg: BaseTrainConfig, xtest, ytest):
         print("y_pred_threshold", y_pred_threshold[:5], sep="\n")
         raise e
     print_matrix(ytest=ytest, yproba=yproba, accuracy_label2=accuracy, is_better=True)
-    print_trading_date(train_cfg.threshold, xtest, yproba)
-    print_target_counts(ytest)
-    # import ft
-    if train_cfg.is_print_import_ft:
-        print_ft_important(train_cfg)
-    return yproba
+    # print_trading_date(threshold, dfyproba)
+    # print_target_counts(ytest)
+    return dfyproba
+
+
+# def start_train_lgbm_r(xtrain, ytrain, xtest, ytest, xval, yval, model, model_name="lgbm_r", function_train=None, df=None):
+#     keep_latest_ten_files("./model")
+
+#     xtest = xtest[[col for col in xtest.columns if col.startswith("f_")]] if xtest is not None else None
+#     xtrain = xtrain[[col for col in xtrain.columns if col.startswith("f_")]] if xtrain is not None else None
+#     xval = xval[[col for col in xval.columns if col.startswith("f_")]] if xval is not None else None
+
+#     t1 = time()
+#     #############################################################train
+#     function_train(xtrain, ytrain, model, df)
+#     joblib.dump(model, get_full_name(model_name))
+#     print(f"訓練時間: {time()-t1:.2f} 秒")
+#     #############################################################test
+#     expected_features = model.feature_names_in_
+#     xtest = xtest[expected_features]
+#     y_pred = model.predict(xtest)  # 輸出 0~1 的排名預
+#     print(xtrain.isna().mean().sort_values(ascending=False
+#     corr = xtrain.corrwith(data.ytrain)
+#     print(corr.sort_values(
+#     print(data.ytrain.describe(
+#     print(pd.Series(y_pred).describe())
+#     print(f">=0.8 的數量：{(y_pred >= 0.8).sum()}
+#     result = xtest.copy()
+#     result["predicted_rank"] = y_pred
+#     result["future_return"] = xtest_future_retu
+#     return TrainResult(result, None)
+
+
+def start_train(
+    xtrain,
+    ytrain,
+    xtest,
+    ytest,
+    model,
+    function_train,
+    model_name="rfc",
+    df=None,
+):
+    keep_latest_ten_files("./model")
+
+    xtest = xtest[[col for col in xtest.columns if col.startswith("f_")]] if xtest is not None else None
+    xtrain = xtrain[[col for col in xtrain.columns if col.startswith("f_")]] if xtrain is not None else None
+
+    t1 = time()
+    #############################################################train
+    function_train(xtrain, ytrain, model, df)
+    joblib.dump(model, get_full_name(model_name))
+    #############################################################test
+    expected_features = model.feature_names_in_
+    xtest = xtest[expected_features]
+    base_predict(model, xtest, ytest)
+    accuracy = batter_predict(model, xtest, ytest)
+    print(f"訓練時間: {time()-t1:.2f} 秒")
+    return accuracy
 
 
 def flow(data: DataBuilderResult, train_cfg: BaseTrainConfig):
     keep_latest_ten_files("./model")
 
-    data.xtest = (
-        data.xtest[[col for col in data.xtest.columns if col.startswith("f_")]] if data.xtest is not None else None
-    )
-    data.xtrain = (
-        data.xtrain[[col for col in data.xtrain.columns if col.startswith("f_")]] if data.xtrain is not None else None
-    )
-    data.xval = data.xval[[col for col in data.xval.columns if col.startswith("f_")]] if data.xval is not None else None
+    xtest = xtest[[col for col in xtest.columns if col.startswith("f_")]] if xtest is not None else None
+    xtrain = xtrain[[col for col in xtrain.columns if col.startswith("f_")]] if xtrain is not None else None
+    xval = xval[[col for col in xval.columns if col.startswith("f_")]] if xval is not None else None
 
     print(f"*" * 30, f"第 {train_cfg.n} 次訓練")
     st = time()
@@ -137,14 +174,14 @@ def flow(data: DataBuilderResult, train_cfg: BaseTrainConfig):
     if train_cfg.train_type == TRAIN_TYPE.train or train_cfg.train_type == TRAIN_TYPE.predict:
         # test
         expected_features = train_cfg.model.feature_names_in_
-        data.xtest = data.xtest[expected_features]
+        xtest = xtest[expected_features]
         if train_cfg.train_type == TRAIN_TYPE.train:
             if train_cfg.model_type == MODEL_TYPE.lgbm_r:
-                y_pred = model.predict(data.xtest)  # 輸出 0~1 的排名預測值
+                y_pred = model.predict(xtest)  # 輸出 0~1 的排名預測值
 
-                print(data.xtrain.isna().mean().sort_values(ascending=False))
+                print(xtrain.isna().mean().sort_values(ascending=False))
 
-                corr = data.xtrain.corrwith(data.ytrain)
+                corr = xtrain.corrwith(data.ytrain)
                 print(corr.sort_values())
 
                 print(data.ytrain.describe())
@@ -152,15 +189,15 @@ def flow(data: DataBuilderResult, train_cfg: BaseTrainConfig):
                 print(pd.Series(y_pred).describe())
                 print(f">=0.8 的數量：{(y_pred >= 0.8).sum()}")
 
-                result = data.xtest.copy()
+                result = xtest.copy()
                 result["predicted_rank"] = y_pred
-                result["future_return"] = data.xtest_future_return
+                result["future_return"] = xtest_future_return
 
                 return TrainResult(result, None)
         else:
             print("222 base_predict")
-            base_predict(train_cfg.model, data.xtest, data.ytest)
-            accuracy = batter_predict(train_cfg, data.xtest, data.ytest)
+            base_predict(train_cfg.model, xtest, data.ytest)
+            accuracy = batter_predict(train_cfg, xtest, data.ytest)
         print(f"回測時間: {time()-st:.2f} 秒")
         return TrainResult(None, accuracy)
 
@@ -184,30 +221,29 @@ def check_null_inf(xtrain):
     print(f"*" * 30, "isnull\n", xtrain.isnull().any())
 
 
-def print_ft_important(train_cfg: BaseTrainConfig):
-    model = train_cfg.model
+def print_ft_important(model):
     feat_importances = pd.Series(
         model.feature_importances_,
         index=model.feature_names_in_,
     )
-    print("*" * 30, f"feat_importances {feat_importances.size}")
+    print("=" * 60, f"feat_importances {feat_importances.size}")
     print(feat_importances.sort_values(ascending=False))
-    with open(f"log/log_import_ft{train_cfg.n}.py", "w", encoding="utf-8") as f:
+    with open(f"log/log_import_ft.py", "w", encoding="utf-8") as f:
         f.write(str(feat_importances.sort_values(ascending=False).index.tolist()))
 
 
-def gen_gold_signal(xtest, y_proba: pd.Series) -> pd.DataFrame:
-    results = pd.DataFrame(y_proba, index=xtest.index)
-    results.reset_index(drop=False, inplace=True)
-    # print(results.head())
-    signal_label_2 = results.iloc[:, 4]
-    return results
+# def gen_gold_signal(xtest, yproba: pd.Series) -> pd.DataFrame:
+#     yproba.reset_index(drop=False, inplace=True)
+#     yproba.rename(columns={2: "yproba"}, inplace=True)
+#     yproba.to_csv("signal.csv")
+
+#     return yproba
 
 
-def print_trading_date(threshold, xtest: pd.DataFrame, y_proba):
+def print_trading_date(threshold, dfyproba: pd.DataFrame):
     print(f"*" * 30, "print_trading_date")
-    xtest = gen_gold_signal(xtest, y_proba)
-    gold_signals = xtest[xtest.iloc[:, 4] > threshold]
+    dfyproba.reset_index(drop=False, inplace=True)
+    gold_signals = dfyproba[dfyproba.loc[:, 2] > threshold]
 
     print(f"門檻設定: {threshold}")
     print(f"訊號量: {len(gold_signals)}")
@@ -238,7 +274,7 @@ def keep_latest_ten_files(directory_path: str):
             print(f"已刪除舊檔案: {file.name}")
 
 
-def start_train_flow(cfg: BaseDataBuilderConfig):
+def start_train_flow_bak(cfg: BaseDataBuilderConfig):
     print(f"*" * 60, f"{cfg.train_config.model_type.value} start")
 
     data = DataBuilder(cfg).build()
@@ -254,7 +290,7 @@ def start_train_flow(cfg: BaseDataBuilderConfig):
     if train.model_type == MODEL_TYPE.lgbm_r:
         return top
     else:
-        signal = gen_gold_signal(data.xtest, y_proba).iloc[:, [0, 1, 4]]
+        signal = gen_gold_signal(xtest, y_proba).iloc[:, [0, 1, 4]]
         signal.rename(columns={2: "y_proba"}, inplace=True)
         signal["date"] = pd.to_datetime(signal["date"])
 

@@ -15,7 +15,7 @@ from j1stools.label_builder import profit_label
 from j1stools.train_flow import BaseTrainConfig
 
 
-from j1stools.obj_filter_data import FilterData
+from j1stools.data_filter import FilterData
 from j1stools import rfc_main as rfc
 
 
@@ -158,7 +158,7 @@ def check():
     import pandas as pd
 
     df = profit_label(df)
-    df = FilterData.get_data(df, True, False)
+    df = FilterData.filter(df, True, False)
     # parquet_db.create_features(df)
     # 資料在這裡刪
     df.set_index(["date", "stock_id"], inplace=True)

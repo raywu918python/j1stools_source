@@ -17,31 +17,31 @@ from j1stools.obj_random_feature import RandomFeature
 from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
 
 
-def gen_feature(df, cfg: BaseDataBuilderConfig) -> pd.DataFrame:
-    st = time()
-
+def gen_feature(df, feature_type: FEATURE_TYPE) -> pd.DataFrame:
+    t1 = time()
+    st = df["date"].min()
+    end = df["date"].max()
     # df = VolumeFeature.init(df)
     # df = PriceFeature.add_feature(df)
     #
     # df = AtrFeature.add_feature(df)
     #############################################################
-    if FEATURE_TYPE.today in cfg.feature_type:
+    if FEATURE_TYPE.today in feature_type:
         # return generate_features_t1(df)
         df = generate_features_today(df)
-    if FEATURE_TYPE.macd in cfg.feature_type:
-        if cfg.is_continuous:
-            df = f_macd_continuous_features(df)
-        else:
-            df = f_macd_hist_divergences_with_atr(df)
-    if FEATURE_TYPE.abcd in cfg.feature_type:
+    if FEATURE_TYPE.macd_is_continuous in feature_type:
+        df = f_macd_continuous_features(df)
+    if FEATURE_TYPE.macd in feature_type:
+        df = f_macd_hist_divergences_with_atr(df)
+    if FEATURE_TYPE.abcd in feature_type:
         # df = abcd_feature.detect_n_shape_features(df, seg=9)
         # df = abcd_feature.detect_trend_features(df)
         df = abcd_feature.detect_n_shape_features(df, seg=9)
-    if FEATURE_TYPE.test_lgbm_feature in cfg.feature_type:
-        market_df = parquet_db.query_price(["0050"], cfg.st, cfg.end)
+    if FEATURE_TYPE.test_lgbm_feature in feature_type:
+        market_df = parquet_db.query_price(["0050"], st, end)
         # df = lgbm_feature(df, market_df)
         df = lgbm_all_f_features(df, market_df)
-    if FEATURE_TYPE.margin in cfg.feature_type:
+    if FEATURE_TYPE.margin in feature_type:
         # df = abcd_feature.detect_trend_features(df)
         df = margin_feature.detect_short_squeeze_features(df)
 
@@ -76,21 +76,19 @@ def gen_feature(df, cfg: BaseDataBuilderConfig) -> pd.DataFrame:
             "f_n_confirmed",
         ]
 
-    if FEATURE_TYPE.power in cfg.feature_type:
-        markget_df = parquet_db.query_price(["0050"], cfg.st, cfg.end)
+    if FEATURE_TYPE.power in feature_type:
+        markget_df = parquet_db.query_price(["0050"], st, end)
         df = power_feature.detect_relative_strength_features(df, markget_df)
         # df = df[feature_cols]
-    if FEATURE_TYPE.normal in cfg.feature_type:
+    if FEATURE_TYPE.normal in feature_type:
         df = HvFeature.add_feature(df)
         df = MaFeature.add_feature(df)
         df = MacdFeature.add_feature(df)
         df = MarketFeature.add_feature(df)
         df = VolumePriceFeature.add_feature(df)
-        df = RandomFeature.add_feature(df)
-        df = generate_features_today(df)
-        df = f_macd_continuous_features(df)
+        # df = RandomFeature.add_feature(df)
         # df = f_macd_hist_divergences_with_atr(df)
-    print(f"gen_feature: {time() - st:.2f} 秒")
+    print(f"gen_feature: {time() - t1:.2f} 秒")
 
     f = df.select_dtypes(include="number").describe().T.round(2)
     print(f)

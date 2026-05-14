@@ -331,7 +331,7 @@ def main(
     st="2024-01-01",
     end="2099-01-01",
 ):
-    signal = rfc_main.predict(parquet_db.query_stocks_ids_list(), st, end)
+    signal = rfc_main.test(parquet_db.query_stocks_ids_list(), st, end)
     signal.to_csv("signal.csv", index=False)
     signal = local_signals()
     show_chart = Chart.N

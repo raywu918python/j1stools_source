@@ -8,11 +8,16 @@ from venv import create
 
 
 from attr import field
+from numpy import mod, sign
+import pandas as pd
 from requests import head
 from sklearn.model_selection import train_test_split
 from sympy import rf
+from torch import mode
 from websockets import Data
 
+from j1stools import feature_builder, label_builder
+from j1stools import data_filter
 from j1stools.CONFIG import (
     MACDDataBuilterConfig,
     NormalDataBuilderConfig,
@@ -20,10 +25,20 @@ from j1stools.CONFIG import (
     TodayDataBuilterConfig,
 )
 from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, MODEL_TYPE, TRAIN_TYPE
+from j1stools.j1s_split_date import rfc_split_date
+from j1stools.model_builder import gen_rfc_model
+from j1stools.model_utils import drop_na_inf
 import j1stools.parquet_db as parquet_db
 import joblib
 
-from j1stools.train_flow import start_train_flow
+from j1stools.train_flow import (
+    batter_predict,
+    get_full_name,
+    keep_latest_ten_files,
+    print_ft_important,
+    start_train,
+)
+from j1stools.train_function import rfc_train_function
 
 
 def predict_today():
@@ -45,27 +60,27 @@ def predict_today():
     signal.to_csv("signal_today.csv", index=False)
 
 
-def predict(
-    stocks,
-    st,
-    end,
-    pick_import_feature=False,
-):
+# def predict(
+#     stocks,
+#     st,
+#     end,
+#     pick_import_feature=False,
+# ):
 
-    train = RfcTrainConfig()
-    train.train_type = TRAIN_TYPE.predict
-    train.model_type = MODEL_TYPE.rfc
-    train.model = joblib.load("models/rfc_macd.joblib")
-    #############################################################
-    data = MACDDataBuilterConfig()
-    data.train_type = TRAIN_TYPE.predict
-    data.stocks = stocks
-    data.train_config = train
-    data.trainging_idx = 0
-    data.st = st
-    data.end = end
-    data.pick_import_feature = pick_import_feature
-    return start_train_flow(cfg=data)
+#     train = RfcTrainConfig()
+#     train.train_type = TRAIN_TYPE.predict
+#     train.model_type = MODEL_TYPE.rfc
+#     train.model = joblib.load("models/rfc_macd.joblib")
+#     #############################################################
+#     data = MACDDataBuilterConfig()
+#     data.train_type = TRAIN_TYPE.predict
+#     data.stocks = stocks
+#     data.train_config = train
+#     data.trainging_idx = 0
+#     data.st = st
+#     data.end = end
+#     data.pick_import_feature = pick_import_feature
+#     return start_train(cfg=data)
 
 
 #
@@ -85,37 +100,104 @@ def predict(
 
 
 def main():
-    train = RfcTrainConfig()
-    train.model_type = MODEL_TYPE.rfc
-    # train.model = (joblib.load("models/rfc_macd.joblib"),)
-    #############################################################
-    data = MACDDataBuilterConfig()
-    data.feature_type = FEATURE_TYPE.macd
-    # data.atrcfg = FILTER_CONFIG.none_
-    # data.feature_type = FEATURE_TYPE.abcd
-    data.train_config = train
-    data.st = "2024-01-01"
-    data.end = "2099-01-01"
-    signal = start_train_flow(cfg=data)
-    #############################################################
-    signal = signal[signal["y_proba"] > 0.5]
-    signal.sort_values(by=["date", "y_proba"], inplace=True)
-    signal.to_csv("signal_today.csv", index=False)
+    stocks = parquet_db.query_stocks_ids_list()
+    st = "2015-01-01"
+    end = "2024-01-01"
+    # signal = train(stocks=stocks, st=st, end=end)
+
+    predict(model=joblib.load("models/rfc.joblib"), stocks=stocks, st=st, end=end)
+
+
+# predict(
+# model=joblib.load("models/rfc.joblib"),
+# df=parquet_db.query_price(stocks, st, end),
+# )
+
+#############################################################
+# signal.sort_values(by=["date", "yproba"], inplace=True)
+# signal.to_csv("signal_today.csv", index=False)
 
 
 def optimize():
     model = joblib.load("model/rfc20260504_233715_0.joblib")
     exec(
         stocks=parquet_db.query_stocks_no_etf(),
-        st="2024-01-01",
-        end="2099-01-01",
+        st="2018-01-01",
+        end="2021-01-01",
         model=model,
         run_type=TRAIN_TYPE.predict,
         pick_import_feature=True,
     )
 
 
+def prepare_data(stocks, st, end):
+    df = parquet_db.query_price(stocks, st, end)
+    print("filter.before:", df.shape)
+    df = feature_builder.gen_feature(df, FEATURE_TYPE.macd)
+    df = label_builder.profit_label(df)
+    df = data_filter.filter(df, True, FILTER_TYPE.none_, FILTER_TYPE.add_)
+    print("filter.after:", df.shape)
+    # 資料在這裡刪
+    df.set_index(["date", "stock_id"], inplace=True)
+    df.sort_index(level=["date", "stock_id"], inplace=True)
+    return df
+
+
+def train(
+    stocks=parquet_db.query_stocks_no_etf(),
+    st="2015-01-01",
+    end="2099-01-01",
+    trainging_idx=0.8,
+    model=None,
+    pick_import_feature=False,
+):
+    print(f"=" * 60, "rfc start")
+    keep_latest_ten_files("./model")
+    model = gen_rfc_model() if model is None else model
+
+    df = prepare_data(stocks, st, end)
+
+    xtrain, xtest, ytrain, ytest = rfc_split_date(df, True, True, trainging_idx)
+    xtrain, ytrain = drop_na_inf(xtrain, ytrain)
+    xtest, ytest = drop_na_inf(xtest, ytest)
+    print("drop_na_inf:", len(xtrain), len(ytrain), len(xtest), len(ytest))
+
+    if pick_import_feature:
+        xtrain = feature_builder.pick_feature(xtrain)
+        xtest = feature_builder.pick_feature(xtest)
+
+    xtrain = xtrain[[col for col in xtrain.columns if col.startswith("f_")]] if xtrain is not None else None
+    xtest = xtest[[col for col in xtest.columns if col.startswith("f_")]] if xtest is not None else None
+    print("=" * 60, "train")
+    rfc_train_function(xtrain, ytrain, model, df)
+    joblib.dump(model, get_full_name("rfc"))
+    print("=" * 60, "test")
+
+    expected_features = model.feature_names_in_
+    xtest = xtest[expected_features]
+    dfyproba = batter_predict(model, xtest, ytest)
+    print("=" * 60, "signal")
+    print(dfyproba.head())
+    print_ft_important(model)
+
+
+def predict(model, stocks, st, end):
+
+    df = prepare_data(stocks, st, end)
+    _, x, _, y = rfc_split_date(df, is_gen_test=True, is_gen_train=False, trainging_idx=0)
+    x = x[[col for col in x.columns if col.startswith("f_")]] if x is not None else None
+    x, y = drop_na_inf(x, y)
+    expected_features = model.feature_names_in_
+    x = x[expected_features]
+    return batter_predict(model, x, y)
+
+
+def create_model():
+    pass
+
+
 # predict_today()
 # main()
 # predict()
 # optimize()
+main()

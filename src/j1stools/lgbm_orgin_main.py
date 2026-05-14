@@ -21,12 +21,12 @@ from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 from j1stools.data_builder import DataBuilder
 from j1stools.model_builder import gen_lgbm_c_model, gen_lgbm_orgin_model
-from j1stools.train_flow import start_train_flow
+from j1stools.train_flow import start_train
 import joblib
 
 
 def add_rfc_feature(df, data: BaseDataBuilderConfig):
-    signal = rfc_main.predict(
+    signal = rfc_main.test(
         stocks=data.stocks,
         st=data.st,
         end=data.end,

@@ -7,7 +7,6 @@ from j1stools.RESULT import DataBuilderResult
 from j1stools.j1s_split_date import lgbm_split_date, rfc_split_date
 from j1stools.model_utils import drop_na_inf
 from j1stools.TYPE import FEATURE_TYPE, MODEL_TYPE, TRAIN_TYPE
-from j1stools.obj_filter_data import FilterData
 from j1stools.label_builder import create_label, power_label, profit_label
 
 
@@ -49,7 +48,7 @@ class DataBuilder:
             df = profit_label(df, data.label_cfg.hold_days, data.label_cfg.profit_target, data.label_cfg.stop_loss)
         #############################################################filter data
         print("delete.before:", df.shape)
-        df = FilterData.get_data(
+        df = FilterData.filter(
             df,
             log=True,
             ichcfg=data.ichcfg,
@@ -76,7 +75,6 @@ class DataBuilder:
                 xtest_future_return = df["future_return"]  # 實際報酬率 (只有 lgbm_r 才有)
             else:
                 xtest_future_return = None
-
             xtrain, xval, xtest, ytrain, yval, ytest = lgbm_prepare_data(df, is_gen_train_data, is_gen_test_data, data)
 
             return DataBuilderResult(
@@ -97,6 +95,7 @@ class DataBuilder:
 
 def rfc_prepare_data(df, is_gen_train_data, is_gen_test_data, cfg):
     xtrain, xtest, ytrain, ytest = rfc_split_date(df, is_gen_train_data, is_gen_test_data, cfg)
+
     if is_gen_train_data:
         xtrain, ytrain = drop_na_inf(xtrain, ytrain)
         if cfg.pick_import_feature:
