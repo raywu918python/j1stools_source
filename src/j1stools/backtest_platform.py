@@ -332,7 +332,7 @@ def main(
     st="2024-01-01",
     end="2099-01-01",
 ):
-    model = joblib.load("models/rfc_macd.joblib")
+    model = joblib.load("models/rfc_macd_6xx.joblib")
     signal = rfc_main.predict(model, parquet_db.query_stocks_ids_list(), st, end)
     print(signal.head())
     # signal.to_csv("signal.csv", index=False)
