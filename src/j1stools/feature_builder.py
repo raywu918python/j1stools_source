@@ -8,7 +8,7 @@ from j1stools.CONFIG import BaseDataBuilderConfig
 from j1stools.TYPE import FEATURE_TYPE
 from j1stools.lgbm_test_feature import lgbm_all_f_features, lgbm_feature
 from j1stools.lite_db import margin
-from j1stools.macdh_divergences import f_macd_continuous_features, f_macd_hist_divergences_with_atr
+from j1stools.macdh_divergences import f_macd_hist_divergences_with_atr
 from j1stools.obj_hv_feature import HvFeature
 from j1stools.obj_ma_feature import MaFeature
 from j1stools.obj_macd_feature import MacdFeature
