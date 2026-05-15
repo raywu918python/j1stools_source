@@ -1,4 +1,5 @@
 from re import L
+import signal
 from time import time
 
 import random
@@ -59,26 +60,33 @@ def query_no_rfc(stocks, st, end):
     )
 
 
-def predict(stocks, st, end):
-    model = joblib.load("models/lgbm.joblib")
-    return exec(
-        stocks=stocks,
-        st=st,
-        end=end,
-        model=model,
-        is_using_rfc=True,
-        pick_import_feature=False,
-        run_type=TRAIN_TYPE.predict,
-    )
+def predict(
+    stocks,
+    st,
+    end,
+):
+
+    models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
+
+    df = prepare_data(stocks, st, end)
+
+    features = [col for col in df.columns if col.startswith("f_")]
+    df["pred_return"] = np.max([m.predict(df[features]) for m in models], axis=0)
+    # df["pred_return"] = np.mean([m.predict(df[features]) for m in models], axis=0)
+
+    signal = df[df["pred_return"] > 0.02]
+    # print(signal.head(10))
+    signal.to_csv("lgbm_signal.csv", index=False)
+    # print(signal.sort_values(by=["pred_return"], ascending=False).head(10))
 
 
 def main():
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2015-01-01"
-    end = "2024-01-01"
-    signal = train(stocks=stocks, st=st, end=end)
+    st = "2024-01-01"
+    end = "2099-01-01"
+    # models, scores = train(stocks=stocks, st=st, end=end)
 
-    # predict(model=joblib.load("models/rfc.joblib"), stocks=stocks, st=st, end=end)
+    predict(stocks=stocks, st=st, end=end)
 
 
 def prepare_data(stocks, st, end):
@@ -105,7 +113,6 @@ def train(
     stocks=parquet_db.query_stocks_no_etf(),
     st="2015-01-01",
     end="2018-01-01",
-    trainging_idx=0.8,
     pick_import_feature=False,
 ):
     print(f"=" * 60, "lgbm start")
@@ -131,10 +138,10 @@ def train(
     print("=" * 60, "train")
     # lgbm_r_function_train(xtrain, ytrain, xval, yval, model, df)
     # lgbm_r_function_train(xtrain, ytrain, xval, yval, model)
-    models, scores = walk_forward_train(df, params)
+    return walk_forward_train(df, params)
 
     # joblib.dump(model, get_full_name("lgbm_r"))
-    print("=" * 60, "test")
+    # print("=" * 60, "test")
 
     # expected_features = model.feature_names_in_
     # xtest = xtest[expected_features]
@@ -173,9 +180,6 @@ def main_bak():
 
 
 from sklearn.model_selection import TimeSeriesSplit
-
-import lightgbm as lgb
-
 import lightgbm as lgb
 
 params = {
@@ -194,19 +198,20 @@ params = {
 }
 
 
-# Fold 2: 2017-12 ~ 2019-06
-# 2018年發生了：
-# - 中美貿易戰開打
-# - 台股從11000點跌到9000點
-# - 全年跌幅約 -8%
-# - 很多技術指標和籌碼訊號完全失效
-# Fold 3: 2019-06 ~ 2020-12
-# 包含了：
-# - 2019年反彈大多頭
-# - 2020年疫情急跌後的V型反彈
-# - 動能和籌碼訊號在這段時間特別有效
 def walk_forward_train(df, params, n_splits=5):
-
+    """
+    Fold 2: 2017-12 ~ 2019-06
+    2018年發生了：
+    - 中美貿易戰開打
+    - 台股從11000點跌到9000點
+    - 全年跌幅約 -8%
+    - 很多技術指標和籌碼訊號完全失效
+    Fold 3: 2019-06 ~ 2020-12
+    包含了：
+    - 2019年反彈大多頭
+    - 2020年疫情急跌後的V型反彈
+    - 動能和籌碼訊號在這段時間特別有效
+    """
     df = df.sort_values("date").reset_index(drop=True)
 
     dates = df["date"].unique()
