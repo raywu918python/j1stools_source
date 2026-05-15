@@ -61,5 +61,20 @@ def gen_lgbm_c_model():
 def gen_lgbm_orgin_model():
     import lightgbm as lgb
 
-    train_data = lgb.Dataset(X, label=y, categorical_feature=["f_group"], free_raw_data=False)
+    params = {
+        "objective": "regression",
+        "metric": "rmse",
+        "num_leaves": 127,
+        "learning_rate": 0.05,
+        "min_child_samples": 20,
+        "subsample": 0.8,
+        "subsample_freq": 1,
+        "colsample_bytree": 0.8,
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0,
+        "n_jobs": -1,
+        "verbose": -1,
+    }
+    lgb = lgb.LGBMRegressor(**params)
+    # train_data = lgb.Dataset(X, label=y, categorical_feature=["f_group"], free_raw_data=False)
     return lgb

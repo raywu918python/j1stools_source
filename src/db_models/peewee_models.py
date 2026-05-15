@@ -137,6 +137,19 @@ class MyappPositions(BaseModel):
             (('stock_id', 'entry_date'), True),
         )
 
+class MyappStocksibbuysell(BaseModel):
+    buy = BigIntegerField()
+    date = DateField()
+    name = CharField()
+    sell = BigIntegerField()
+    stock_id = CharField()
+
+    class Meta:
+        table_name = 'myapp_stocksibbuysell'
+        indexes = (
+            (('stock_id', 'date', 'name'), True),
+        )
+
 class MyappStocksinfo(BaseModel):
     group = CharField()
     market_type = CharField()

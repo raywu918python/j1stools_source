@@ -36,16 +36,13 @@ def lgbm_function_train(d: DataBuilderResult, model):
     )
 
 
-def lgbm_r_function_train(d: DataBuilderResult, model):
-
-    print(d.xtrain.dtypes)
-    print(d.ytrain.dtypes)
+def lgbm_r_function_train(xtrain, ytrain, xval, yval, model):
 
     # print(d.xtrain.index)
     model.fit(
-        d.xtrain,
-        d.ytrain,
-        eval_set=[(d.xval, d.yval)],
+        xtrain,
+        ytrain,
+        eval_set=[(xval, yval)],
         eval_metric="rmse",  # 改這裡
         callbacks=[
             lgb.early_stopping(stopping_rounds=50),

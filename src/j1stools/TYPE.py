@@ -10,6 +10,7 @@ class FEATURE_TYPE(Flag):
     margin = auto()
     power = auto()
     test_lgbm_feature = auto()
+    margin_ibbuysell = auto()
 
 
 class MODEL_TYPE(Enum):

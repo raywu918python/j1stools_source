@@ -29,10 +29,12 @@ def lgbm_split_date(
     df: pd.DataFrame,
     is_gen_train_data=True,
     is_gen_test_data=True,
-    cfg: BaseDataBuilderConfig = None,
 ):
+    """
+    xtrain, xval, xtest, ytrain, yval, ytest
+    """
     # group
-    df.sort_values(by=cfg.index_cols, inplace=True)
+    df.sort_values(by=["date", "stock_id"], inplace=True)
 
     # x = df[[col for col in df.columns if col.startswith("f_")]]
     x = df

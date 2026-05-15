@@ -115,3 +115,32 @@ def test():
 
 
 # Label.test()
+
+
+def add_target(df, price_col="close", stock_col="stock_id", date_col="date", forward_days=20):
+    """
+    計算每支股票的20天超額報酬作為 target
+
+    target = 個股20天漲跌幅 - 大盤20天漲跌幅
+    大盤用所有股票的平均漲跌幅代替
+    """
+    df = df.copy().sort_values([stock_col, date_col]).reset_index(drop=True)
+
+    # 個股20天漲跌幅
+    df["stock_return"] = df.groupby(stock_col)[price_col].transform(lambda x: x.shift(-forward_days) / x - 1)
+
+    # 大盤20天漲跌幅（用所有股票每日平均收盤價代替）
+    index_price = df.groupby(date_col)[price_col].mean().rename("index_price").reset_index()
+
+    index_price["index_return"] = index_price["index_price"].shift(-forward_days) / index_price["index_price"] - 1
+
+    df = df.merge(index_price[[date_col, "index_return"]], on=date_col, how="left")
+
+    # target = 超額報酬
+    df["target"] = df["stock_return"] - df["index_return"]
+
+    # 移除暫時欄位和 NaN
+    df = df.drop(columns=["stock_return", "index_return"])
+    df = df.dropna(subset=["target"]).reset_index(drop=True)
+
+    return df

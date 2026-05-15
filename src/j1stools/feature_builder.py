@@ -3,7 +3,7 @@ from time import time
 
 import pandas as pd
 
-from j1stools import abcd_feature, margin_feature, parquet_db, power_feature
+from j1stools import abcd_feature, margin_feature, margin_ibbuysell_feature, parquet_db, power_feature
 from j1stools.CONFIG import BaseDataBuilderConfig
 from j1stools.TYPE import FEATURE_TYPE
 from j1stools.lgbm_test_feature import lgbm_all_f_features, lgbm_feature
@@ -15,17 +15,26 @@ from j1stools.obj_macd_feature import MacdFeature
 from j1stools.obj_market_feature import MarketFeature
 from j1stools.obj_random_feature import RandomFeature
 from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
+from j1stools.train_flow import print_target_counts
 
 
-def gen_feature(df, feature_type: FEATURE_TYPE) -> pd.DataFrame:
+def gen_feature(
+    df: pd.DataFrame,
+    feature_type: FEATURE_TYPE = FEATURE_TYPE.normal,
+    dfs: list = None,
+) -> pd.DataFrame:
     t1 = time()
-    st = df["date"].min()
-    end = df["date"].max()
+    if df is not None:
+        st = df["date"].min()
+        end = df["date"].max()
     # df = VolumeFeature.init(df)
     # df = PriceFeature.add_feature(df)
     #
+
     # df = AtrFeature.add_feature(df)
     #############################################################
+    if FEATURE_TYPE.margin_ibbuysell in feature_type:
+        df = margin_ibbuysell_feature.add_feature(dfs[0], dfs[1], dfs[2])
     if FEATURE_TYPE.today in feature_type:
         # return generate_features_t1(df)
         df = generate_features_today(df)

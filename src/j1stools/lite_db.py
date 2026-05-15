@@ -1,6 +1,6 @@
 import pandas as pd
 
-from db_models.peewee_models import MyappActivestocks, MyappStocksinfo, MyappStocksmargin
+from db_models.peewee_models import MyappActivestocks, MyappStocksibbuysell, MyappStocksinfo, MyappStocksmargin
 from j1stools import parquet_db
 
 
@@ -67,6 +67,27 @@ def margin_group(stocks, st, end):
     df_group = pd.DataFrame(df_group)
     df = pd.merge(df_margin, df_group, on=["stock_id"], how="left")
     print(df.head().T)
+    return df
+
+
+def ibbuysell(stocks, st, end):
+    # date: str, # 日期
+    # stock_id: str, # 股票代碼
+    # buy: int64, # 買進
+    # name: str, # 類別
+    # sell: int64 # 賣出
+    data = (
+        MyappStocksibbuysell.select()
+        .where(
+            MyappStocksibbuysell.stock_id.in_(stocks),
+            MyappStocksibbuysell.date >= st,
+            MyappStocksibbuysell.date < end,
+        )
+        .dicts()
+    )
+    df = pd.DataFrame(data)
+    df = df.drop(columns=["id"])
+    df["date"] = pd.to_datetime(df["date"])
     return df
 
 

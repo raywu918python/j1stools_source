@@ -3,6 +3,9 @@ import pandas as pd
 import pandas as pd
 import numpy as np
 
+import pandas as pd
+import numpy as np
+
 
 def add_feature(df, df_ibbuysell, df_market):
     """
@@ -22,32 +25,23 @@ def add_feature(df, df_ibbuysell, df_market):
     base = base.drop_duplicates(subset=["date", "stock_id"])
     base = base.sort_values(["stock_id", "date"]).reset_index(drop=True)
 
-    # ── 1. 大盤特徵 ────────────────────────────────────────────────────────────
+    # ── 1. 大盤特徵（只保留環境特徵，不放報酬率）─────────────────────────────
     mkt = df_market.copy()
     mkt["date"] = pd.to_datetime(mkt["date"])
     mkt = mkt.sort_values("date").reset_index(drop=True)
 
-    mkt["f_market_return_1d"] = mkt["close"].pct_change(1)
-    mkt["f_market_return_5d"] = mkt["close"].pct_change(5)
-    mkt["f_market_return_20d"] = mkt["close"].pct_change(20)
-    mkt["f_market_return_60d"] = mkt["close"].pct_change(60)
+    # 市場波動率：描述現在是高波動還是低波動環境
     mkt["f_market_volatility_20d"] = mkt["close"].pct_change(1).rolling(20).std()
-    mkt["f_market_amplitude"] = (mkt["high"] - mkt["low"]) / mkt["close"]
+    # 市場成交量熱度
     mkt["f_market_volume_20d"] = mkt["volume"] / mkt["volume"].rolling(20).mean()
 
-    mkt_cols = [
-        "date",
-        "f_market_return_1d",
-        "f_market_return_5d",
-        "f_market_return_20d",
-        "f_market_return_60d",
-        "f_market_volatility_20d",
-        "f_market_amplitude",
-        "f_market_volume_20d",
-    ]
-    # 保留大盤 volume 供後續成交量比計算
-    mkt_merge = mkt[mkt_cols + ["volume"]].rename(columns={"volume": "_mkt_volume"})
-
+    # 保留大盤 close/volume 供後續計算，不直接當特徵
+    mkt_merge = mkt[["date", "f_market_volatility_20d", "f_market_volume_20d", "close", "volume"]].rename(
+        columns={
+            "close": "_mkt_close",
+            "volume": "_mkt_volume",
+        }
+    )
     base = base.merge(mkt_merge, on="date", how="left")
 
     # ── 2. 法人籌碼特徵 ────────────────────────────────────────────────────────
@@ -102,11 +96,9 @@ def add_feature(df, df_ibbuysell, df_market):
         base[f"{col}_streak"] = g[col].transform(lambda x: x.groupby((x <= 0).cumsum()).cumcount().where(x > 0, 0))
 
     # ── 3. 融資融券特徵 ────────────────────────────────────────────────────────
-    # 餘額變化
     base["f_margin_balance_change"] = base["margin_purchase_today_balance"] - base["margin_purchase_yesterday_balance"]
     base["f_short_balance_change"] = base["short_sale_today_balance"] - base["short_sale_yesterday_balance"]
 
-    # 變化率
     base["f_margin_balance_change_pct"] = base["f_margin_balance_change"] / base[
         "margin_purchase_yesterday_balance"
     ].replace(0, np.nan)
@@ -114,18 +106,15 @@ def add_feature(df, df_ibbuysell, df_market):
         0, np.nan
     )
 
-    # 使用率
     base["f_margin_utilization"] = base["margin_purchase_today_balance"] / base["margin_purchase_limit"].replace(
         0, np.nan
     )
     base["f_short_utilization"] = base["short_sale_today_balance"] / base["short_sale_limit"].replace(0, np.nan)
 
-    # 券資比
     base["f_short_margin_ratio"] = base["short_sale_today_balance"] / base["margin_purchase_today_balance"].replace(
         0, np.nan
     )
 
-    # 融資滾動變化
     base["f_margin_balance_change_5d"] = g["margin_purchase_today_balance"].transform(lambda x: x - x.shift(5))
     base["f_margin_balance_change_10d"] = g["margin_purchase_today_balance"].transform(lambda x: x - x.shift(10))
 
@@ -155,18 +144,19 @@ def add_feature(df, df_ibbuysell, df_market):
 
     base["f_momentum_cross"] = base["f_return_5d"] - base["f_return_20d"]
 
-    # ── 6. 相對大盤特徵 ────────────────────────────────────────────────────────
-    base["f_relative_strength_1d"] = base["f_return_1d"] - base["f_market_return_1d"]
-    base["f_relative_strength_5d"] = base["f_return_5d"] - base["f_market_return_5d"]
-    base["f_relative_strength_20d"] = base["f_return_20d"] - base["f_market_return_20d"]
+    # ── 6. 相對大盤特徵（用大盤 close 計算，不直接放大盤報酬）────────────────
+    mkt_return_5d = base["_mkt_close"].pct_change(5)
+    mkt_return_20d = base["_mkt_close"].pct_change(20)
+
+    base["f_relative_strength_5d"] = base["f_return_5d"] - mkt_return_5d
+    base["f_relative_strength_20d"] = base["f_return_20d"] - mkt_return_20d
 
     base["f_volume_market_ratio"] = base["volume"] / base["_mkt_volume"].replace(0, np.nan)
 
-    # 波動率相對大盤
     base["f_volatility_vs_market"] = base["f_stock_volatility_20d"] / base["f_market_volatility_20d"].replace(0, np.nan)
 
     # ── 7. 清理並回傳 ──────────────────────────────────────────────────────────
-    base = base.drop(columns=["_mkt_volume"])
+    base = base.drop(columns=["_mkt_close", "_mkt_volume"])
 
     f_cols = [c for c in base.columns if c.startswith("f_")]
     result = base[["date", "stock_id", "target"] + f_cols].copy()

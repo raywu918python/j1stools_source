@@ -147,7 +147,6 @@ def train(
     st="2015-01-01",
     end="2099-01-01",
     trainging_idx=0.8,
-    model=None,
     pick_import_feature=False,
 ):
     print(f"=" * 60, "rfc start")
