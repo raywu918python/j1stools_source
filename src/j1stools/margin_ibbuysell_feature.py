@@ -90,6 +90,31 @@ def add_feature(df, df_ibbuysell, df_market):
     )
     base = base.merge(ib_pivot, on=["date", "stock_id"], how="left")
 
+    # 法人資料 shift 1天（法人資料收盤後才公布，實際交易用昨天的資料）
+    ib_cols = ["f_net_dealer_hedging", "f_net_dealer_self", "f_net_foreign", "f_net_trust", "f_net_institutional_total"]
+    for col in ib_cols:
+        base[col] = base.groupby("stock_id")[col].transform(lambda x: x.shift(1))
+
+    # 融資融券原始欄位 shift 1天（融資融券隔天早上才公布）
+    margin_cols = [
+        "margin_purchase_buy",
+        "margin_purchase_cash_repayment",
+        "margin_purchase_limit",
+        "margin_purchase_sell",
+        "margin_purchase_today_balance",
+        "margin_purchase_yesterday_balance",
+        "offset_loan_and_short",
+        "short_sale_buy",
+        "short_sale_cash_repayment",
+        "short_sale_limit",
+        "short_sale_sell",
+        "short_sale_today_balance",
+        "short_sale_yesterday_balance",
+    ]
+    for col in margin_cols:
+        if col in base.columns:
+            base[col] = base.groupby("stock_id")[col].transform(lambda x: x.shift(1))
+
     # 法人買超比例化（相對個股成交量，讓大小股可以比較）
     for col in ["f_net_foreign", "f_net_trust", "f_net_dealer_self", "f_net_institutional_total"]:
         base[f"{col}_pct"] = base[col] / base["volume"].replace(0, np.nan)
@@ -155,21 +180,3 @@ def add_feature(df, df_ibbuysell, df_market):
     result = result.dropna(subset=["target"]).reset_index(drop=True)
 
     return result
-
-
-# LGBM 最佳參數（walk-forward 調參結果，平均 IC：0.2546）
-PARAMS = {
-    "objective": "regression",
-    "metric": "rmse",
-    "num_leaves": 255,
-    "learning_rate": 0.03,
-    "min_child_samples": 50,
-    "subsample": 0.8,
-    "subsample_freq": 1,
-    "colsample_bytree": 0.7,
-    "reg_alpha": 0.1,
-    "reg_lambda": 2.0,
-    "n_estimators": 2000,
-    "n_jobs": -1,
-    "verbose": -1,
-}

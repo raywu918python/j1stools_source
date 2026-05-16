@@ -56,9 +56,21 @@ def predict(
 
 
 def main():
+    """
+        每天收盤後：
+      → select_stocks → 更新候選清單
+
+    每週一：
+      → calc_feature_ic → 監控特徵健康度
+
+    每月底：
+      → walk_forward_train → 重新訓練模型
+      → evaluate_selection → 確認新模型有效
+      → 下個月用新模型
+    """
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2024-01-01"
-    end = "2026-02-01"  # "2026-02-01"
+    st = "2015-01-01"
+    end = "2024-01-01"  # "2026-02-01"
     models, scores = train(stocks=stocks, st=st, end=end)
 
     # start_backtest(stocks=stocks, st=st, end=end)
@@ -86,8 +98,8 @@ def prepare_data(stocks, st, end):
 
 def train(
     stocks=parquet_db.query_stocks_no_etf(),
-    st="2015-01-01",
-    end="2024-01-01",
+    st="2024-01-01",
+    end="2026-02-01",
     pick_import_feature=False,
 ):
     print(f"=" * 60, "lgbm start")
@@ -96,14 +108,14 @@ def train(
 
     df_feature = prepare_data(stocks, st, end)
 
-    models, scores = walk_forward_train(
-        df_feature,
-        n_splits=5,
-    )
+    # models, scores = walk_forward_train(
+    #     df_feature,
+    #     n_splits=5,
+    # )
+    models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
+    result_df, stock_df, bottom_df = evaluate_selection(df_feature, models)
 
-    result_df, stock_df = evaluate_selection(df_feature, models)
-
-    analyze_frequent(stock_df)
+    summary = analyze_frequent(stock_df)
 
     joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
     raise Exception("未完成")
@@ -281,10 +293,9 @@ def evaluate_selection(df, models, start_date=None, forward_days=20, top_n=20):
     all_dates = sorted(df["date"].unique())
     if start_date:
         all_dates = [d for d in all_dates if d >= pd.to_datetime(start_date)]
-
     rebalance_dates = all_dates[::forward_days]
 
-    all_results, all_stocks = [], []
+    all_results, all_stocks, all_bottom = [], [], []
 
     for date in rebalance_dates:
         today = df[df["date"] == date]
@@ -294,7 +305,9 @@ def evaluate_selection(df, models, start_date=None, forward_days=20, top_n=20):
         preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
         today = today.copy()
         today["pred_score"] = preds
+
         top = today.nlargest(top_n, "pred_score")
+        bottom = today.nsmallest(top_n, "pred_score")
 
         all_results.append(
             {
@@ -306,29 +319,45 @@ def evaluate_selection(df, models, start_date=None, forward_days=20, top_n=20):
                 "median_return": top["target"].median(),
                 "min_return": top["target"].min(),
                 "max_return": top["target"].max(),
+                "bot_win_rate_0": (bottom["target"] > 0).mean(),
+                "bot_win_rate_5": (bottom["target"] > 0.05).mean(),
+                "bot_avg_return": bottom["target"].mean(),
+                "bot_max_return": bottom["target"].max(),
+                "bot_min_return": bottom["target"].min(),
             }
         )
         for stock_id, target in zip(top["stock_id"], top["target"]):
             all_stocks.append({"date": date, "stock_id": stock_id, "target": target})
+        for stock_id, target in zip(bottom["stock_id"], bottom["target"]):
+            all_bottom.append({"date": date, "stock_id": stock_id, "target": target})
 
     result_df = pd.DataFrame(all_results)
     stock_df = pd.DataFrame(all_stocks)
+    bottom_df = pd.DataFrame(all_bottom)
 
     print("=" * 50)
     print(f"驗證期間：{result_df['date'].min().date()} ~ {result_df['date'].max().date()}")
     print(f"總期數：{len(result_df)}")
-    print(f"\n【勝率（跑贏大盤的比例）】")
-    print(f"target > 0%  : {result_df['win_rate_0'].mean():.1%}")
-    print(f"target > 5%  : {result_df['win_rate_5'].mean():.1%}")
-    print(f"target > 10% : {result_df['win_rate_10'].mean():.1%}")
-    print(f"\n【最大漲幅（超額報酬）】")
+    print(f"\n【前{top_n}名（模型看好）】")
+    print(f"勝率 > 0%  : {result_df['win_rate_0'].mean():.1%}")
+    print(f"勝率 > 5%  : {result_df['win_rate_5'].mean():.1%}")
+    print(f"勝率 > 10% : {result_df['win_rate_10'].mean():.1%}")
     print(f"平均最大超額：  {result_df['avg_max_return'].mean():.2%}")
     print(f"中位數最大超額：{result_df['median_return'].mean():.2%}")
     print(f"平均最差股票：  {result_df['min_return'].mean():.2%}")
     print(f"平均最強股票：  {result_df['max_return'].mean():.2%}")
+    print(f"\n【後{top_n}名（模型看壞）】")
+    print(f"勝率 > 0%  : {result_df['bot_win_rate_0'].mean():.1%}")
+    print(f"勝率 > 5%  : {result_df['bot_win_rate_5'].mean():.1%}")
+    print(f"平均最大超額：  {result_df['bot_avg_return'].mean():.2%}")
+    print(f"平均最差股票：  {result_df['bot_min_return'].mean():.2%}")
+    print(f"平均最強股票：  {result_df['bot_max_return'].mean():.2%}")
+    print(f"\n【前後對比（區別能力）】")
+    print(f"勝率差距：  {result_df['win_rate_0'].mean() - result_df['bot_win_rate_0'].mean():.1%}")
+    print(f"超額差距：  {result_df['avg_max_return'].mean() - result_df['bot_avg_return'].mean():.2%}")
     print("=" * 50)
 
-    return result_df, stock_df
+    return result_df, stock_df, bottom_df
 
 
 def analyze_frequent(stock_df, min_count=5):
