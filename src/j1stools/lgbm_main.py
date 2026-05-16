@@ -187,9 +187,9 @@ import lightgbm as lgb
 params = {
     "objective": "regression",
     "metric": "rmse",
-    "num_leaves": 255,  # 127 → 255
-    "learning_rate": 0.03,  # 0.05 → 0.03 更細緻
-    "min_child_samples": 50,  # 20 → 50 更穩定
+    "num_leaves": 127,  # 127 → 255
+    "learning_rate": 0.05,  # 0.05 → 0.03 更細緻
+    "min_child_samples": 20,  # 20 → 50 更穩定
     "subsample": 0.8,
     "subsample_freq": 1,
     "colsample_bytree": 0.7,  # 0.8 → 0.7 更多隨機性
