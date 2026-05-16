@@ -147,8 +147,10 @@ def add_target(
     print(f"target < -80% 的筆數：{(df['target'] < -0.8).sum()}")
 
     df_bug_price = df[df["target"] > 2]
-    print(f"target > 1% 的筆數：{len(df_bug_price)}")
-    df_bug_price.to_csv("bug_price.csv", index=False)
+    if len(df_bug_price) > 0:
+        print(f"target > 1% 的筆數：{len(df_bug_price)}")
+        df_bug_price.to_csv("bug_price.csv", index=False)
+        raise Exception("有異常值")
 
     df = df.drop(columns=["stock_return", "index_return"])
     df = df.dropna(subset=["target"]).reset_index(drop=True)

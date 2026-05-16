@@ -234,7 +234,7 @@ def backtest(
         df_feature,
         models,
         df_market,
-        top_n=20,
+        top_n=10,
         forward_days=20,
         use_filter=True,
         start_date="2024-01-01",
