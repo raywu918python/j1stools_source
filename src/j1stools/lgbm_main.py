@@ -71,22 +71,24 @@ def predict(
     df = prepare_data(stocks, st, end)
 
     features = [col for col in df.columns if col.startswith("f_")]
-    df["pred_return"] = np.max([m.predict(df[features]) for m in models], axis=0)
-    # df["pred_return"] = np.mean([m.predict(df[features]) for m in models], axis=0)
+    # df["pred_return"] = np.max([m.predict(df[features]) for m in models], axis=0)
+    df["pred_return"] = np.mean([m.predict(df[features]) for m in models], axis=0)
 
-    signal = df[df["pred_return"] > 0.02]
+    df = df[["date", "stock_id", "pred_return"]]
     # print(signal.head(10))
+    signal = df[df["pred_return"] > 0.05]
+    signal.sort_values(by=["date", "pred_return"], inplace=True)
     signal.to_csv("lgbm_signal.csv", index=False)
     # print(signal.sort_values(by=["pred_return"], ascending=False).head(10))
 
 
 def main():
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2024-01-01"
-    end = "2099-01-01"
-    # models, scores = train(stocks=stocks, st=st, end=end)
-
-    predict(stocks=stocks, st=st, end=end)
+    st = "2015-01-01"
+    end = "2024-01-01"
+    models, scores = train(stocks=stocks, st=st, end=end)
+    # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
+    # predict(stocks=stocks, st=st, end=end)
 
 
 def prepare_data(stocks, st, end):
@@ -112,7 +114,7 @@ def prepare_data(stocks, st, end):
 def train(
     stocks=parquet_db.query_stocks_no_etf(),
     st="2015-01-01",
-    end="2018-01-01",
+    end="2024-01-01",
     pick_import_feature=False,
 ):
     print(f"=" * 60, "lgbm start")
