@@ -117,7 +117,7 @@ def test():
 # Label.test()
 
 
-def add_target(df, price_col="close", stock_col="stock_id", date_col="date", forward_days=20):
+def add_target(df, price_col="close", stock_col="stock_id", date_col="date", forward_days=15):
     """
     計算每支股票的20天超額報酬作為 target
 
