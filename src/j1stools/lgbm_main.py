@@ -1,3 +1,4 @@
+from math import e
 from re import L
 import signal
 from time import time
@@ -30,38 +31,6 @@ from j1stools.train_flow import get_full_name, keep_latest_ten_files, start_trai
 import joblib
 
 from j1stools.train_function import lgbm_r_function_train
-
-
-def add_rfc_feature(df, data: BaseDataBuilderConfig):
-    signal = rfc_main.test(
-        stocks=data.stocks,
-        st=data.st,
-        end=data.end,
-        pick_import_feature=data.pick_import_feature,
-    )
-    signal.rename(columns={"y_proba": "f_rfc"}, inplace=True)
-    signal = signal[["date", "stock_id", "f_rfc"]]
-    #
-    return pd.merge(
-        df,
-        signal[["date", "stock_id", "f_rfc"]],
-        on=["date", "stock_id"],
-        how="left",  # 只取索引部分  # 以全時段為準
-    ).fillna(
-        0
-    )  # 沒預測到的（ATR太小的）補 0
-
-
-def query_no_rfc(stocks, st, end):
-
-    model = joblib.load("models/lgbm_20231231_no_rfc.joblib")
-    return exec(
-        stocks,
-        st,
-        end,
-        0,
-        model,
-    )
 
 
 def predict(
@@ -139,72 +108,18 @@ def train(
 ):
     print(f"=" * 60, "lgbm start")
     keep_latest_ten_files("./model")
-    # model = gen_lgbm_orgin_model()
-
-    # df = prepare_data(stocks, st, end)
-
-    # xtrain, xval, xtest, ytrain, yval, ytest = lgbm_split_date(df, True, True, trainging_idx)
-    # xtrain, ytrain = drop_na_inf(xtrain, ytrain)
-    # xval, yval = drop_na_inf(xval, yval)
-    # xtest, ytest = drop_na_inf(xtest, ytest)
-
-    # print("drop_na_inf:", len(xtrain), len(ytrain), len(xval), len(yval), len(xtest), len(ytest))
-
     if pick_import_feature:
         xtrain = feature_builder.pick_feature(xtrain)
         xtest = feature_builder.pick_feature(xtest)
-
-    # xtrain = xtrain[[col for col in xtrain.columns if col.startswith("f_")]] if xtrain is not None else None
-    # xtest = xtest[[col for col in xtest.columns if col.startswith("f_")]] if xtest is not None else None
-    # xval = xval[[col for col in xtest.columns if col.startswith("f_")]] if xtest is not None else None
     print("=" * 60, "train")
-    # lgbm_r_function_train(xtrain, ytrain, xval, yval, model, df)
-    # lgbm_r_function_train(xtrain, ytrain, xval, yval, model)
 
     df_margin = lite_db.margin(stocks, st, end)
     df_market = parquet_db.query_price(["0050"], st, end)
     df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
-    # df_margin = label_builder.add_target_forward(df_margin, df_market=df_market)
-    # df_feature = feature_builder.gen_feature(
-    #     None,
-    #     FEATURE_TYPE.margin_ibbuysell,
-    #     dfs=[df_margin, df_ibbuysell, df_market],
-    # )
-
-    # # 加入過濾欄位
-    # df = add_market_filter(df_feature, df_market)
-
-    # # 查看各 fold 的可交易比例
-
-    # fold_ranges = [
-    #     ("Fold1", "2016-07-06", "2017-12-22"),
-    #     ("Fold2", "2017-12-25", "2019-06-24"),
-    #     ("Fold3", "2019-06-25", "2020-12-11"),
-    #     ("Fold4", "2020-12-14", "2022-06-13"),
-    #     ("Fold5", "2022-06-14", "2023-12-01"),
-    # ]
-
-    # for name, start, end in fold_ranges:
-    #     mask = (df["date"] >= start) & (df["date"] <= end)
-    #     ratio = df.loc[mask, "can_trade"].mean()
-    #     print(f"{name}: 可交易比例 {ratio:.1%}")
-
-    # # 訓練時只用可交易的資料
-    # df_filtered = apply_filter(df)
-
-    # ic_df = calc_feature_ic(df_feature, period_start="2023-10-01", period_end="2023-12-31")
-    # print(ic_df)
-
-    # valid_features = ic_df[ic_df["abs_ic"] >= 0.02]["feature"].tolist()
-    # print(f"保留特徵數：{len(valid_features)}")
-
-    # 重新訓練
-    # for days in [10, 20, 30, 60]:
     df_margin = label_builder.add_target(
         df_margin,
         df_market=df_market,
         forward_days=20,
-        use_max=True,
     )
     df_feature = feature_builder.gen_feature(
         None,
@@ -213,18 +128,13 @@ def train(
     )
     models, scores = walk_forward_train(
         df_feature,
-        params=params,
         n_splits=5,
     )
-    # print(f"forward_days={days}, 平均IC={np.mean(scores):.4f}\n")
 
-    # 用最後一個 fold 的模型預測
-    # 取一個有代表性的日期來分析
+    stock_df = evaluate_selection(df_feature, models)
 
-    # models, scores = walk_forward_train(df_feature, params)
+    analyze_frequent(stock_df)
 
-    # models, scores = walk_forward_rolling(df_feature, params, train_years=3)
-    # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
     joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
     raise Exception("未完成")
 
@@ -305,73 +215,7 @@ def start_backtest(
     # print_ft_important(model)
 
 
-def main_bak():
-    train = LgbmTrainConfig()
-    train.is_use_rfc = False
-    # train.rfc_proba = add_rfc_feature(df, data)
-    # train.model = (joblib.load("models/rfc_macd.joblib"),)
-    ##############################################################
-    # l = BaseLabelConfig()
-    # l.hold_days = 20
-    # l.profit_target = 0.1
-    # l.stop_loss = -0.1
-    #############################################################
-    data = MACDDataBuilterConfig()
-    # data.is_continuous = True
-    # data.label_cfg = l
-    data.feature_type = FEATURE_TYPE.test_lgbm_feature
-    # data.feature_type = FEATURE_TYPE.today
-    data.atrcfg = FILTER_TYPE.none_
-    data.train_config = train
-    data.st = "2024-01-01"
-    data.end = "2099-01-01"
-    signal = start_train(cfg=data)
-    #############################################################
-    signal = signal[signal["y_proba"] > 0.5]
-    signal.sort_values(by=["date", "y_proba"], inplace=True)
-    signal.to_csv("signal_today.csv", index=False)
-
-
-def calc_feature_ic(df, period_start, period_end):
-    """
-    計算指定期間內每個特徵的 IC
-
-    IC = 特徵值與 target 的相關係數
-    代表這個特徵對未來報酬的預測能力
-
-    Parameters
-    ----------
-    df           : 完整特徵 df
-    period_start : 計算期間起始日
-    period_end   : 計算期間結束日
-    """
-
-    df = df.copy()
-    df["date"] = pd.to_datetime(df["date"])
-
-    # 取指定期間
-    mask = (df["date"] >= period_start) & (df["date"] <= period_end)
-    period_df = df[mask].dropna()
-
-    feature_cols = [c for c in df.columns if c.startswith("f_")]
-
-    ic_results = []
-    for col in feature_cols:
-        ic = np.corrcoef(period_df[col].fillna(0), period_df["target"])[0, 1]
-        ic_results.append(
-            {
-                "feature": col,
-                "ic": ic,
-                "abs_ic": abs(ic),
-            }
-        )
-
-    ic_df = pd.DataFrame(ic_results).sort_values("abs_ic", ascending=False).reset_index(drop=True)
-
-    return ic_df
-
-
-params = {
+PARAMS = {
     "objective": "regression",
     "metric": "rmse",
     "num_leaves": 255,
@@ -388,54 +232,49 @@ params = {
 }
 
 
-def walk_forward_rolling(df, params, train_years=3, n_splits=5):
+def walk_forward_train(df, params=PARAMS, n_splits=5):
+    """
+    擴張窗口 Walk-forward 訓練
 
+    每個 fold 的訓練資料逐步擴張（累積所有歷史），
+    驗證資料為該 fold 之後的時間段。
+    使用 early stopping 防止過擬合。
+
+    Parameters
+    ----------
+    df       : 完整特徵 df，需包含 date, stock_id, target, f_* 欄位
+    params   : LGBM 參數字典，預設使用 PARAMS
+    n_splits : fold 數量，預設5
+
+    Returns
+    -------
+    models : list，所有 fold 的 LGBMRegressor 模型
+    scores : list，每個 fold 的 IC（Information Coefficient）
+
+    Notes
+    -----
+    實際選股時使用最後2個fold的模型平均（models[-2:]），
+    因為這兩個 fold 的訓練資料最新，最貼近當前市場。
+    """
     df = df.sort_values("date").reset_index(drop=True)
     dates = df["date"].unique()
     tss = TimeSeriesSplit(n_splits=n_splits)
-
     feature_cols = [c for c in df.columns if c.startswith("f_")]
-    scores = []
-    models = []
+    scores, models = [], []
 
     for fold, (train_idx, val_idx) in enumerate(tss.split(dates)):
-        val_dates = dates[val_idx]
-
-        # 驗證集的起始日
-        val_start = pd.to_datetime(val_dates.min())
-
-        # 訓練集只取驗證集往前推 train_years 年
-        train_start = val_start - pd.DateOffset(years=train_years)
-        train_dates = dates[train_idx]
-        train_dates = [d for d in train_dates if pd.to_datetime(d) >= train_start]
-
-        train = df[df["date"].isin(train_dates)]
-        val = df[df["date"].isin(val_dates)]
-
+        train = df[df["date"].isin(dates[train_idx])]
+        val = df[df["date"].isin(dates[val_idx])]
         X_train, y_train = train[feature_cols], train["target"]
         X_val, y_val = val[feature_cols], val["target"]
 
         model = lgb.LGBMRegressor(**params)
         model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[
-                lgb.early_stopping(50),
-                lgb.log_evaluation(50),
-            ],
+            X_train, y_train, eval_set=[(X_val, y_val)], callbacks=[lgb.early_stopping(50), lgb.log_evaluation(50)]
         )
 
-        pred = model.predict(X_val)
-        score = np.corrcoef(pred, y_val)[0, 1]
-
-        print(
-            f"Fold {fold+1} 訓練期：{pd.to_datetime(train_dates[0]).date()} ~ "
-            f"{pd.to_datetime(train_dates[-1]).date()}  "
-            f"驗證期：{val_dates.min().date()} ~ {val_dates.max().date()}  "
-            f"IC：{score:.4f}"
-        )
-
+        score = np.corrcoef(model.predict(X_val), y_val)[0, 1]
+        print(f"Fold {fold+1} IC: {score:.4f}")
         scores.append(score)
         models.append(model)
 
@@ -443,278 +282,105 @@ def walk_forward_rolling(df, params, train_years=3, n_splits=5):
     return models, scores
 
 
-def walk_forward_train_bak(df, params, n_splits=5, ic_threshold=0.02):
-
-    df = df.sort_values("date").reset_index(drop=True)
-
-    dates = df["date"].unique()
-    tss = TimeSeriesSplit(n_splits=n_splits)
-
-    all_feature_cols = [c for c in df.columns if c.startswith("f_")]
-
-    scores = []
-    models = []
-    selected_features_list = []
-
-    for fold, (train_idx, val_idx) in enumerate(tss.split(dates)):
-        train_dates = dates[train_idx]
-        val_dates = dates[val_idx]
-
-        train = df[df["date"].isin(train_dates)]
-        val = df[df["date"].isin(val_dates)]
-
-        # 用訓練期資料計算每個特徵的 IC
-        ic_results = []
-        for col in all_feature_cols:
-            tmp = train[[col, "target"]].dropna()
-            if len(tmp) < 100:
-                continue
-            ic = np.corrcoef(tmp[col], tmp["target"])[0, 1]
-            ic_results.append({"feature": col, "abs_ic": abs(ic)})
-
-        ic_df = pd.DataFrame(ic_results)
-
-        # 篩選 IC 高於門檻的特徵
-        feature_cols = ic_df[ic_df["abs_ic"] >= ic_threshold]["feature"].tolist()
-
-        print(f"Fold {fold+1} 保留特徵數：{len(feature_cols)}")
-
-        X_train, y_train = train[feature_cols], train["target"]
-        X_val, y_val = val[feature_cols], val["target"]
-
-        model = lgb.LGBMRegressor(**params)
-        model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[
-                lgb.early_stopping(50),
-                lgb.log_evaluation(50),
-            ],
-        )
-
-        pred = model.predict(X_val)
-        score = np.corrcoef(pred, y_val)[0, 1]
-
-        print(f"Fold {fold+1} IC: {score:.4f}")
-        scores.append(score)
-        models.append(model)
-        selected_features_list.append(feature_cols)
-
-    print(f"\n平均 IC: {np.mean(scores):.4f}")
-    return models, scores, selected_features_list
-
-
-def walk_forward_train(df, params, n_splits=5, feature_cols=None):
+def evaluate_selection(df, models, start_date=None, forward_days=20, top_n=20):
     """
-    Fold 2: 2017-12 ~ 2019-06
-    2018年發生了：
-    - 中美貿易戰開打
-    - 台股從11000點跌到9000點
-    - 全年跌幅約 -8%
-    - 很多技術指標和籌碼訊號完全失效
-    Fold 3: 2019-06 ~ 2020-12
-    包含了：
-    - 2019年反彈大多頭
-    - 2020年疫情急跌後的V型反彈
-    - 動能和籌碼訊號在這段時間特別有效
+    驗證 A 模型選股品質
+
+    A 模型的 target 是最大漲幅，不適合用固定出場的累積報酬衡量。
+    正確的驗證方式是：
+      - 勝率：選出的股票有多少比例在 forward_days 內跑贏大盤
+      - 最大漲幅：選出的股票平均能達到多高的超額報酬
+
+    Parameters
+    ----------
+    df           : 完整特徵 df，需包含 date, stock_id, target, f_* 欄位
+    models       : walk_forward_train 回傳的模型列表
+    start_date   : 驗證起始日，若無則使用全部資料
+    forward_days : 換倉頻率（天），預設20
+    top_n        : 每期選幾支股票，預設20
+
+    Returns
+    -------
+    result_df : 每期統計結果（勝率、漲幅）
+    stock_df  : 每期選出的個股明細
     """
-    df = df.sort_values("date").reset_index(drop=True)
-
-    dates = df["date"].unique()
-    tss = TimeSeriesSplit(n_splits=n_splits)
-
-    if feature_cols is None:
-        feature_cols = [c for c in df.columns if c.startswith("f_")]
-
-    scores = []
-    models = []
-
-    for fold, (train_idx, val_idx) in enumerate(tss.split(dates)):
-        train_dates = dates[train_idx]
-        val_dates = dates[val_idx]
-
-        train = df[df["date"].isin(train_dates)]
-        val = df[df["date"].isin(val_dates)]
-
-        X_train, y_train = train[feature_cols], train["target"]
-        X_val, y_val = val[feature_cols], val["target"]
-
-        model = lgb.LGBMRegressor(**params)
-        model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[
-                lgb.early_stopping(50),
-                lgb.log_evaluation(50),
-            ],
-        )
-
-        pred = model.predict(X_val)  # ← 修正這裡
-        score = np.corrcoef(pred, y_val)[0, 1]
-
-        print(f"Fold {fold+1} IC: {score:.4f}")
-        scores.append(score)
-        models.append(model)
-
-    # 用最後一個 fold 的模型看
-    last_model = models[-1]
-
-    importance = pd.DataFrame(
-        {"feature": feature_cols, "importance": last_model.feature_importances_},
-    ).sort_values("importance", ascending=False)
-
-    print(importance.head(20))
-
-    dates = df["date"].unique()
-    tss = TimeSeriesSplit(n_splits=5)
-
-    # for fold, (train_idx, val_idx) in enumerate(tss.split(dates)):
-    #     val_dates = dates[val_idx]
-    #     print(f"Fold {fold+1}: {val_dates.min()} ~ {val_dates.max()}")
-
-    print(f"\n平均 IC: {np.mean(scores):.4f}")
-
-    date = "2024-01-02"
-    today = df[df["date"] == date].copy()
-
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
     feature_cols = [c for c in df.columns if c.startswith("f_")]
-    preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
-    today["pred_score"] = preds
-
-    top20 = today.nlargest(20, "pred_score")[["stock_id", "pred_score", "target"]]
-
-    print("=== 問題一：選出的股票 ===")
-    print(top20["stock_id"].tolist())
-
-    print("\n=== 問題二：選對的機率 ===")
-    print(f"target > 0 的比例：{(top20['target'] > 0).mean():.1%}")
-    print(f"target > 5% 的比例：{(top20['target'] > 0.05).mean():.1%}")
-    print(f"target > 10% 的比例：{(top20['target'] > 0.10).mean():.1%}")
-
-    print("\n=== 問題三：高點多高 ===")
-    print(top20["target"].describe())
-
-    from tqdm import tqdm
 
     all_dates = sorted(df["date"].unique())
+    if start_date:
+        all_dates = [d for d in all_dates if d >= pd.to_datetime(start_date)]
 
-    # 或是指定起始日
-    start_date = "2024-01-01"
-    all_dates = sorted(df[df["date"] >= start_date]["date"].unique())
+    rebalance_dates = all_dates[::forward_days]
 
-    # 每20天取一次
-    rebalance_dates = all_dates[::20]
-
-    all_results = []
+    all_results, all_stocks = [], []
 
     for date in rebalance_dates:
         today = df[df["date"] == date]
         if len(today) == 0:
             continue
 
-        feature_cols = [c for c in df.columns if c.startswith("f_")]
         preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
         today = today.copy()
         today["pred_score"] = preds
-
-        top20 = today.nlargest(20, "pred_score")
+        top = today.nlargest(top_n, "pred_score")
 
         all_results.append(
             {
                 "date": date,
-                "win_rate_0": (top20["target"] > 0).mean(),
-                "win_rate_5": (top20["target"] > 0.05).mean(),
-                "win_rate_10": (top20["target"] > 0.10).mean(),
-                "avg_max_return": top20["target"].mean(),
-                "median_return": top20["target"].median(),
-                "min_return": top20["target"].min(),
-                "max_return": top20["target"].max(),
+                "win_rate_0": (top["target"] > 0).mean(),
+                "win_rate_5": (top["target"] > 0.05).mean(),
+                "win_rate_10": (top["target"] > 0.10).mean(),
+                "avg_max_return": top["target"].mean(),
+                "median_return": top["target"].median(),
+                "min_return": top["target"].min(),
+                "max_return": top["target"].max(),
             }
         )
+        for stock_id, target in zip(top["stock_id"], top["target"]):
+            all_stocks.append({"date": date, "stock_id": stock_id, "target": target})
 
     result_df = pd.DataFrame(all_results)
+    stock_df = pd.DataFrame(all_stocks)
 
-    print("=== 跨所有日期的統計 ===")
+    print("=" * 50)
+    print(f"驗證期間：{result_df['date'].min().date()} ~ {result_df['date'].max().date()}")
     print(f"總期數：{len(result_df)}")
-    print(f"")
-    print(f"【勝率】")
-    print(f"平均 target > 0%  勝率：{result_df['win_rate_0'].mean():.1%}")
-    print(f"平均 target > 5%  勝率：{result_df['win_rate_5'].mean():.1%}")
-    print(f"平均 target > 10% 勝率：{result_df['win_rate_10'].mean():.1%}")
-    print(f"")
-    print(f"【最大漲幅】")
-    print(f"平均最大超額報酬：{result_df['avg_max_return'].mean():.2%}")
-    print(f"中位數最大超額：  {result_df['median_return'].mean():.2%}")
-    print(f"平均最差股票：    {result_df['min_return'].mean():.2%}")
-    print(f"平均最強股票：    {result_df['max_return'].mean():.2%}")
+    print(f"\n【勝率（跑贏大盤的比例）】")
+    print(f"target > 0%  : {result_df['win_rate_0'].mean():.1%}")
+    print(f"target > 5%  : {result_df['win_rate_5'].mean():.1%}")
+    print(f"target > 10% : {result_df['win_rate_10'].mean():.1%}")
+    print(f"\n【最大漲幅（超額報酬）】")
+    print(f"平均最大超額：  {result_df['avg_max_return'].mean():.2%}")
+    print(f"中位數最大超額：{result_df['median_return'].mean():.2%}")
+    print(f"平均最差股票：  {result_df['min_return'].mean():.2%}")
+    print(f"平均最強股票：  {result_df['max_return'].mean():.2%}")
+    print("=" * 50)
 
-    all_stocks = []
-    period_counts = []
+    return result_df, stock_df
 
-    for date in rebalance_dates:
-        today = df[df["date"] == date]
-        if len(today) == 0:
-            continue
 
-        feature_cols = [c for c in df.columns if c.startswith("f_")]
-        preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
-        today = today.copy()
-        today["pred_score"] = preds
+def analyze_frequent(stock_df, min_count=5):
+    """
+    分析常客股票的實際表現
 
-        top20 = today.nlargest(20, "pred_score")
+    常客股票是模型持續看好的股票，值得深入研究。
+    若表現持續優異，可作為 B 模型的優先候選。
 
-        all_stocks.extend(top20["stock_id"].tolist())
-        period_counts.append(
-            {
-                "date": date,
-                "n_stocks": len(top20),
-            }
-        )
+    Parameters
+    ----------
+    stock_df  : evaluate_selection 回傳的 stock_df
+    min_count : 最少出現幾次才算常客，預設5次
 
-    # 每期股票數量
-    period_df = pd.DataFrame(period_counts)
-    print("=== 每期股票數量 ===")
-    print(period_df["n_stocks"].value_counts())
+    Returns
+    -------
+    summary : 每支常客股票的出現次數、平均超額、勝率、最大/最小漲幅
+    """
+    stock_counts = stock_df["stock_id"].value_counts()
+    frequent = stock_counts[stock_counts >= min_count].index.tolist()
+    freq_df = stock_df[stock_df["stock_id"].isin(frequent)]
 
-    # 股票集中度
-    stock_counts = pd.Series(all_stocks).value_counts()
-    print(f"\n=== 股票集中度 ===")
-    print(f"總共出現過的不同股票：{len(stock_counts)}")
-    print(f"出現次數最多的前10支：")
-    print(stock_counts.head(10))
-    print(f"\n出現1次的股票：{(stock_counts == 1).sum()}")
-    print(f"出現5次以上的股票：{(stock_counts >= 5).sum()}")
-
-    # 看看這17支常客是什麼股票
-    frequent = stock_counts[stock_counts >= 5]
-    print(frequent)
-
-    # 看這17支常客的實際 target 表現
-    frequent_stocks = stock_counts[stock_counts >= 5].index.tolist()
-
-    frequent_results = []
-
-    for date in rebalance_dates:
-        today = df[df["date"] == date]
-        if len(today) == 0:
-            continue
-
-        freq_today = today[today["stock_id"].isin(frequent_stocks)]
-
-        for _, row in freq_today.iterrows():
-            frequent_results.append(
-                {
-                    "date": date,
-                    "stock_id": row["stock_id"],
-                    "target": row["target"],
-                }
-            )
-
-    freq_df = pd.DataFrame(frequent_results)
-
-    print("=== 常客股票實際表現 ===")
     summary = (
         freq_df.groupby("stock_id")["target"]
         .agg(
@@ -729,95 +395,102 @@ def walk_forward_train(df, params, n_splits=5, feature_cols=None):
         .sort_values("平均超額", ascending=False)
     )
 
+    print(f"\n=== 常客股票（出現 {min_count} 次以上）===")
+    print(f"總共 {len(frequent)} 支")
     print(summary.round(3).to_string())
-
-    all_bottom = []
-
-    for date in rebalance_dates:
-        today = df[df["date"] == date]
-        if len(today) == 0:
-            continue
-
-        feature_cols = [c for c in df.columns if c.startswith("f_")]
-        preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
-        today = today.copy()
-        today["pred_score"] = preds
-
-        # 排名最後20支
-        bottom20 = today.nsmallest(20, "pred_score")
-
-        all_bottom.append(
-            {
-                "date": date,
-                "win_rate_0": (bottom20["target"] > 0).mean(),
-                "win_rate_5": (bottom20["target"] > 0.05).mean(),
-                "avg_return": bottom20["target"].mean(),
-                "min_return": bottom20["target"].min(),
-                "max_return": bottom20["target"].max(),
-            }
-        )
-
-    bottom_df = pd.DataFrame(all_bottom)
-
-    print("=== 排名最後20支的表現 ===")
-    print(f"平均 target > 0%  勝率：{bottom_df['win_rate_0'].mean():.1%}")
-    print(f"平均 target > 5%  勝率：{bottom_df['win_rate_5'].mean():.1%}")
-    print(f"平均超額報酬：    {bottom_df['avg_return'].mean():.2%}")
-    print(f"平均最差股票：    {bottom_df['min_return'].mean():.2%}")
-    print(f"平均最強股票：    {bottom_df['max_return'].mean():.2%}")
-
-    return models, scores
+    return summary
 
 
-def daily_select(df_today, df_market_today, models, top_n=20):
+def calc_feature_ic(df, period_start, period_end):
     """
-    每天收盤後執行，回傳今天的買進清單
+    計算指定期間內每個特徵的 IC（Information Coefficient）
+
+    用於定期監控特徵是否失效。
+    建議每季末執行一次，IC < 0.02 的特徵可考慮移除或替換。
 
     Parameters
     ----------
-    df_today        : 今天的個股特徵（已跑完 add_feature）
-    df_market_today : 今天的大盤資料
-    models          : walk_forward_train 回傳的模型列表
-    top_n           : 選幾支股票
+    df           : 完整特徵 df，需包含 date, f_* 欄位, target
+    period_start : 計算期間起始日（字串或 datetime）
+    period_end   : 計算期間結束日（字串或 datetime）
+
+    Returns
+    -------
+    ic_df : 每個特徵的 IC 和 abs_IC，依 abs_IC 降序排列
     """
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    mask = (df["date"] >= period_start) & (df["date"] <= period_end)
+    period_df = df[mask].dropna()
+    feature_cols = [c for c in df.columns if c.startswith("f_")]
 
-    # 判斷市場狀態
-    mkt = df_market_today.sort_values("date")
-    market_vol = mkt["close"].pct_change(1).rolling(20).std().iloc[-1]
-    market_trend = mkt["close"].pct_change(20).iloc[-1]
+    ic_results = []
+    for col in feature_cols:
+        ic = np.corrcoef(period_df[col].fillna(0), period_df["target"])[0, 1]
+        ic_results.append({"feature": col, "ic": ic, "abs_ic": abs(ic)})
 
-    can_trade = (market_vol > 0.008) and (market_trend > 0)
+    return pd.DataFrame(ic_results).sort_values("abs_ic", ascending=False).reset_index(drop=True)
 
-    if not can_trade:
-        print(f"市場狀態不佳，今日不交易")
-        print(f"波動率：{market_vol:.4f}，20日趨勢：{market_trend:.2%}")
-        return None
 
-    # 跑模型預測
+# ══════════════════════════════════════════════════════════════
+# TRADE
+# ══════════════════════════════════════════════════════════════
+
+
+def select_stocks(
+    df_today, models, df_market_history, top_n=20, use_filter=True, vol_threshold=0.008, trend_threshold=0
+):
+    """
+    每日選股，回傳候選股票清單交給 B 模型操作
+
+    使用最後2個fold的模型平均預測，
+    因為這兩個模型的訓練資料最新，最貼近當前市場規律。
+
+    市場狀態過濾（use_filter=True 時啟用）：
+      - 大盤過去20日波動率 > vol_threshold（排除過於平靜的市場）
+      - 大盤過去20日報酬 > trend_threshold（排除趨勢向下的市場）
+      兩個條件同時滿足才進行選股，否則回傳 None（空手）。
+
+    Parameters
+    ----------
+    df_today           : 今天的特徵資料（已跑完 add_feature 的單日資料）
+    models             : walk_forward_train 回傳的模型列表
+    df_market_history  : 大盤歷史資料，至少需要60個交易日
+                         欄位需包含 date, close
+    top_n              : 選幾支股票，預設20
+    use_filter         : 是否啟用市場狀態過濾，預設開啟
+    vol_threshold      : 波動率門檻，預設 0.008
+    trend_threshold    : 趨勢門檻，預設 0（大盤20日報酬 > 0 才交易）
+
+    Returns
+    -------
+    DataFrame（stock_id, pred_score）依 pred_score 降序排列
+    或 None（市場狀態不佳，建議空手）
+    """
+    if use_filter:
+        mkt = df_market_history.copy().sort_values("date")
+        market_vol = mkt["close"].pct_change(1).rolling(20).std().iloc[-1]
+        market_trend = mkt["close"].pct_change(20).iloc[-1]
+
+        if not ((market_vol > vol_threshold) and (market_trend > trend_threshold)):
+            print(f"市場狀態不佳，今日不交易")
+            print(f"波動率：{market_vol:.4f}  門檻：{vol_threshold}")
+            print(f"20日趨勢：{market_trend:.2%}  門檻：{trend_threshold:.2%}")
+            return None
+
     feature_cols = [c for c in df_today.columns if c.startswith("f_")]
-
-    # 所有 fold 模型平均預測
-    preds = np.mean([m.predict(df_today[feature_cols]) for m in models], axis=0)
+    preds = np.mean([m.predict(df_today[feature_cols]) for m in models[-2:]], axis=0)
 
     df_today = df_today.copy()
     df_today["pred_score"] = preds
 
-    # 取前 N 名
-    top_stocks = (
+    return (
         df_today[["stock_id", "pred_score"]]
         .sort_values("pred_score", ascending=False)
         .head(top_n)
         .reset_index(drop=True)
     )
 
-    print(f"市場狀態正常，選出 {top_n} 支股票")
-    print(f"波動率：{market_vol:.4f}，20日趨勢：{market_trend:.2%}")
-
-    return top_stocks
-
-
-import numpy as np
-import pandas as pd
 
 main()
 # predict(
