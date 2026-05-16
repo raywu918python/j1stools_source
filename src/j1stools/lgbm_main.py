@@ -3,11 +3,13 @@ import signal
 from time import time
 
 import random
-
+from sklearn.model_selection import TimeSeriesSplit
+import lightgbm as lgb
 from numpy import add
 import pandas as pd
 import numpy as np
 from regex import P
+from sklearn.model_selection import TimeSeriesSplit
 
 from j1stools import data_filter, feature_builder, label_builder, lite_db, parquet_db, rfc_main
 from j1stools.CONFIG import (
@@ -166,28 +168,28 @@ def train(
         dfs=[df_margin, df_ibbuysell, df_market],
     )
 
-    # 加入過濾欄位
-    df = add_market_filter(df_feature, df_market)
+    # # 加入過濾欄位
+    # df = add_market_filter(df_feature, df_market)
 
-    # 查看各 fold 的可交易比例
+    # # 查看各 fold 的可交易比例
 
-    fold_ranges = [
-        ("Fold1", "2016-07-06", "2017-12-22"),
-        ("Fold2", "2017-12-25", "2019-06-24"),
-        ("Fold3", "2019-06-25", "2020-12-11"),
-        ("Fold4", "2020-12-14", "2022-06-13"),
-        ("Fold5", "2022-06-14", "2023-12-01"),
-    ]
+    # fold_ranges = [
+    #     ("Fold1", "2016-07-06", "2017-12-22"),
+    #     ("Fold2", "2017-12-25", "2019-06-24"),
+    #     ("Fold3", "2019-06-25", "2020-12-11"),
+    #     ("Fold4", "2020-12-14", "2022-06-13"),
+    #     ("Fold5", "2022-06-14", "2023-12-01"),
+    # ]
 
-    for name, start, end in fold_ranges:
-        mask = (df["date"] >= start) & (df["date"] <= end)
-        ratio = df.loc[mask, "can_trade"].mean()
-        print(f"{name}: 可交易比例 {ratio:.1%}")
+    # for name, start, end in fold_ranges:
+    #     mask = (df["date"] >= start) & (df["date"] <= end)
+    #     ratio = df.loc[mask, "can_trade"].mean()
+    #     print(f"{name}: 可交易比例 {ratio:.1%}")
 
-    # 訓練時只用可交易的資料
-    df_filtered = apply_filter(df)
+    # # 訓練時只用可交易的資料
+    # df_filtered = apply_filter(df)
 
-    return walk_forward_train(df_filtered, params)
+    return walk_forward_train(df_feature, params)
 
     # joblib.dump(model, get_full_name("lgbm_r"))
     # print("=" * 60, "test")
@@ -227,9 +229,6 @@ def main_bak():
     signal.sort_values(by=["date", "y_proba"], inplace=True)
     signal.to_csv("signal_today.csv", index=False)
 
-
-from sklearn.model_selection import TimeSeriesSplit
-import lightgbm as lgb
 
 params = {
     "objective": "regression",
@@ -320,19 +319,49 @@ def walk_forward_train(df, params, n_splits=5):
     return models, scores
 
 
-def select_stocks(df_today, models, top_n=20):
+def daily_select(df_today, df_market_today, models, top_n=20):
     """
-    傳入今天的特徵，回傳買進清單
+    每天收盤後執行，回傳今天的買進清單
+
+    Parameters
+    ----------
+    df_today        : 今天的個股特徵（已跑完 add_feature）
+    df_market_today : 今天的大盤資料
+    models          : walk_forward_train 回傳的模型列表
+    top_n           : 選幾支股票
     """
+
+    # 判斷市場狀態
+    mkt = df_market_today.sort_values("date")
+    market_vol = mkt["close"].pct_change(1).rolling(20).std().iloc[-1]
+    market_trend = mkt["close"].pct_change(20).iloc[-1]
+
+    can_trade = (market_vol > 0.008) and (market_trend > 0)
+
+    if not can_trade:
+        print(f"市場狀態不佳，今日不交易")
+        print(f"波動率：{market_vol:.4f}，20日趨勢：{market_trend:.2%}")
+        return None
+
+    # 跑模型預測
     feature_cols = [c for c in df_today.columns if c.startswith("f_")]
 
-    # 用所有 fold 的模型平均預測（ensemble）
+    # 所有 fold 模型平均預測
     preds = np.mean([m.predict(df_today[feature_cols]) for m in models], axis=0)
 
+    df_today = df_today.copy()
     df_today["pred_score"] = preds
 
     # 取前 N 名
-    top_stocks = df_today[["stock_id", "pred_score"]].sort_values("pred_score", ascending=False).head(top_n)
+    top_stocks = (
+        df_today[["stock_id", "pred_score"]]
+        .sort_values("pred_score", ascending=False)
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+
+    print(f"市場狀態正常，選出 {top_n} 支股票")
+    print(f"波動率：{market_vol:.4f}，20日趨勢：{market_trend:.2%}")
 
     return top_stocks
 

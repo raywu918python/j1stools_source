@@ -1,5 +1,5 @@
 import pandas as pd
-import numpy as np
+import pandas as pd
 
 
 def add_market_filter(df, df_market, vol_threshold=0.008, trend_days=20):
@@ -32,14 +32,16 @@ def add_market_filter(df, df_market, vol_threshold=0.008, trend_days=20):
     mkt = mkt.sort_values("date").reset_index(drop=True)
 
     mkt["market_vol"] = mkt["close"].pct_change(1).rolling(20).std()
-    mkt["market_trend"] = mkt["close"].pct_change(trend_days)
+    mkt["market_trend"] = mkt["close"].pct_change(60)  # 60日趨勢
 
     # merge 回個股 df
     df["date"] = pd.to_datetime(df["date"])
     df = df.merge(mkt[["date", "market_vol", "market_trend"]], on="date", how="left")
 
     # 過濾條件
-    df["can_trade"] = (df["market_vol"] > vol_threshold) & (df["market_trend"] > 0)  # 波動率夠高  # 大盤趨勢向上
+    df["can_trade"] = (df["market_vol"] > vol_threshold) & (  # 波動率夠高
+        df["market_trend"] > -0.10
+    )  # 60日跌幅未超過10%
 
     return df
 
