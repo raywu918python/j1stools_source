@@ -187,14 +187,14 @@ import lightgbm as lgb
 params = {
     "objective": "regression",
     "metric": "rmse",
-    "num_leaves": 63,
-    "learning_rate": 0.05,
-    "min_child_samples": 50,
+    "num_leaves": 255,  # 127 → 255
+    "learning_rate": 0.03,  # 0.05 → 0.03 更細緻
+    "min_child_samples": 50,  # 20 → 50 更穩定
     "subsample": 0.8,
     "subsample_freq": 1,
-    "colsample_bytree": 0.8,
+    "colsample_bytree": 0.7,  # 0.8 → 0.7 更多隨機性
     "reg_alpha": 0.1,
-    "reg_lambda": 1.0,
+    "reg_lambda": 2.0,  # 1.0 → 2.0 加強正則
     "n_jobs": -1,
     "verbose": -1,
 }
@@ -261,9 +261,9 @@ def walk_forward_train(df, params, n_splits=5):
     dates = df["date"].unique()
     tss = TimeSeriesSplit(n_splits=5)
 
-    for fold, (train_idx, val_idx) in enumerate(tss.split(dates)):
-        val_dates = dates[val_idx]
-        print(f"Fold {fold+1}: {val_dates.min()} ~ {val_dates.max()}")
+    # for fold, (train_idx, val_idx) in enumerate(tss.split(dates)):
+    #     val_dates = dates[val_idx]
+    #     print(f"Fold {fold+1}: {val_dates.min()} ~ {val_dates.max()}")
 
     print(f"\n平均 IC: {np.mean(scores):.4f}")
     return models, scores
