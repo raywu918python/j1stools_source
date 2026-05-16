@@ -70,52 +70,6 @@ def prepare_data(stocks, st, end):
     df_margin = lite_db.margin(stocks, st, end)
     df_market = parquet_db.query_price(["0050"], st, end)
     df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
-    df_margin = label_builder.add_target_forward(df_margin, df_market=df_market)
-    df_feature = feature_builder.gen_feature(
-        None,
-        FEATURE_TYPE.margin_ibbuysell,
-        dfs=[df_margin, df_ibbuysell, df_market],
-    )
-
-    fold_ranges = [
-        ("Fold1", "2016-07-06", "2017-12-22"),
-        ("Fold2", "2017-12-25", "2019-06-24"),
-        ("Fold3", "2019-06-25", "2020-12-11"),
-        ("Fold4", "2020-12-14", "2022-06-13"),
-        ("Fold5", "2022-06-14", "2023-12-01"),
-    ]
-
-    for name, start, end in fold_ranges:
-        mask = (df_feature["date"] >= start) & (df_feature["date"] <= end)
-        vol = df_feature.loc[mask, "f_market_volatility_20d"].mean()
-        print(f"{name}: 平均波動率 {vol:.4f}")
-
-    print("filter.before:", df_feature.shape)
-
-    # df = data_filter.filter(df, True, FILTER_TYPE.none_, FILTER_TYPE.add_)
-    print("filter.after:", df_feature.shape)
-    # 資料在這裡刪
-    # df.set_index(["date", "stock_id"], inplace=True)
-    # df.sort_index(level=["date", "stock_id"], inplace=True)
-    return df_feature
-
-
-def train(
-    stocks=parquet_db.query_stocks_no_etf(),
-    st="2015-01-01",
-    end="2024-01-01",
-    pick_import_feature=False,
-):
-    print(f"=" * 60, "lgbm start")
-    keep_latest_ten_files("./model")
-    if pick_import_feature:
-        xtrain = feature_builder.pick_feature(xtrain)
-        xtest = feature_builder.pick_feature(xtest)
-    print("=" * 60, "train")
-
-    df_margin = lite_db.margin(stocks, st, end)
-    df_market = parquet_db.query_price(["0050"], st, end)
-    df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
     df_margin = label_builder.add_target(
         df_margin,
         df_market=df_market,
@@ -126,12 +80,28 @@ def train(
         FEATURE_TYPE.margin_ibbuysell,
         dfs=[df_margin, df_ibbuysell, df_market],
     )
+
+    return df_feature
+
+
+def train(
+    stocks=parquet_db.query_stocks_no_etf(),
+    st="2015-01-01",
+    end="2024-01-01",
+    pick_import_feature=False,
+):
+    print(f"=" * 60, "lgbm start")
+    print("=" * 60, "train")
+    keep_latest_ten_files("./model")
+
+    df_feature = prepare_data(stocks, st, end)
+
     models, scores = walk_forward_train(
         df_feature,
         n_splits=5,
     )
 
-    stock_df = evaluate_selection(df_feature, models)
+    result_df, stock_df = evaluate_selection(df_feature, models)
 
     analyze_frequent(stock_df)
 
