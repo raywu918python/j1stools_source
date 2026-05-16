@@ -239,7 +239,10 @@ def walk_forward_train(df, params, n_splits=5):
             X_train,
             y_train,
             eval_set=[(X_val, y_val)],
-            callbacks=[lgb.early_stopping(30), lgb.log_evaluation(50)],
+            callbacks=[
+                lgb.early_stopping(50),
+                lgb.log_evaluation(50),
+            ],
         )
 
         pred = model.predict(X_val)  # ← 修正這裡
