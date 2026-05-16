@@ -6,65 +6,113 @@ import pyarrow.dataset as ds
 
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import j1stools.utils as utils
+import os
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+
+import os
+import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+
+# 將 Schema 移到最外層作為全域變數，確保所有邏輯共用，絕對不會再「找不到」
+MY_SCHEMA = pa.schema(
+    [
+        ("open", pa.float32()),
+        ("high", pa.float32()),
+        ("low", pa.float32()),
+        ("close", pa.float32()),
+        ("volume", pa.int64()),
+        ("stock_id", pa.string()),
+        ("date", pa.timestamp("ns")),
+    ]
+)
 
 
-def update_last_price(yyyy, mm):
+def build_stock_parquet(start_date: str, end_date: str = None):
+    """
+    通用型股票資料整合函式 (支援單月更新與歷史區間合併)
 
-    my_schema = pa.schema(
-        [
-            ("open", pa.float64()),
-            ("high", pa.float64()),
-            ("low", pa.float64()),
-            ("close", pa.float64()),
-            ("volume", pa.int64()),
-            ("stock_id", pa.string()),  # 強制設為 string，即使是空的也會維持 string 類型
-            ("date", pa.timestamp("ns")),
-        ]
-    )
+    用法 1: build_stock_parquet("2015-01", "2026-05") -> 產出 201501_202605.parquet
+    用法 2: build_stock_parquet("2026-05")            -> 產出 2026_05.parquet
+    """
+    # 1. 解析日期邊界 (使用 Pandas Timestamp 處理跨月/跨年邏輯最無腦且精準)
+    st_dt = pd.to_datetime(f"{start_date}-01")
 
+    if end_date:
+        # 用法 1: 取到結束月份的下個月 1 號 (左閉右開)
+        end_dt = pd.to_datetime(f"{end_date}-01") + pd.DateOffset(months=1)
+        file_name = (
+            f"{start_date}.parquet"
+            if start_date == end_date
+            else f"{start_date.replace('-', '')}_{end_date.replace('-', '')}.parquet"
+        )
+    else:
+        # 用法 2: 沒傳 end_date，代表只做單月。結束時間就是下個月 1 號
+        end_dt = st_dt + pd.DateOffset(months=1)
+        file_name = f"{st_dt.year}_{st_dt.month:02d}.parquet"
+
+    file_path = f"db/price/{file_name}"
+    print(f"開始處理區間: {st_dt.strftime('%Y-%m-%d')} 至 {end_dt.strftime('%Y-%m-%d')} -> 目標檔案: {file_path}")
+
+    # 2. 抓取今日/新撈到的資料
     stocks = utils.get_file_list()
-    tables = []
+    new_tables = []
+
     for stock_id in stocks:
         try:
             df = utils.stock(stock_id)
+            if df.empty:
+                continue
+
+            # 轉換為 datetime 以利精準比較
+            df["date"] = pd.to_datetime(df["date"])
+
+            # 過濾時間區間 [start, end)
+            df = df[(df["date"] >= st_dt) & (df["date"] < end_dt)]
+
+            if not df.empty:
+                # 轉 PyArrow 前先去除該股票內部的重複值
+                df = df.drop_duplicates(subset=["date"])
+
+                # 確保欄位順序與 Schema 一致，並剔除可能多出來的 index 欄位
+                df = df[MY_SCHEMA.names]
+
+                new_tables.append(pa.Table.from_pandas(df, schema=MY_SCHEMA))
         except Exception as e:
-            print(f"stock_id {stock_id}", e)
-        df = df[(df["date"] >= f"{yyyy}-{mm}") & (df["date"] < f"{yyyy}-{mm+1}")]
-        df.reset_index(drop=True, inplace=True)
-        tables.append(pa.Table.from_pandas(df, schema=my_schema))
+            print(f"stock_id {stock_id} 處理失敗: {e}")
 
-    # 2. 合併 Table
-    combined_table = pa.concat_tables(tables)
-    # 3. 排序 (百萬筆資料在 PyArrow 處理非常快)
-    # 取得排序後的索引位址
-    indices = pc.sort_indices(combined_table, sort_keys=[("date", "ascending"), ("stock_id", "ascending")])
-    # 根據索引重新排列 Table
-    sorted_table = combined_table.take(indices)
-    # 4. 寫入 Parquet 檔案
-    pq.write_table(sorted_table, f"db/price/{yyyy}_{mm}.parquet", compression="snappy")
+    if not new_tables:
+        print("❌ 該區間內找不到任何新資料")
+        return
 
+    # 合併新撈出來的所有股票資料
+    combined_table = pa.concat_tables(new_tables)
 
-def create_history_price():
-    stocks = utils.get_file_list()
-    tables = []
-    for stock_id in stocks:
+    # 3. 如果是「每日更新單月」的模式，需要讀取舊檔進行增量合併
+    if end_date is None and os.path.exists(file_path):
         try:
-            df = utils.stock(stock_id)
+            existing_table = pq.read_table(file_path).cast(MY_SCHEMA)
+            combined_table = pa.concat_tables([existing_table, combined_table])
+            print("讀取既有月檔成功，進行增量合併...")
         except Exception as e:
-            print(f"stock_id {stock_id}", e)
-        df = df[(df["date"] >= "2015") & (df["date"] < "2026-04")]
-        df.reset_index(drop=True, inplace=True)
-        tables.append(pa.Table.from_pandas(df))
+            print(f"讀取舊檔失敗 (可能 Schema 衝突)，將直接覆蓋。錯誤: {e}")
 
-    # 2. 合併 Table
-    combined_table = pa.concat_tables(tables)
-    # 3. 排序 (百萬筆資料在 PyArrow 處理非常快)
-    # 取得排序後的索引位址
-    indices = pc.sort_indices(combined_table, sort_keys=[("date", "ascending"), ("stock_id", "ascending")])
-    # 根據索引重新排列 Table
-    sorted_table = combined_table.take(indices)
-    # 4. 寫入 Parquet 檔案
-    pq.write_table(sorted_table, "db/price/history.parquet", compression="snappy")
+    # 4. 全局去重 (轉回 Pandas 做最保險，避免跨股票或增量更新造成的重複)
+    df_all = combined_table.to_pandas()
+    df_all.drop_duplicates(subset=["date", "stock_id"], keep="last", inplace=True)
+
+    # 5. 重新包回 Table 並強制套用 Schema 與排序
+    final_table = pa.Table.from_pandas(df_all, schema=MY_SCHEMA)
+    indices = pc.sort_indices(final_table, sort_keys=[("date", "ascending"), ("stock_id", "ascending")])
+    final_table = final_table.take(indices)
+
+    # 6. 寫入 Parquet
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    pq.write_table(final_table, file_path, compression="snappy")
+    print(f"🎉 處理完成！總筆數: {len(final_table)}\n")
 
 
 def create_info():
@@ -473,11 +521,14 @@ def query_stocks_no_etf():
 
 
 #############################################################
-# update_last_price(2026, 5)
+# build_stock_parquet("2015-01", "2026-05")
+# build_stock_parquet("2026-05")
+#
+#
 # read_features()
 
 # create_info()
-# create_history_price()
+# init_history_price()
 
 # read()
 # query_price()
