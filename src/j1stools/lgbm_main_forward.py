@@ -88,11 +88,11 @@ def predict(
 
 def main():
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2015-01-01"
-    end = "2024-02-01"  # "2026-02-01"
-    models, scores = train(stocks=stocks, st=st, end=end)
+    st = "2024-01-01"
+    end = "2026-02-01"  # "2026-02-01"
+    # models, scores = train(stocks=stocks, st=st, end=end)
 
-    # start_backtest(stocks=stocks, st=st, end=end)
+    start_backtest(stocks=stocks, st=st, end=end)
     # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
     # predict(stocks=stocks, st=st, end=end)
 
@@ -192,21 +192,13 @@ def train(
     # # 訓練時只用可交易的資料
     # df_filtered = apply_filter(df)
 
-    # ic_df = calc_feature_ic(df_feature, period_start="2023-10-01", period_end="2023-12-31")
-    # print(ic_df)
+    ic_df = calc_feature_ic(df_feature, period_start="2023-10-01", period_end="2023-12-31")
+    print(ic_df)
 
-    # valid_features = ic_df[ic_df["abs_ic"] >= 0.02]["feature"].tolist()
-    # print(f"保留特徵數：{len(valid_features)}")
+    valid_features = ic_df[ic_df["abs_ic"] >= 0.02]["feature"].tolist()
+    print(f"保留特徵數：{len(valid_features)}")
 
     # 重新訓練
-    # for days in [10, 20, 30, 60]:
-    #     df_tmp = add_target(df_raw, df_market,
-    #                         forward_days=days,
-    #                         use_max=True)
-    #     df_feat = add_feature(df_tmp, df_ibbuysell, df_market)
-    #     models, scores = walk_forward_train(df_feat, params, n_splits=5)
-    #     print(f"forward_days={days}, 平均IC={np.mean(scores):.4f}\n")
-
     models, scores = walk_forward_train(
         df_feature,
         params=params,

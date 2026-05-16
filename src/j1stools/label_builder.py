@@ -117,7 +117,7 @@ def test():
 import pandas as pd
 
 
-def add_target(
+def add_target_forward(
     df, df_market, price_col="close", stock_col="stock_id", date_col="date", forward_days=20, max_return=0.5
 ):
 
@@ -141,6 +141,13 @@ def add_target(
     # print(f"過濾異常值：{len(df) - len(bug_price)}")
     # print(bug_price.head(10))
 
+    df = df.drop(columns=["stock_return", "index_return"])
+    df = df.dropna(subset=["target"]).reset_index(drop=True)
+
+    return df
+
+
+def check_bug_price(df: pd.DataFrame):
     print(df["target"].describe())
     print(f"\ntarget > 100% 的筆數：{(df['target'] >  1.0).sum()}")
     print(f"target > 200% 的筆數：{(df['target'] >  2.0).sum()}")
@@ -152,6 +159,39 @@ def add_target(
         df_bug_price.to_csv("bug_price.csv", index=False)
         raise Exception("有異常值")
 
+
+def add_target(
+    df,
+    df_market,
+    price_col="close",
+    stock_col="stock_id",
+    date_col="date",
+    forward_days=20,
+    max_return=1.0,
+    use_max=True,
+):  # True=最大漲幅, False=第N天漲幅
+
+    df = df.copy().sort_values([stock_col, date_col]).reset_index(drop=True)
+    df[date_col] = pd.to_datetime(df[date_col])
+
+    if use_max:
+        # 未來N天內的最大漲幅
+        df["stock_return"] = df.groupby(stock_col)[price_col].transform(
+            lambda x: x.rolling(forward_days).max().shift(-forward_days) / x - 1
+        )
+    else:
+        # 第N天的漲幅
+        df["stock_return"] = df.groupby(stock_col)[price_col].transform(lambda x: x.shift(-forward_days) / x - 1)
+
+    mkt = df_market.copy()
+    mkt[date_col] = pd.to_datetime(mkt[date_col])
+    mkt = mkt.sort_values(date_col).reset_index(drop=True)
+    mkt["index_return"] = mkt[price_col].shift(-forward_days) / mkt[price_col] - 1
+
+    df = df.merge(mkt[[date_col, "index_return"]], on=date_col, how="left")
+    df["target"] = df["stock_return"] - df["index_return"]
+
+    df = df[df["target"] <= max_return]
     df = df.drop(columns=["stock_return", "index_return"])
     df = df.dropna(subset=["target"]).reset_index(drop=True)
 

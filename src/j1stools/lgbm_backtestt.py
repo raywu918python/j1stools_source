@@ -130,15 +130,15 @@ def run_backtest_engin(
     print(f"最大單期虧損：  {trade_only['actual_return'].min():.2%}")
     print(f"最大單期獲利：  {trade_only['actual_return'].max():.2%}")
 
-    # 看異常值分布
-    print(f"target > 50%  的筆數：{(df['target'] >  0.5).sum()}")
-    print(f"target < -50% 的筆數：{(df['target'] < -0.5).sum()}")
-    print(f"總筆數：{len(df)}")
-    print(f"異常比例：{((df['target'].abs() > 0.5).sum() / len(df)):.2%}")
-
     # 檢查 bug 過 100%的報酬
     check_bug = False
     if check_bug:
+        # 看異常值分布
+        print(f"target > 50%  的筆數：{(df['target'] >  0.5).sum()}")
+        print(f"target < -50% 的筆數：{(df['target'] < -0.5).sum()}")
+        print(f"總筆數：{len(df)}")
+        print(f"異常比例：{((df['target'].abs() > 0.5).sum() / len(df)):.2%}")
+
         print(df[df["target"].abs() > 0.5]["stock_id"].value_counts().head(20))
 
         date = "2025-05-08"
