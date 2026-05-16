@@ -22,6 +22,7 @@ from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 
 from j1stools.j1s_split_date import lgbm_split_date
+from j1stools.lgbm_backtestt import backtest
 from j1stools.market_filter import add_market_filter, apply_filter
 from j1stools.model_builder import gen_lgbm_orgin_model, gen_lgbm_r_model
 from j1stools.model_utils import drop_na_inf
@@ -87,8 +88,8 @@ def predict(
 
 def main():
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2015-01-01"
-    end = "2024-01-01"
+    st = "2024-01-01"
+    end = "2026-02-01"
     models, scores = train(stocks=stocks, st=st, end=end)
     # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
     # predict(stocks=stocks, st=st, end=end)
@@ -189,7 +190,28 @@ def train(
     # # 訓練時只用可交易的資料
     # df_filtered = apply_filter(df)
 
-    return walk_forward_train(df_feature, params)
+    # models, scores = walk_forward_train(df_feature, params)
+    # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
+    print("=" * 60, "backtest")
+    models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
+    result_df = backtest(
+        df_feature,
+        models,
+        df_market,
+        top_n=20,
+        forward_days=20,
+        use_filter=True,
+        start_date="2024-01-01",
+    )
+    result_df = backtest(
+        df_feature,
+        models,
+        df_market,
+        top_n=20,
+        forward_days=20,
+        use_filter=False,
+        start_date="2024-01-01",
+    )
 
     # joblib.dump(model, get_full_name("lgbm_r"))
     # print("=" * 60, "test")
@@ -365,6 +387,9 @@ def daily_select(df_today, df_market_today, models, top_n=20):
 
     return top_stocks
 
+
+import numpy as np
+import pandas as pd
 
 main()
 # predict(
