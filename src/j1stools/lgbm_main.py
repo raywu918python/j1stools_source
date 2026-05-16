@@ -164,12 +164,12 @@ def train(
     df_margin = lite_db.margin(stocks, st, end)
     df_market = parquet_db.query_price(["0050"], st, end)
     df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
-    df_margin = label_builder.add_target_forward(df_margin, df_market=df_market)
-    df_feature = feature_builder.gen_feature(
-        None,
-        FEATURE_TYPE.margin_ibbuysell,
-        dfs=[df_margin, df_ibbuysell, df_market],
-    )
+    # df_margin = label_builder.add_target_forward(df_margin, df_market=df_market)
+    # df_feature = feature_builder.gen_feature(
+    #     None,
+    #     FEATURE_TYPE.margin_ibbuysell,
+    #     dfs=[df_margin, df_ibbuysell, df_market],
+    # )
 
     # # 加入過濾欄位
     # df = add_market_filter(df_feature, df_market)
@@ -199,19 +199,26 @@ def train(
     # print(f"保留特徵數：{len(valid_features)}")
 
     # 重新訓練
-    # for days in [10, 20, 30, 60]:
-    #     df_tmp = add_target(df_raw, df_market,
-    #                         forward_days=days,
-    #                         use_max=True)
-    #     df_feat = add_feature(df_tmp, df_ibbuysell, df_market)
-    #     models, scores = walk_forward_train(df_feat, params, n_splits=5)
-    #     print(f"forward_days={days}, 平均IC={np.mean(scores):.4f}\n")
+    for days in [10, 20, 30, 60]:
+        df_margin = label_builder.add_target(
+            df_margin,
+            df_market=df_market,
+            forward_days=days,
+            use_max=True,
+        )
+        df_feature = feature_builder.gen_feature(
+            None,
+            FEATURE_TYPE.margin_ibbuysell,
+            dfs=[df_margin, df_ibbuysell, df_market],
+        )
 
-    models, scores = walk_forward_train(
-        df_feature,
-        params=params,
-        n_splits=5,
-    )
+        models, scores = walk_forward_train(
+            df_feature,
+            params=params,
+            n_splits=5,
+        )
+        print(f"forward_days={days}, 平均IC={np.mean(scores):.4f}\n")
+
     joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
     # models, scores = walk_forward_train(df_feature, params)
 
