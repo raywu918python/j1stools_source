@@ -6,6 +6,9 @@ import numpy as np
 import pandas as pd
 import numpy as np
 
+import pandas as pd
+import numpy as np
+
 
 def add_feature(df, df_ibbuysell, df_market):
     """
@@ -31,13 +34,12 @@ def add_feature(df, df_ibbuysell, df_market):
     mkt = mkt.sort_values("date").reset_index(drop=True)
 
     # 市場波動率：描述現在是高波動還是低波動環境
-    # mkt["f_market_volatility_20d"] = mkt["close"].pct_change(1).rolling(20).std()
+    mkt["f_market_volatility_20d"] = mkt["close"].pct_change(1).rolling(20).std()
     # 市場成交量熱度
-    # mkt["f_market_volume_20d"] = mkt["volume"] / mkt["volume"].rolling(20).mean()
+    mkt["f_market_volume_20d"] = mkt["volume"] / mkt["volume"].rolling(20).mean()
 
     # 保留大盤 close/volume 供後續計算，不直接當特徵
-    # mkt_merge = mkt[["date", "f_market_volatility_20d", "f_market_volume_20d", "close", "volume"]].rename(
-    mkt_merge = mkt[["date", "close", "volume"]].rename(
+    mkt_merge = mkt[["date", "f_market_volatility_20d", "f_market_volume_20d", "close", "volume"]].rename(
         columns={
             "close": "_mkt_close",
             "volume": "_mkt_volume",
@@ -129,7 +131,7 @@ def add_feature(df, df_ibbuysell, df_market):
     base["f_amplitude"] = (base["high"] - base["low"]) / base["close"]
     base["f_volume_change_pct"] = g["volume"].transform(lambda x: x.pct_change(1))
     base["f_volume_ratio_5d"] = base["volume"] / g["volume"].transform(lambda x: x.rolling(5).mean())
-    # base["f_stock_volatility_20d"] = g["close"].transform(lambda x: x.pct_change(1).rolling(20).std())
+    base["f_stock_volatility_20d"] = g["close"].transform(lambda x: x.pct_change(1).rolling(20).std())
 
     # ── 5. 均線特徵 ────────────────────────────────────────────────────────────
     ma5 = g["close"].transform(lambda x: x.rolling(5).mean())
@@ -154,7 +156,7 @@ def add_feature(df, df_ibbuysell, df_market):
 
     base["f_volume_market_ratio"] = base["volume"] / base["_mkt_volume"].replace(0, np.nan)
 
-    # base["f_volatility_vs_market"] = base["f_stock_volatility_20d"] / base["f_market_volatility_20d"].replace(0, np.nan)
+    base["f_volatility_vs_market"] = base["f_stock_volatility_20d"] / base["f_market_volatility_20d"].replace(0, np.nan)
 
     # ── 7. 清理並回傳 ──────────────────────────────────────────────────────────
     base = base.drop(columns=["_mkt_close", "_mkt_volume"])
