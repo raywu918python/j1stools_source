@@ -88,8 +88,8 @@ def predict(
 
 def main():
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2015-01-01"
-    end = "2024-02-01"  # "2026-02-01"
+    st = "2024-01-01"
+    end = "2026-02-01"  # "2026-02-01"
     models, scores = train(stocks=stocks, st=st, end=end)
 
     # start_backtest(stocks=stocks, st=st, end=end)
@@ -199,31 +199,33 @@ def train(
     # print(f"保留特徵數：{len(valid_features)}")
 
     # 重新訓練
-    for days in [10, 20, 30, 60]:
-        df_margin = label_builder.add_target(
-            df_margin,
-            df_market=df_market,
-            forward_days=days,
-            use_max=True,
-        )
-        df_feature = feature_builder.gen_feature(
-            None,
-            FEATURE_TYPE.margin_ibbuysell,
-            dfs=[df_margin, df_ibbuysell, df_market],
-        )
+    # for days in [10, 20, 30, 60]:
+    df_margin = label_builder.add_target(
+        df_margin,
+        df_market=df_market,
+        forward_days=20,
+        use_max=True,
+    )
+    df_feature = feature_builder.gen_feature(
+        None,
+        FEATURE_TYPE.margin_ibbuysell,
+        dfs=[df_margin, df_ibbuysell, df_market],
+    )
+    models, scores = walk_forward_train(
+        df_feature,
+        params=params,
+        n_splits=5,
+    )
+    # print(f"forward_days={days}, 平均IC={np.mean(scores):.4f}\n")
 
-        models, scores = walk_forward_train(
-            df_feature,
-            params=params,
-            n_splits=5,
-        )
-        print(f"forward_days={days}, 平均IC={np.mean(scores):.4f}\n")
+    # 用最後一個 fold 的模型預測
+    # 取一個有代表性的日期來分析
 
-    joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
     # models, scores = walk_forward_train(df_feature, params)
 
     # models, scores = walk_forward_rolling(df_feature, params, train_years=3)
     # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
+    joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
     raise Exception("未完成")
 
 
@@ -573,6 +575,197 @@ def walk_forward_train(df, params, n_splits=5, feature_cols=None):
     #     print(f"Fold {fold+1}: {val_dates.min()} ~ {val_dates.max()}")
 
     print(f"\n平均 IC: {np.mean(scores):.4f}")
+
+    date = "2024-01-02"
+    today = df[df["date"] == date].copy()
+
+    feature_cols = [c for c in df.columns if c.startswith("f_")]
+    preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
+    today["pred_score"] = preds
+
+    top20 = today.nlargest(20, "pred_score")[["stock_id", "pred_score", "target"]]
+
+    print("=== 問題一：選出的股票 ===")
+    print(top20["stock_id"].tolist())
+
+    print("\n=== 問題二：選對的機率 ===")
+    print(f"target > 0 的比例：{(top20['target'] > 0).mean():.1%}")
+    print(f"target > 5% 的比例：{(top20['target'] > 0.05).mean():.1%}")
+    print(f"target > 10% 的比例：{(top20['target'] > 0.10).mean():.1%}")
+
+    print("\n=== 問題三：高點多高 ===")
+    print(top20["target"].describe())
+
+    from tqdm import tqdm
+
+    all_dates = sorted(df["date"].unique())
+
+    # 或是指定起始日
+    start_date = "2024-01-01"
+    all_dates = sorted(df[df["date"] >= start_date]["date"].unique())
+
+    # 每20天取一次
+    rebalance_dates = all_dates[::20]
+
+    all_results = []
+
+    for date in rebalance_dates:
+        today = df[df["date"] == date]
+        if len(today) == 0:
+            continue
+
+        feature_cols = [c for c in df.columns if c.startswith("f_")]
+        preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
+        today = today.copy()
+        today["pred_score"] = preds
+
+        top20 = today.nlargest(20, "pred_score")
+
+        all_results.append(
+            {
+                "date": date,
+                "win_rate_0": (top20["target"] > 0).mean(),
+                "win_rate_5": (top20["target"] > 0.05).mean(),
+                "win_rate_10": (top20["target"] > 0.10).mean(),
+                "avg_max_return": top20["target"].mean(),
+                "median_return": top20["target"].median(),
+                "min_return": top20["target"].min(),
+                "max_return": top20["target"].max(),
+            }
+        )
+
+    result_df = pd.DataFrame(all_results)
+
+    print("=== 跨所有日期的統計 ===")
+    print(f"總期數：{len(result_df)}")
+    print(f"")
+    print(f"【勝率】")
+    print(f"平均 target > 0%  勝率：{result_df['win_rate_0'].mean():.1%}")
+    print(f"平均 target > 5%  勝率：{result_df['win_rate_5'].mean():.1%}")
+    print(f"平均 target > 10% 勝率：{result_df['win_rate_10'].mean():.1%}")
+    print(f"")
+    print(f"【最大漲幅】")
+    print(f"平均最大超額報酬：{result_df['avg_max_return'].mean():.2%}")
+    print(f"中位數最大超額：  {result_df['median_return'].mean():.2%}")
+    print(f"平均最差股票：    {result_df['min_return'].mean():.2%}")
+    print(f"平均最強股票：    {result_df['max_return'].mean():.2%}")
+
+    all_stocks = []
+    period_counts = []
+
+    for date in rebalance_dates:
+        today = df[df["date"] == date]
+        if len(today) == 0:
+            continue
+
+        feature_cols = [c for c in df.columns if c.startswith("f_")]
+        preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
+        today = today.copy()
+        today["pred_score"] = preds
+
+        top20 = today.nlargest(20, "pred_score")
+
+        all_stocks.extend(top20["stock_id"].tolist())
+        period_counts.append(
+            {
+                "date": date,
+                "n_stocks": len(top20),
+            }
+        )
+
+    # 每期股票數量
+    period_df = pd.DataFrame(period_counts)
+    print("=== 每期股票數量 ===")
+    print(period_df["n_stocks"].value_counts())
+
+    # 股票集中度
+    stock_counts = pd.Series(all_stocks).value_counts()
+    print(f"\n=== 股票集中度 ===")
+    print(f"總共出現過的不同股票：{len(stock_counts)}")
+    print(f"出現次數最多的前10支：")
+    print(stock_counts.head(10))
+    print(f"\n出現1次的股票：{(stock_counts == 1).sum()}")
+    print(f"出現5次以上的股票：{(stock_counts >= 5).sum()}")
+
+    # 看看這17支常客是什麼股票
+    frequent = stock_counts[stock_counts >= 5]
+    print(frequent)
+
+    # 看這17支常客的實際 target 表現
+    frequent_stocks = stock_counts[stock_counts >= 5].index.tolist()
+
+    frequent_results = []
+
+    for date in rebalance_dates:
+        today = df[df["date"] == date]
+        if len(today) == 0:
+            continue
+
+        freq_today = today[today["stock_id"].isin(frequent_stocks)]
+
+        for _, row in freq_today.iterrows():
+            frequent_results.append(
+                {
+                    "date": date,
+                    "stock_id": row["stock_id"],
+                    "target": row["target"],
+                }
+            )
+
+    freq_df = pd.DataFrame(frequent_results)
+
+    print("=== 常客股票實際表現 ===")
+    summary = (
+        freq_df.groupby("stock_id")["target"]
+        .agg(
+            [
+                ("出現次數", "count"),
+                ("平均超額", "mean"),
+                ("勝率", lambda x: (x > 0).mean()),
+                ("最大漲幅", "max"),
+                ("最小漲幅", "min"),
+            ]
+        )
+        .sort_values("平均超額", ascending=False)
+    )
+
+    print(summary.round(3).to_string())
+
+    all_bottom = []
+
+    for date in rebalance_dates:
+        today = df[df["date"] == date]
+        if len(today) == 0:
+            continue
+
+        feature_cols = [c for c in df.columns if c.startswith("f_")]
+        preds = np.mean([m.predict(today[feature_cols]) for m in models[-2:]], axis=0)
+        today = today.copy()
+        today["pred_score"] = preds
+
+        # 排名最後20支
+        bottom20 = today.nsmallest(20, "pred_score")
+
+        all_bottom.append(
+            {
+                "date": date,
+                "win_rate_0": (bottom20["target"] > 0).mean(),
+                "win_rate_5": (bottom20["target"] > 0.05).mean(),
+                "avg_return": bottom20["target"].mean(),
+                "min_return": bottom20["target"].min(),
+                "max_return": bottom20["target"].max(),
+            }
+        )
+
+    bottom_df = pd.DataFrame(all_bottom)
+
+    print("=== 排名最後20支的表現 ===")
+    print(f"平均 target > 0%  勝率：{bottom_df['win_rate_0'].mean():.1%}")
+    print(f"平均 target > 5%  勝率：{bottom_df['win_rate_5'].mean():.1%}")
+    print(f"平均超額報酬：    {bottom_df['avg_return'].mean():.2%}")
+    print(f"平均最差股票：    {bottom_df['min_return'].mean():.2%}")
+    print(f"平均最強股票：    {bottom_df['max_return'].mean():.2%}")
+
     return models, scores
 
 
