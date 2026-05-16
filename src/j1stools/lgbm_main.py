@@ -209,7 +209,7 @@ def train(
         df_market,
         top_n=20,
         forward_days=20,
-        use_filter=False,
+        use_filter=True,
         start_date="2024-01-01",
     )
 
