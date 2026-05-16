@@ -20,6 +20,7 @@ from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 
 from j1stools.j1s_split_date import lgbm_split_date
+from j1stools.market_filter import add_market_filter, apply_filter
 from j1stools.model_builder import gen_lgbm_orgin_model, gen_lgbm_r_model
 from j1stools.model_utils import drop_na_inf
 from j1stools.train_flow import get_full_name, keep_latest_ten_files, start_train
@@ -95,20 +96,34 @@ def prepare_data(stocks, st, end):
     df_margin = lite_db.margin(stocks, st, end)
     df_market = parquet_db.query_price(["0050"], st, end)
     df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
-    df_margin = label_builder.add_target(df_margin)
-    df = feature_builder.gen_feature(
+    df_margin = label_builder.add_target(df_margin, df_market=df_market)
+    df_feature = feature_builder.gen_feature(
         None,
         FEATURE_TYPE.margin_ibbuysell,
         dfs=[df_margin, df_ibbuysell, df_market],
     )
-    print("filter.before:", df.shape)
+
+    fold_ranges = [
+        ("Fold1", "2016-07-06", "2017-12-22"),
+        ("Fold2", "2017-12-25", "2019-06-24"),
+        ("Fold3", "2019-06-25", "2020-12-11"),
+        ("Fold4", "2020-12-14", "2022-06-13"),
+        ("Fold5", "2022-06-14", "2023-12-01"),
+    ]
+
+    for name, start, end in fold_ranges:
+        mask = (df_feature["date"] >= start) & (df_feature["date"] <= end)
+        vol = df_feature.loc[mask, "f_market_volatility_20d"].mean()
+        print(f"{name}: 平均波動率 {vol:.4f}")
+
+    print("filter.before:", df_feature.shape)
 
     # df = data_filter.filter(df, True, FILTER_TYPE.none_, FILTER_TYPE.add_)
-    print("filter.after:", df.shape)
+    print("filter.after:", df_feature.shape)
     # 資料在這裡刪
     # df.set_index(["date", "stock_id"], inplace=True)
     # df.sort_index(level=["date", "stock_id"], inplace=True)
-    return df
+    return df_feature
 
 
 def train(
@@ -121,7 +136,7 @@ def train(
     keep_latest_ten_files("./model")
     # model = gen_lgbm_orgin_model()
 
-    df = prepare_data(stocks, st, end)
+    # df = prepare_data(stocks, st, end)
 
     # xtrain, xval, xtest, ytrain, yval, ytest = lgbm_split_date(df, True, True, trainging_idx)
     # xtrain, ytrain = drop_na_inf(xtrain, ytrain)
@@ -140,7 +155,39 @@ def train(
     print("=" * 60, "train")
     # lgbm_r_function_train(xtrain, ytrain, xval, yval, model, df)
     # lgbm_r_function_train(xtrain, ytrain, xval, yval, model)
-    return walk_forward_train(df, params)
+
+    df_margin = lite_db.margin(stocks, st, end)
+    df_market = parquet_db.query_price(["0050"], st, end)
+    df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
+    df_margin = label_builder.add_target(df_margin, df_market=df_market)
+    df_feature = feature_builder.gen_feature(
+        None,
+        FEATURE_TYPE.margin_ibbuysell,
+        dfs=[df_margin, df_ibbuysell, df_market],
+    )
+
+    # 加入過濾欄位
+    df = add_market_filter(df_feature, df_market)
+
+    # 查看各 fold 的可交易比例
+
+    fold_ranges = [
+        ("Fold1", "2016-07-06", "2017-12-22"),
+        ("Fold2", "2017-12-25", "2019-06-24"),
+        ("Fold3", "2019-06-25", "2020-12-11"),
+        ("Fold4", "2020-12-14", "2022-06-13"),
+        ("Fold5", "2022-06-14", "2023-12-01"),
+    ]
+
+    for name, start, end in fold_ranges:
+        mask = (df["date"] >= start) & (df["date"] <= end)
+        ratio = df.loc[mask, "can_trade"].mean()
+        print(f"{name}: 可交易比例 {ratio:.1%}")
+
+    # 訓練時只用可交易的資料
+    df_filtered = apply_filter(df)
+
+    return walk_forward_train(df_filtered, params)
 
     # joblib.dump(model, get_full_name("lgbm_r"))
     # print("=" * 60, "test")
@@ -271,6 +318,23 @@ def walk_forward_train(df, params, n_splits=5):
 
     print(f"\n平均 IC: {np.mean(scores):.4f}")
     return models, scores
+
+
+def select_stocks(df_today, models, top_n=20):
+    """
+    傳入今天的特徵，回傳買進清單
+    """
+    feature_cols = [c for c in df_today.columns if c.startswith("f_")]
+
+    # 用所有 fold 的模型平均預測（ensemble）
+    preds = np.mean([m.predict(df_today[feature_cols]) for m in models], axis=0)
+
+    df_today["pred_score"] = preds
+
+    # 取前 N 名
+    top_stocks = df_today[["stock_id", "pred_score"]].sort_values("pred_score", ascending=False).head(top_n)
+
+    return top_stocks
 
 
 main()
