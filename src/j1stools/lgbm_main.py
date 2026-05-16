@@ -195,6 +195,7 @@ params = {
     "colsample_bytree": 0.7,  # 0.8 → 0.7 更多隨機性
     "reg_alpha": 0.1,
     "reg_lambda": 2.0,  # 1.0 → 2.0 加強正則
+    "n_estimators": 2000,  # ← 這裡設定
     "n_jobs": -1,
     "verbose": -1,
 }
