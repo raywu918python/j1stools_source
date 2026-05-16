@@ -62,7 +62,7 @@ def backtest(
                 {
                     "date": date,
                     "actual_return": 0,
-                    "excess_return": 0,
+                    "excess_return": 0 - market_return,  # 空手相對大盤的超額
                     "market_return": market_return,
                     "avg_pred_score": 0,
                     "n_stocks": 0,
