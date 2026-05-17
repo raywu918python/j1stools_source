@@ -96,7 +96,6 @@ def backtest_engine(
                 candidates = [sid for sid in entries_dict.get(dt, []) if sid not in positions and sid in close.columns][
                     :slots
                 ]
-
                 if candidates:
                     per_slot = cash / slots
                     for sid in candidates:

@@ -171,6 +171,8 @@ def query_price(stocks: list, st="2015-01-01", end="2099-01-01", is_include_end=
     df["open"] = df["open"].astype("float32")
     df["high"] = df["high"].astype("float32")
     df["low"] = df["low"].astype("float32")
+
+    df.drop_duplicates(subset=["date", "stock_id"], keep="last", inplace=True)
     return df
 
 

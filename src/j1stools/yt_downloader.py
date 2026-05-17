@@ -117,6 +117,6 @@ def save(all_path, dfall, interval: INTERVAL):
 
 # download(INTERVAL.day)
 
-# download(INTERVAL.day, ["6944"], period="2500d")
+# download(INTERVAL.day, ["6546"], period="3000d")
 # download(INTERVAL.m1, ["1609"], period="60d")
 # download(INTERVAL.m5, ["1609"], period="60d")

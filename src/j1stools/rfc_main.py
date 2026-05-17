@@ -104,7 +104,7 @@ def main():
     end = "2024-01-01"
     # signal = train(stocks=stocks, st=st, end=end)
 
-    predict(model=joblib.load("models/rfc.joblib"), stocks=stocks, st=st, end=end)
+    predict(stocks=stocks, st=st, end=end)
 
 
 # predict(
@@ -179,8 +179,9 @@ def train(
     print_ft_important(model)
 
 
-def predict(model, stocks, st, end):
+def predict(stocks, st, end):
 
+    model = joblib.load("models/rfc_macd_6xx.joblib")
     df = prepare_data(stocks, st, end)
     _, x, _, y = rfc_split_date(df, is_gen_test=True, is_gen_train=False, trainging_idx=0)
     x = x[[col for col in x.columns if col.startswith("f_")]] if x is not None else None

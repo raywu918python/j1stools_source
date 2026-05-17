@@ -12,7 +12,7 @@ pd.set_option("future.no_silent_downcasting", True)
 from pandas_ta import ma
 import vectorbt as vbt
 
-from j1stools import j1s_chart, parquet_db, rfc_main
+from j1stools import j1s_chart, lgbm_main, parquet_db, rfc_main
 
 # ============================================================
 # 技術指標
@@ -23,6 +23,45 @@ import os
 from j1stools.backtest_engine import backtest_engine
 
 IS_USE_CACHE = False
+
+
+class LgbmPrepareDate:
+    def __init__(self, signal, top_n, threshold):
+        self.signal = signal
+        self.top_n = top_n
+        self.threshold = threshold
+        t1 = time()
+        #
+        stocks = signal["stock_id"].unique().tolist()
+        date = signal["date"]
+        st = date.min()
+        end = date.max()
+        # st = "2026-03-01"
+        # end = "2029-01-01"
+        full_df = parquet_db.query_price(stocks, st, end)
+        full_df["date"] = pd.to_datetime(full_df["date"])
+        input = pd.merge(
+            full_df,
+            signal[["date", "stock_id", "pred_score"]],
+            on=["date", "stock_id"],
+            how="left",  # 只取索引部分  # 以全時段為準
+        ).fillna(
+            0
+        )  # 沒預測到的（ATR太小的）補 0
+
+        self.proba = input.pivot(index="date", columns="stock_id", values="pred_score").fillna(0)
+        self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
+        self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
+        self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
+        self.stock_group = parquet_db.query_stock2group_dict()
+
+        # 前處理（向量化）
+        self.market_danger = check_market(self.close)
+        self.my_filter = gen_filter(self.close, self.high, self.low)
+        self.entries = gen_entries(self.my_filter, self.proba, top_n, threshold)
+        self.exits = gen_exits(self.market_danger, self.proba)
+
+        print(f"前處理時間: {time() - t1:.2f} 秒")
 
 
 class PrepareDate:
@@ -122,7 +161,7 @@ def gen_filter(close, high, low):
     if isinstance(adx.columns, pd.MultiIndex):
         adx.columns = adx.columns.get_level_values("stock_id")
 
-    filter_atr = (((atr / close) > 0.05) & (adx > 20)).fillna(False).infer_objects(copy=False)
+    filter_atr = (((atr / close) > 0.00) & (adx > 0)).fillna(False).infer_objects(copy=False)
     return filter_atr & filter_limit_up
 
 
@@ -321,32 +360,16 @@ def optimize(signal):
 
 
 class Chart(IntFlag):
-    N = 0
+    NONE = 0
     PF = 1  # 2^0
     FLOW = 2  # 2^1
     INFO = 4  # 2^2
     # DELETE = 8    # 2^3
 
 
-def main(
-    st="2025-01-01",
-    end="2099-01-01",
-):
-    model = joblib.load("models/rfc_macd_6xx.joblib")
-    signal = rfc_main.predict(model, parquet_db.query_stocks_ids_list(), st, end)
-    # signal = local_signals("rfc_macd_6xx.csv")
-    print(signal.head())
-    signal.to_csv("rfc_macd_6xx.csv", index=False)
-    # signal = local_signals()
-    show_chart = Chart.N
-    show_chart |= Chart.PF
-    show_chart |= Chart.FLOW
-    # show_chart |= Chart.INFO
-
+def win6XX(signal):
     p = PrepareDate(signal, top_n=5, threshold=0.7)
-    #############################################################
-    t1 = time()
-    portfolio_value, trades_df, positions = backtest_engine(
+    return backtest_engine(
         use_sl_trail=False,
         sl_trail=0.2,
         use_fixed_sl=True,
@@ -361,6 +384,57 @@ def main(
         #############################################################
         max_positions=5,
         group_limit=2,
+        stock_group=p.stock_group,
+        #############################################################
+        init_cash=1_000_000,
+        fee=0.001,
+        close=p.close,
+        entries=p.entries,
+        exits=p.exits,
+        df_proba=p.proba,
+    )
+
+
+def main(
+    st="2024-01-01",
+    end="2026-01-01",
+):
+    print("======main======")
+    if False:
+        signal = rfc_main.predict(parquet_db.query_stocks_ids_list(), st, end)
+        signal.to_csv("rfc_macd_6xx.csv", index=False)
+        p = PrepareDate(signal, top_n=5, threshold=0.7)
+    else:
+        signal = lgbm_main.predict(parquet_db.query_stocks_ids_list(), st, end)
+        signal.to_csv("lgbm_main_signal.csv", index=False)
+        p = LgbmPrepareDate(signal, top_n=10, threshold=0.2)
+        # signal = local_signals("lgbm_main_signal.csv")
+
+    # signal = local_signals()
+    show_chart = Chart.NONE
+    # show_chart |= Chart.PF
+    # show_chart |= Chart.FLOW
+    # show_chart |= Chart.INFO
+
+    #############################################################
+    print("======lgbm prepare======")
+    print(p.proba.head())
+    t1 = time()
+    portfolio_value, trades_df, positions = backtest_engine(
+        use_sl_trail=True,
+        sl_trail=0.1,
+        use_fixed_sl=True,
+        sl_stop=0.2,
+        use_fixed_tp=True,
+        tp_stop=0.1,
+        use_hold_days=True,
+        hold_days=20,
+        #############################################################
+        use_fixed_sl_tp=True,
+        use_proba_sizing=False,
+        #############################################################
+        max_positions=5,
+        group_limit=5,
         stock_group=p.stock_group,
         #############################################################
         init_cash=1_000_000,
@@ -402,7 +476,7 @@ def main(
 #############################################################
 # optimize(local_signals())
 # main()
-
+# raise Exception("未完成")
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()
 # j1s_chart.plot_performance(
