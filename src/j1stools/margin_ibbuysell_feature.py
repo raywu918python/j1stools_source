@@ -1,22 +1,8 @@
 import pandas as pd
-
-import pandas as pd
-import numpy as np
-
-import pandas as pd
-import numpy as np
-
-import pandas as pd
-import numpy as np
-
-import pandas as pd
-import numpy as np
-
-import pandas as pd
 import numpy as np
 
 
-def add_feature(df, df_ibbuysell, df_market):
+def add_feature(df, df_ibbuysell, df_market, mode="train"):
     """
     計算所有特徵，回傳 f_ 開頭的特徵欄位
 
@@ -49,6 +35,9 @@ def add_feature(df, df_ibbuysell, df_market):
     -------
     result : date, stock_id, target 加上所有 f_ 特徵欄位
     """
+    if mode not in ("train", "predict"):
+        raise ValueError(f"mode 必須是 'train' 或 'predict'，收到：{mode}")
+
     base = df.copy()
     base["date"] = pd.to_datetime(base["date"])
     base = base.drop_duplicates(subset=["date", "stock_id"])
@@ -176,7 +165,16 @@ def add_feature(df, df_ibbuysell, df_market):
 
     base = base.drop(columns=["_mkt_close", "_mkt_volume"])
     f_cols = [c for c in base.columns if c.startswith("f_")]
-    result = base[["date", "stock_id", "target"] + f_cols].copy()
-    result = result.dropna(subset=["target"]).reset_index(drop=True)
 
-    return result
+    if mode == "train":
+        # 訓練模式：過濾掉 target = NaN 的資料（最後20天沒有未來價格）
+        has_target = base["target"].notna()
+        result = base[has_target][["date", "stock_id", "target"] + f_cols].copy()
+    else:
+        # 預測模式：保留全部資料包含今天，不管 target 有沒有或是否為 NaN
+        cols = ["date", "stock_id"] + f_cols
+        if "target" in base.columns:
+            cols = ["date", "stock_id", "target"] + f_cols
+        result = base[cols].copy()
+
+    return result.reset_index(drop=True)

@@ -161,7 +161,7 @@ def check_bug_price(df: pd.DataFrame):
 
 
 def add_target(
-    df, df_market, price_col="close", stock_col="stock_id", date_col="date", forward_days=20, max_return=2.0
+    df, df_market, price_col="close", stock_col="stock_id", date_col="date", forward_days=20, max_return=3.0
 ):
     """
     計算每支股票未來N天內的最大超額報酬作為 target
@@ -179,28 +179,60 @@ def add_target(
     stock_col    : 股票代號欄位名稱，預設 'stock_id'
     date_col     : 日期欄位名稱，預設 'date'
     forward_days : 預測天數，預設20天
-    max_return   : 異常值過濾門檻（只過濾右側暴漲），預設100%
+    max_return   : 異常值過濾門檻（只過濾右側暴漲），預設200%
 
     Returns
     -------
     df : 原始資料加上 target 欄位，已移除 NaN 和異常值
+
+    Raises
+    ------
+    ValueError : 必要欄位不存在時
+    ValueError : 處理後資料為空時
     """
-    df = df.copy().sort_values([stock_col, date_col]).reset_index(drop=True)
-    df[date_col] = pd.to_datetime(df[date_col])
+    # 檢查必要欄位
+    required_cols = [price_col, stock_col, date_col]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"df 缺少必要欄位：{missing}")
 
-    df["stock_return"] = df.groupby(stock_col)[price_col].transform(
-        lambda x: x.rolling(forward_days).max().shift(-forward_days) / x - 1
-    )
+    mkt_required = [price_col, date_col]
+    mkt_missing = [c for c in mkt_required if c not in df_market.columns]
+    if mkt_missing:
+        raise ValueError(f"df_market 缺少必要欄位：{mkt_missing}")
 
-    mkt = df_market.copy()
-    mkt[date_col] = pd.to_datetime(mkt[date_col])
-    mkt = mkt.sort_values(date_col).reset_index(drop=True)
-    mkt["index_return"] = mkt[price_col].shift(-forward_days) / mkt[price_col] - 1
+    try:
+        df = df.copy().sort_values([stock_col, date_col]).reset_index(drop=True)
+        df[date_col] = pd.to_datetime(df[date_col])
 
-    df = df.merge(mkt[[date_col, "index_return"]], on=date_col, how="left")
-    df["target"] = df["stock_return"] - df["index_return"]
-    df = df[df["target"] <= max_return]
-    df = df.drop(columns=["stock_return", "index_return"])
-    df = df.dropna(subset=["target"]).reset_index(drop=True)
+        df["stock_return"] = df.groupby(stock_col)[price_col].transform(
+            lambda x: x.rolling(forward_days).max().shift(-forward_days) / x - 1
+        )
 
-    return df
+        mkt = df_market.copy()
+        mkt[date_col] = pd.to_datetime(mkt[date_col])
+        mkt = mkt.sort_values(date_col).reset_index(drop=True)
+        mkt["index_return"] = mkt[price_col].shift(-forward_days) / mkt[price_col] - 1
+
+        df = df.merge(mkt[[date_col, "index_return"]], on=date_col, how="left")
+        df["target"] = df["stock_return"] - df["index_return"]
+        df = df.drop(columns=["stock_return", "index_return"])
+        df = df.reset_index(drop=True)
+
+        # 超過 max_return 視為異常資料，直接拋出例外
+        abnormal = df[df["target"] > max_return]
+        if len(abnormal) > 0:
+            detail = abnormal[["date", stock_col, "target"]].to_string()
+            raise ValueError(
+                f"發現 {len(abnormal)} 筆異常 target（超過 {max_return:.0%}），" f"請檢查以下股票資料：{detail}"
+            )
+
+        if len(df) == 0:
+            raise ValueError("add_target 處理後資料為空，請檢查輸入資料")
+
+        print(f"add_target 完成：{len(df)} 筆，" f"target 範圍 [{df['target'].min():.3f}, {df['target'].max():.3f}]")
+
+        return df
+
+    except Exception as e:
+        raise RuntimeError(f"add_target 發生錯誤：{e}") from e

@@ -41,9 +41,7 @@ def predict(
 
     models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
 
-    df_feature, df_market = prepare_data(stocks, st, end)
-    print(df_feature["date"].max())
-    print(df_market["date"].max())
+    df_feature, df_market = prepare_data(stocks, st, end, model="predict")
     df_select_stocks = select_stocks(df_today=df_feature, df_market_history=df_market, models=models)
     if df_select_stocks is None:
         return
@@ -65,8 +63,8 @@ def main():
       → 下個月用新模型
     """
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2026-01-01"
-    end = "2099-01-01"  # "2026-02-01"
+    st = "2026-03-01"
+    end = "2026-05-07"  # "2026-02-01"
     # models = train(stocks=stocks, st=st, end=end)
     # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
 
@@ -77,8 +75,9 @@ def main():
     )
 
 
-def prepare_data(stocks, st, end):
+def prepare_data(stocks, st, end, model="train"):
     df_margin = lite_db.margin(stocks, st, end)
+    print("check date", df_margin["date"].max())
     df_market = parquet_db.query_price(["0050"], st, end)
     df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
     df_margin = label_builder.add_target(
@@ -90,8 +89,8 @@ def prepare_data(stocks, st, end):
         None,
         FEATURE_TYPE.margin_ibbuysell,
         dfs=[df_margin, df_ibbuysell, df_market],
+        argv=model,
     )
-
     return df_feature, df_market
 
 
@@ -245,7 +244,7 @@ def walk_forward_train(df, params=PARAMS, n_splits=5):
         val = df[df["date"].isin(dates[val_idx])]
         X_train, y_train = train[feature_cols], train["target"]
         X_val, y_val = val[feature_cols], val["target"]
-        print("日期區間：", train["date"].min(), train["date"].max())
+
         model = lgb.LGBMRegressor(**params)
         model.fit(
             X_train, y_train, eval_set=[(X_val, y_val)], callbacks=[lgb.early_stopping(50), lgb.log_evaluation(50)]
@@ -257,7 +256,6 @@ def walk_forward_train(df, params=PARAMS, n_splits=5):
         models.append(model)
 
     print(f"\n平均 IC: {np.mean(scores):.4f}")
-
     return models, scores
 
 
@@ -475,17 +473,27 @@ def select_stocks(
             return None
 
     feature_cols = [c for c in df_today.columns if c.startswith("f_")]
-    preds = np.mean([m.predict(df_today[feature_cols]) for m in models[-2:]], axis=0)
 
-    df_today = df_today.copy()
-    df_today["pred_score"] = preds
+    results = []
 
-    return (
-        df_today[["date", "stock_id", "pred_score"]]
-        .sort_values("pred_score", ascending=False)
-        .head(top_n)
-        .reset_index(drop=True)
-    )
+    for date, group in df_today.groupby("date"):
+        preds = np.mean([m.predict(group[feature_cols]) for m in models[-2:]], axis=0)
+        group = group.copy()
+        group["pred_score"] = preds
+
+        top = (
+            group[["date", "stock_id", "pred_score"]]
+            .sort_values("pred_score", ascending=False)
+            .head(top_n)
+            .reset_index(drop=True)
+        )
+
+        results.append(top)
+
+    if not results:
+        return None
+
+    return pd.concat(results, ignore_index=True)
 
 
 main()

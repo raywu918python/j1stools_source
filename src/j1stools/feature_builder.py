@@ -22,6 +22,7 @@ def gen_feature(
     df: pd.DataFrame,
     feature_type: FEATURE_TYPE = FEATURE_TYPE.normal,
     dfs: list = None,
+    argv="train",
 ) -> pd.DataFrame:
     t1 = time()
     if df is not None:
@@ -34,7 +35,7 @@ def gen_feature(
     # df = AtrFeature.add_feature(df)
     #############################################################
     if FEATURE_TYPE.margin_ibbuysell in feature_type:
-        df = margin_ibbuysell_feature.add_feature(dfs[0], dfs[1], dfs[2])
+        df = margin_ibbuysell_feature.add_feature(dfs[0], dfs[1], dfs[2], mode=argv)
     if FEATURE_TYPE.today in feature_type:
         # return generate_features_t1(df)
         df = generate_features_today(df)
