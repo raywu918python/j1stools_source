@@ -28,9 +28,10 @@ def f_macd_hist_divergences_with_atr(df: pd.DataFrame):
 
         res = pd.DataFrame(index=group.index)
         res["atr"] = atr
-        res["macd"] = macd_df.iloc[:, 0]
-        res["signal"] = macd_df.iloc[:, 2]
-        res["hist"] = macd_df.iloc[:, 1]
+        if macd_df is not None:
+            res["macd"] = macd_df.iloc[:, 0]
+            res["signal"] = macd_df.iloc[:, 2]
+            res["hist"] = macd_df.iloc[:, 1]
         return res
 
     # 批次處理指標 (使用長表格 groupby 再轉回寬表格，這在多指標計算時較穩健)

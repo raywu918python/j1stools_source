@@ -201,7 +201,7 @@ def model_release():
     x, y = drop_na_inf(x, y)
     model = gen_rfc_model()
     model.fit(x, y)
-    joblib.dump(model, get_full_name("rfc"))
+    joblib.dump(model, "models/rfc_macd_6xx.joblib")
 
 
 # predict_today()
