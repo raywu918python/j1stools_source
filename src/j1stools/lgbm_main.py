@@ -41,18 +41,14 @@ def predict(
 
     models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
 
-    df = prepare_data(stocks, st, end)
-
-    features = [col for col in df.columns if col.startswith("f_")]
-    # df["pred_return"] = np.max([m.predict(df[features]) for m in models], axis=0)
-    df["pred_return"] = np.mean([m.predict(df[features]) for m in models], axis=0)
-
-    df = df[["date", "stock_id", "pred_return"]]
-    # print(signal.head(10))
-    signal = df[df["pred_return"] > 0.05]
-    signal.sort_values(by=["date", "pred_return"], inplace=True)
-    signal.to_csv("lgbm_signal.csv", index=False)
-    # print(signal.sort_values(by=["pred_return"], ascending=False).head(10))
+    df_feature, df_market = prepare_data(stocks, st, end)
+    print(df_feature["date"].max())
+    print(df_market["date"].max())
+    df_select_stocks = select_stocks(df_today=df_feature, df_market_history=df_market, models=models)
+    if df_select_stocks is None:
+        return
+    df = df_select_stocks.head(30).sort_values(by=["date"], ascending=False)
+    print(df.head(30))
 
 
 def main():
@@ -69,13 +65,16 @@ def main():
       → 下個月用新模型
     """
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2015-01-01"
-    end = "2024-01-01"  # "2026-02-01"
-    models, scores = train(stocks=stocks, st=st, end=end)
-
-    # start_backtest(stocks=stocks, st=st, end=end)
+    st = "2026-01-01"
+    end = "2099-01-01"  # "2026-02-01"
+    # models = train(stocks=stocks, st=st, end=end)
     # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
-    # predict(stocks=stocks, st=st, end=end)
+
+    predict(
+        stocks=stocks,
+        st=st,
+        end=end,
+    )
 
 
 def prepare_data(stocks, st, end):
@@ -93,7 +92,7 @@ def prepare_data(stocks, st, end):
         dfs=[df_margin, df_ibbuysell, df_market],
     )
 
-    return df_feature
+    return df_feature, df_market
 
 
 def train(
@@ -106,19 +105,16 @@ def train(
     print("=" * 60, "train")
     keep_latest_ten_files("./model")
 
-    df_feature = prepare_data(stocks, st, end)
+    df_feature, _ = prepare_data(stocks, st, end)
 
-    # models, scores = walk_forward_train(
-    #     df_feature,
-    #     n_splits=5,
-    # )
-    models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
+    models, scores = walk_forward_train(
+        df_feature,
+        n_splits=5,
+    )
     result_df, stock_df, bottom_df = evaluate_selection(df_feature, models)
-
     summary = analyze_frequent(stock_df)
 
-    joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
-    raise Exception("未完成")
+    return models
 
 
 def start_backtest(
@@ -249,7 +245,7 @@ def walk_forward_train(df, params=PARAMS, n_splits=5):
         val = df[df["date"].isin(dates[val_idx])]
         X_train, y_train = train[feature_cols], train["target"]
         X_val, y_val = val[feature_cols], val["target"]
-
+        print("日期區間：", train["date"].min(), train["date"].max())
         model = lgb.LGBMRegressor(**params)
         model.fit(
             X_train, y_train, eval_set=[(X_val, y_val)], callbacks=[lgb.early_stopping(50), lgb.log_evaluation(50)]
@@ -261,6 +257,7 @@ def walk_forward_train(df, params=PARAMS, n_splits=5):
         models.append(model)
 
     print(f"\n平均 IC: {np.mean(scores):.4f}")
+
     return models, scores
 
 
@@ -484,7 +481,7 @@ def select_stocks(
     df_today["pred_score"] = preds
 
     return (
-        df_today[["stock_id", "pred_score"]]
+        df_today[["date", "stock_id", "pred_score"]]
         .sort_values("pred_score", ascending=False)
         .head(top_n)
         .reset_index(drop=True)
