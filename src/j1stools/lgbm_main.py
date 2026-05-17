@@ -42,11 +42,14 @@ def predict(
     models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
 
     df_feature, df_market = prepare_data(stocks, st, end, model="predict")
+    print("check date", df_feature["date"].min())
+    print("check date", df_feature["date"].max())
+    print("check date", df_market["date"].max())
     df_select_stocks = select_stocks(df_today=df_feature, df_market_history=df_market, models=models)
     if df_select_stocks is None:
         return
-    df = df_select_stocks.head(30).sort_values(by=["date"], ascending=False)
-    print(df.head(30))
+    df_select_stocks = df_select_stocks.head(30).sort_values(by=["date"], ascending=False)
+    print(df_select_stocks.head())
 
 
 def main():
@@ -77,7 +80,6 @@ def main():
 
 def prepare_data(stocks, st, end, model="train"):
     df_margin = lite_db.margin(stocks, st, end)
-    print("check date", df_margin["date"].max())
     df_market = parquet_db.query_price(["0050"], st, end)
     df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
     df_margin = label_builder.add_target(
