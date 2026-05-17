@@ -42,13 +42,12 @@ def predict(
     models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
 
     df_feature, df_market = prepare_data(stocks, st, end, model="predict")
-    print("check date", df_feature["date"].min())
-    print("check date", df_feature["date"].max())
-    print("check date", df_market["date"].max())
     df_select_stocks = select_stocks(df_today=df_feature, df_market_history=df_market, models=models)
     if df_select_stocks is None:
         return
-    df_select_stocks = df_select_stocks.head(30).sort_values(by=["date"], ascending=False)
+
+    df_select_stocks = df_select_stocks.sort_values(by=["date", "pred_score"], ascending=[False, False])
+    df_select_stocks.to_csv("signal_today.csv", index=False)
     print(df_select_stocks.head())
 
 
@@ -66,9 +65,13 @@ def main():
       → 下個月用新模型
     """
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2026-03-01"
+    st = "2026-01-01"
     end = "2026-05-07"  # "2026-02-01"
-    # models = train(stocks=stocks, st=st, end=end)
+    # models = train(
+    #     stocks=stocks,
+    #     st=st,
+    #     end=end,
+    # )
     # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
 
     predict(
@@ -498,7 +501,7 @@ def select_stocks(
     return pd.concat(results, ignore_index=True)
 
 
-main()
+# main()
 # predict(
 #     stocks=random.sample(parquet_db.query_stocks_no_etf(), 500),
 #     st="2024-01-01",

@@ -102,6 +102,7 @@ def gen_feature(
 
     f = df.select_dtypes(include="number").describe().T.round(2)
     print(f)
+    print(f.shape)
     f.to_csv("describe.csv")
 
     return df
