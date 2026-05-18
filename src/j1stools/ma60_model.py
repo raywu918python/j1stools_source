@@ -51,20 +51,21 @@ XGB_PARAMS = dict(
     verbosity=0,
 )
 
-# 原始 5 個均線特徵
+# 原始均線特徵
 BASE_FEATURES = [
     "f_dev_ma20",  # 昨收偏離 MA20
-    "f_dev_ma60",  # 昨收偏離 MA60  ← 診斷時會移除這個
+    "f_dev_ma60",  # 昨收偏離 MA60（現在是特徵，不是守門員）
+    "f_ma60_slope",  # MA60 五日斜率（多頭/空頭方向）← 新增
     "f_ma5_slope",  # MA5 三日斜率
     "f_vol_ratio",  # 量比
     "f_ma_align",  # 均線多頭排列
 ]
 
-# 新增特徵
+# 新增技術指標特徵
 NEW_FEATURES = [
     "f_rsi14",  # RSI 14
-    "f_macd_hist",  # MACD 柱狀體（動能加速/減速）
-    "f_gap",  # 開盤缺口（今開 vs 昨收）
+    "f_macd_hist",  # MACD 柱狀體
+    "f_gap",  # 開盤缺口
     "f_rel_mkt",  # 相對大盤 5 日強弱
 ]
 
@@ -146,6 +147,7 @@ def _compute_features(grp: pd.DataFrame, market: pd.DataFrame) -> pd.DataFrame:
     # --- 原始均線特徵 ---
     d["f_dev_ma20"] = (c - ma20) / ma20.clip(lower=1e-6)
     d["f_dev_ma60"] = (c - ma60) / ma60.clip(lower=1e-6)
+    d["f_ma60_slope"] = (ma60 - ma60.shift(5)) / ma60.shift(5).clip(lower=1e-6)  # MA60 五日斜率
     d["f_ma5_slope"] = (ma5 - ma5.shift(3)) / ma5.shift(3).clip(lower=1e-6)
     d["f_ma_align"] = (ma5 - ma10) / ma10.clip(lower=1e-6) + (ma10 - ma20) / ma20.clip(lower=1e-6)
 
@@ -276,36 +278,43 @@ def _train_xgb(train: pd.DataFrame, feats: list) -> XGBClassifier:
 # ============================================================
 # Walk-Forward
 # ============================================================
+# Walk-Forward（按年切）
+# ============================================================
 def _walk_forward(data: pd.DataFrame, feats: list, label: str = "") -> pd.DataFrame:
-    bull = data[data["regime"] == "bull"].dropna(subset=feats + ["label"]).copy()
+    """
+    Test 固定是完整一年，Train 是該年之前的所有資料。
+    不再強制過濾 regime == bull，由呼叫端決定傳入哪些樣本。
+    """
+    d = data.dropna(subset=feats + ["label"]).copy()
 
-    valid_feats = _get_valid_feats(bull, feats)
+    valid_feats = _get_valid_feats(d, feats)
     dropped = set(feats) - set(valid_feats)
     if dropped:
         print(f"  ⚠️  略過特徵（資料不足）：{dropped}")
 
-    if len(bull) == 0:
-        print("  ❌ 沒有多頭樣本")
+    if len(d) == 0:
+        print("  ❌ 沒有樣本")
         return pd.DataFrame()
 
-    dates = sorted(bull["date"].unique())
-    fold_size = max(1, len(dates) // N_SPLITS)
-    rows = []
+    min_year = d["date"].dt.year.min()
+    max_year = d["date"].dt.year.max()
+    test_years = range(min_year + 1, max_year + 1)
 
     tag = f" [{label}]" if label else ""
-    print(f"多頭樣本：{len(bull):,} 筆，{len(dates)} 個交易日{tag}")
+    print(f"樣本：{len(d):,} 筆 | {min_year} ~ {max_year}{tag}")
 
-    for fold in range(2, N_SPLITS + 1):
-        tr_dates = dates[: fold_size * (fold - 1)]
-        te_dates = dates[fold_size * (fold - 1) : fold_size * fold]
+    rows = []
+    for test_year in test_years:
+        train = d[d["date"].dt.year < test_year]
+        test = d[d["date"].dt.year == test_year]
 
-        if len(tr_dates) < MIN_TRAIN:
+        train_days = train["date"].nunique()
+        if train_days < MIN_TRAIN:
+            print(f"  {test_year} 跳過：訓練天數不足 ({train_days} < {MIN_TRAIN})")
             continue
 
-        train = bull[bull["date"].isin(tr_dates)]
-        test = bull[bull["date"].isin(te_dates)]
-
         if len(test) < 30 or test["label"].nunique() < 2:
+            print(f"  {test_year} 跳過：測試集不足或 label 單一 ({len(test)} 筆)")
             continue
 
         clf = _train_xgb(train, valid_feats)
@@ -317,11 +326,10 @@ def _walk_forward(data: pd.DataFrame, feats: list, label: str = "") -> pd.DataFr
 
         rows.append(
             {
-                "fold": fold,
-                "train_start": str(tr_dates[0])[:10],
-                "train_end": str(tr_dates[-1])[:10],
-                "test_start": str(te_dates[0])[:10],
-                "test_end": str(te_dates[-1])[:10],
+                "test_year": test_year,
+                "train_start": str(train["date"].min())[:10],
+                "train_end": str(train["date"].max())[:10],
+                "train_days": train_days,
                 "train_n": len(train),
                 "test_n": len(test),
                 "label_rate": round(float(train["label"].mean()), 3),
@@ -332,9 +340,10 @@ def _walk_forward(data: pd.DataFrame, feats: list, label: str = "") -> pd.DataFr
         )
 
         print(
-            f"  Fold {fold} | "
-            f"{str(tr_dates[0])[:10]}~{str(tr_dates[-1])[:10]} ({len(train):,}) → "
-            f"{str(te_dates[0])[:10]}~{str(te_dates[-1])[:10]} | "
+            f"  {test_year} | "
+            f"Train {str(train['date'].min())[:10]}~{str(train['date'].max())[:10]} "
+            f"({len(train):,}) → "
+            f"Test {test_year} ({len(test):,}) | "
             f"Precision={prec:.3f}  AUC={auc:.3f}  訊號={int(y_pred.sum())}"
         )
 
@@ -345,10 +354,10 @@ def _walk_forward(data: pd.DataFrame, feats: list, label: str = "") -> pd.DataFr
 # 特徵重要性
 # ============================================================
 def _feature_importance(data: pd.DataFrame, feats: list) -> pd.Series:
-    bull = data[data["regime"] == "bull"].dropna(subset=feats + ["label"])
-    valid_feats = _get_valid_feats(bull, feats)
+    d = data.dropna(subset=feats + ["label"])
+    valid_feats = _get_valid_feats(d, feats)
 
-    clf = _train_xgb(bull, valid_feats)
+    clf = _train_xgb(d, valid_feats)
     imp = pd.Series(clf.feature_importances_, index=valid_feats).sort_values(ascending=False)
 
     print("\n--- 特徵重要性 ---")
@@ -395,19 +404,226 @@ def _diagnose(data: pd.DataFrame, full_results: pd.DataFrame, feats: list) -> No
 
 
 # ============================================================
+# 收鍊突破分析（內部）
+# ============================================================
+BREAKOUT_WINDOW = 10  # 確認收鍊後幾個交易日內必須突破
+
+
+def _clean_triangle(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    d.columns = d.columns.astype(str).str.strip().str.lower()
+
+    for col in ["stock_id", "h2_date", "high"]:
+        if col not in d.columns:
+            raise ValueError(f"triangle_df 缺少欄位：{col}")
+
+    d["stock_id"] = d["stock_id"].astype(str).str.strip()
+    d["h2_date"] = pd.to_datetime(d["h2_date"])
+    d["h2_high"] = pd.to_numeric(d["high"], errors="coerce")
+    d["pattern_date"] = pd.to_datetime(d["date"]) if "date" in d.columns else d["h2_date"]
+
+    return d.dropna(subset=["h2_high", "h2_date"]).reset_index(drop=True)
+
+
+def _find_entries(triangle_df: pd.DataFrame, price_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    從 date（確認收鍊當天）之後算 BREAKOUT_WINDOW 個交易日
+    第一個收盤 > h2_date 的 high → 進場
+    days_to_entry 用交易日數計算
+    """
+    tri = _clean_triangle(triangle_df)
+    prc = price_df.copy()
+    prc.columns = prc.columns.str.strip().str.lower()
+    prc["date"] = pd.to_datetime(prc["date"])
+    prc["stock_id"] = prc["stock_id"].astype(str).str.strip()
+    prc["close"] = pd.to_numeric(prc["close"], errors="coerce")
+    prc = prc[prc["close"] > 0].sort_values(["stock_id", "date"]).reset_index(drop=True)
+
+    # 確認 stock_id 格式一致
+    tri_ids = set(tri["stock_id"].unique())
+    prc_ids = set(prc["stock_id"].unique())
+    overlap = tri_ids & prc_ids
+    missing = tri_ids - prc_ids
+    if missing:
+        print(f"  ⚠️  {len(missing)} 支股票在 price_df 找不到（stock_id 格式可能不一致）")
+        print(f"      triangle 範例：{list(tri_ids)[:3]}")
+        print(f"      price    範例：{list(prc_ids)[:3]}")
+    print(f"  ✓ 有效匹配股票：{len(overlap)} 支")
+
+    # 建立 per-stock 索引加速查詢
+    prc_grouped = {sid: grp.reset_index(drop=True) for sid, grp in prc.groupby("stock_id")}
+
+    records = []
+    for _, row in tri.iterrows():
+        sid = row["stock_id"]
+        h2_date = row["h2_date"]
+        breakout_high = row["h2_high"]
+        pattern_date = row["pattern_date"]
+
+        if sid not in prc_grouped:
+            continue
+
+        stock_prc = prc_grouped[sid]
+
+        # 取 pattern_date 之後的交易日（head 確保只取前 N 個交易日）
+        future = stock_prc[stock_prc["date"] > pattern_date].head(BREAKOUT_WINDOW)
+
+        if len(future) == 0:
+            continue
+
+        hit = future[future["close"] > breakout_high]
+
+        if len(hit) == 0:
+            records.append(
+                {
+                    "stock_id": sid,
+                    "pattern_date": pattern_date,
+                    "h2_date": h2_date,
+                    "breakout_high": round(breakout_high, 4),
+                    "entry_date": pd.NaT,
+                    "entry_close": np.nan,
+                    "trading_days_to_entry": np.nan,
+                    "triggered": False,
+                }
+            )
+        else:
+            entry = hit.iloc[0]
+            # 用交易日數（在 future 裡的位置 + 1）
+            trading_days = future.index.get_loc(entry.name) + 1
+
+            records.append(
+                {
+                    "stock_id": sid,
+                    "pattern_date": pattern_date,
+                    "h2_date": h2_date,
+                    "breakout_high": round(breakout_high, 4),
+                    "entry_date": entry["date"],
+                    "entry_close": round(entry["close"], 4),
+                    "trading_days_to_entry": trading_days,
+                    "triggered": True,
+                }
+            )
+
+    return pd.DataFrame(records)
+
+
+def _find_ma_cross(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    偵測三種 MA 黃金交叉：
+      MA5  上穿 MA10
+      MA5  上穿 MA20
+      MA10 上穿 MA20
+    只在 regime = bull 且特徵完整的樣本中偵測
+    """
+    records = []
+
+    for sid, grp in data.groupby("stock_id"):
+        d = grp.copy().sort_values("date").reset_index(drop=True)
+
+        # 用昨收計算的均線（已在 _compute_features 算好，這裡重算以確保一致）
+        c = d["close"].shift(1)
+        ma5 = c.rolling(MA_SHORT).mean()
+        ma10 = c.rolling(MA_MID).mean()
+        ma20 = c.rolling(MA_LONG).mean()
+
+        # 交叉：昨日 A < B，今日 A > B
+        cross_5_10 = (ma5.shift(1) < ma10.shift(1)) & (ma5 > ma10)
+        cross_5_20 = (ma5.shift(1) < ma20.shift(1)) & (ma5 > ma20)
+        cross_10_20 = (ma10.shift(1) < ma20.shift(1)) & (ma10 > ma20)
+
+        is_cross = cross_5_10 | cross_5_20 | cross_10_20
+
+        # 只取 regime = bull 的交叉日
+        cross_days = d[(is_cross) & (d["regime"] == "bull")]
+
+        for _, row in cross_days.iterrows():
+            cross_type = []
+            idx = row.name
+            if cross_5_10.iloc[idx]:
+                cross_type.append("MA5xMA10")
+            if cross_5_20.iloc[idx]:
+                cross_type.append("MA5xMA20")
+            if cross_10_20.iloc[idx]:
+                cross_type.append("MA10xMA20")
+
+            records.append(
+                {
+                    "stock_id": sid,
+                    "entry_date": row["date"],
+                    "entry_type": "+".join(cross_type),
+                    "entry_close": row["close"],
+                }
+            )
+
+    return pd.DataFrame(records)
+
+
+def _print_ma_cross_stats(ma_signals: pd.DataFrame) -> None:
+    print(f"\n{'='*60}")
+    print(f"MA 交叉訊號統計")
+    print(f"{'='*60}")
+    print(f"訊號總數      : {len(ma_signals):,}")
+
+    type_counts = ma_signals["entry_type"].value_counts()
+    print(f"\n交叉類型分佈：")
+    for t, cnt in type_counts.items():
+        bar = "█" * int(cnt / type_counts.max() * 20)
+        print(f"  {t:<20} {bar}  {cnt:,}")
+    print(f"{'='*60}")
+
+
+def _print_breakout_stats(signals: pd.DataFrame) -> None:
+    n_total = len(signals)
+    n_triggered = signals["triggered"].sum()
+    n_miss = n_total - n_triggered
+
+    print(f"\n{'='*60}")
+    print(f"收鍊突破統計")
+    print(f"{'='*60}")
+    print(f"型態總數      : {n_total}")
+    print(f"10日內突破    : {n_triggered}  ({n_triggered/max(n_total,1):.1%})")
+    print(f"未突破        : {n_miss}  ({n_miss/max(n_total,1):.1%})")
+
+    triggered = signals[signals["triggered"]]
+    if len(triggered) > 0:
+        print(f"\n突破後進場速度（交易日）：")
+        print(f"  平均 {triggered['trading_days_to_entry'].mean():.1f} 天")
+        print(f"  最快 {triggered['trading_days_to_entry'].min():.0f} 天")
+        print(f"  最慢 {triggered['trading_days_to_entry'].max():.0f} 天")
+
+        bins = [0, 2, 5, 7, 10]
+        labels = ["1-2天", "3-5天", "6-7天", "8-10天"]
+        triggered = triggered.copy()
+        triggered["speed"] = pd.cut(triggered["trading_days_to_entry"], bins=bins, labels=labels)
+        dist = triggered["speed"].value_counts().sort_index()
+        print(f"\n  速度分佈：")
+        for lbl, cnt in dist.items():
+            bar = "█" * int(cnt / max(dist) * 20)
+            print(f"    {lbl}  {bar}  {cnt}")
+    print(f"{'='*60}")
+
+
+# ============================================================
 # 主函式
 # ============================================================
-def run(price_df: pd.DataFrame, market_df: pd.DataFrame):
+def run(
+    price_df: pd.DataFrame, market_df: pd.DataFrame, triangle_df: pd.DataFrame = None, wedge_df: pd.DataFrame = None
+):
     """
     Parameters
     ----------
-    price_df  : 欄位 date / stock_id / close（+ open / volume 選用）
-    market_df : 欄位 date / close（0050 ETF）
+    price_df     : 欄位 date / stock_id / close（+ open / volume 選用）
+    market_df    : 欄位 date / close（0050 ETF）
+    triangle_df  : 收鍊輸出（選用），欄位 date / stock_id / h2_date / high
+    wedge_df     : 下降楔形輸出（選用），格式同 triangle_df
 
     Returns
     -------
-    results : Walk-Forward 各 Fold 結果
-    data    : 完整標記資料集
+    results    : Walk-Forward 各 Fold 結果
+    data       : 完整標記資料集
+    signals    : 收鍊突破訊號
+    wedge_signals : 下降楔形突破訊號
+    ma_signals : MA 交叉訊號
     """
     print("=" * 60)
     print("B-Bull MVP  v3  (XGBoost + RSI + MACD + 診斷)")
@@ -426,29 +642,29 @@ def run(price_df: pd.DataFrame, market_df: pd.DataFrame):
     print("\n計算特徵與標記...")
     data = _build_dataset(price_df, market_df)
 
-    bull = data[data["regime"] == "bull"]
     print(f"\n總樣本         : {len(data):,}")
-    print(f"多頭樣本       : {len(bull):,} ({len(bull)/max(len(data),1):.1%})")
-    print(f"緩衝帶（丟棄） : {(data['regime']=='buffer').sum():,}")
-    print(f"Label=1 比例   : {bull['label'].mean():.1%}  ← 基準線")
+    print(f"Label=1 比例   : {data['label'].mean():.1%}  ← 全樣本基準線")
+    print(f"（MA60 位置分佈）")
+    print(f"  多頭區間     : {(data['regime']=='bull').sum():,}  ({(data['regime']=='bull').mean():.1%})")
+    print(f"  緩衝帶       : {(data['regime']=='buffer').sum():,}  ({(data['regime']=='buffer').mean():.1%})")
 
-    # 有效特徵（去除資料不足的）
-    valid_all = _get_valid_feats(bull, FEATURE_COLS)
+    # 有效特徵
+    valid_all = _get_valid_feats(data, FEATURE_COLS)
     print(f"\n使用特徵（{len(valid_all)} 個）：{valid_all}")
 
-    # Walk-Forward（完整特徵）
-    print("\n--- Walk-Forward（完整特徵）---")
+    # Walk-Forward（全樣本，MA60 改為特徵）
+    print("\n--- Walk-Forward（全樣本，MA60 為特徵）---")
     results = _walk_forward(data, valid_all)
 
     if len(results) > 0:
         avg_prec = results["precision"].mean()
         avg_auc = results["auc"].mean()
-        label_rate = bull["label"].mean()
+        label_rate = data["label"].mean()
 
         print(f"\n{'='*60}")
         print(f"平均 Precision  : {avg_prec:.3f}  （基準：{label_rate:.3f}）")
         print(f"平均 AUC        : {avg_auc:.3f}  （基準：0.500）")
-        print(f"Precision 標準差: {results['precision'].std():.3f}")
+        print(f"Precision 標準差: {results['precision'].std():.3f}  " f"（共 {len(results)} 個測試年）")
         print("\n判讀：")
         if avg_auc > 0.58 and avg_prec > label_rate:
             print("  ✅ 特徵有效 → 可繼續加特徵或加入 1D-CNN")
@@ -459,11 +675,163 @@ def run(price_df: pd.DataFrame, market_df: pd.DataFrame):
         print(f"{'='*60}")
         print(f"\n{results.to_string(index=False)}")
 
-        # 特徵重要性
+        # 特徵重要性（全樣本）
         _feature_importance(data, valid_all)
 
         # 診斷：移除 f_dev_ma60
         if "f_dev_ma60" in valid_all:
             _diagnose(data, results, valid_all)
 
-    return results, data
+    # 收鍊/楔形/MA交叉 訊號
+    signals = pd.DataFrame()
+    wedge_signals = pd.DataFrame()
+    ma_signals = pd.DataFrame()
+
+    # ── MA 交叉訊號（永遠跑）──
+    print("\n--- MA 交叉訊號 ---")
+    ma_signals = _find_ma_cross(data)
+    _print_ma_cross_stats(ma_signals)
+
+    if triangle_df is not None:
+        print("\n--- 收鍊突破分析 ---")
+        signals = _find_entries(triangle_df, price_df)
+        _print_breakout_stats(signals)
+
+    if wedge_df is not None:
+        print("\n--- 下降楔形突破分析 ---")
+        wedge_signals = _find_entries(wedge_df, price_df)
+        _print_breakout_stats(wedge_signals)
+
+    # ── 合併所有候選訊號 ──
+    keep_rows = []
+
+    if len(ma_signals) > 0:
+        ma_keep = ma_signals[["stock_id", "entry_date"]].rename(columns={"entry_date": "date"})
+        ma_keep["entry_source"] = "ma_cross"
+        keep_rows.append(ma_keep)
+
+    if len(signals) > 0:
+        tri_triggered = signals[signals["triggered"]][["stock_id", "entry_date"]].rename(columns={"entry_date": "date"})
+        tri_triggered["entry_source"] = "triangle"
+        keep_rows.append(tri_triggered)
+
+    if len(wedge_signals) > 0:
+        wedge_triggered = wedge_signals[wedge_signals["triggered"]][["stock_id", "entry_date"]].rename(
+            columns={"entry_date": "date"}
+        )
+        wedge_triggered["entry_source"] = "wedge"
+        keep_rows.append(wedge_triggered)
+
+    # ── 各訊號來源獨立 Walk-Forward ──
+    sources = []
+    if len(ma_signals) > 0:
+        ma_only = ma_signals[["stock_id", "entry_date"]].rename(columns={"entry_date": "date"})
+        sources.append(("MA 交叉", ma_only))
+
+    if len(signals) > 0:
+        tri_only = signals[signals["triggered"]][["stock_id", "entry_date"]].rename(columns={"entry_date": "date"})
+        sources.append(("收鍊突破", tri_only))
+
+    if len(wedge_signals) > 0:
+        wedge_only = wedge_signals[wedge_signals["triggered"]][["stock_id", "entry_date"]].rename(
+            columns={"entry_date": "date"}
+        )
+        sources.append(("楔形突破", wedge_only))
+
+    summary_rows = []
+    for src_name, src_df in sources:
+        src_data = data.merge(src_df, on=["stock_id", "date"], how="inner")
+        if len(src_data) == 0:
+            continue
+
+        label_rate_src = src_data["label"].mean() if len(src_data) > 0 else 0
+
+        print(f"\n--- Walk-Forward：{src_name} ---")
+        print(f"樣本數         : {len(src_data):,}")
+        print(f"Label=1 比例   : {label_rate_src:.1%}  ← 基準線")
+
+        valid_src = _get_valid_feats(src_data, FEATURE_COLS)
+        src_results = _walk_forward(src_data, valid_src, label=src_name)
+
+        if len(src_results) > 0:
+            src_prec = src_results["precision"].mean()
+            src_auc = src_results["auc"].mean()
+            beat_base = (src_prec - label_rate_src) / label_rate_src * 100
+
+            print(f"\n{'='*60}")
+            print(
+                f"[{src_name}] 平均 Precision : {src_prec:.3f}  "
+                f"（基準：{label_rate_src:.3f}，超越 {beat_base:+.1f}%）"
+            )
+            print(f"[{src_name}] 平均 AUC       : {src_auc:.3f}")
+            print(f"{'='*60}")
+            print(f"\n{src_results.to_string(index=False)}")
+
+            summary_rows.append(
+                {
+                    "source": src_name,
+                    "n_signals": len(src_data),
+                    "label_rate": round(label_rate_src, 3),
+                    "precision": round(src_prec, 3),
+                    "auc": round(src_auc, 3),
+                    "beat_base_%": round(beat_base, 1),
+                }
+            )
+
+    # 彙總對比表
+    if summary_rows:
+        summary_rows.append(
+            {
+                "source": "全樣本（基準）",
+                "n_signals": len(data),
+                "label_rate": round(float(data["label"].mean()), 3),
+                "precision": round(results["precision"].mean(), 3),
+                "auc": round(results["auc"].mean(), 3),
+                "beat_base_%": round(
+                    (results["precision"].mean() - data["label"].mean()) / data["label"].mean() * 100, 1
+                ),
+            }
+        )
+        summary_df = pd.DataFrame(summary_rows)
+        print(f"\n{'='*60}")
+        print(f"各訊號來源彙總對比")
+        print(f"{'='*60}")
+        print(summary_df.to_string(index=False))
+
+    return results, data, signals, wedge_signals, ma_signals
+
+
+def _filter_by_triangle(data: pd.DataFrame, signals: pd.DataFrame) -> pd.DataFrame:
+    """
+    只保留「在收鍊確認後 BREAKOUT_WINDOW 個交易日窗口內」的樣本
+    用 merge 取代 apply，速度快很多
+    """
+    if len(signals) == 0:
+        return pd.DataFrame()
+
+    all_dates_sorted = sorted(data["date"].unique())
+    date_rank = {d: i for i, d in enumerate(all_dates_sorted)}
+
+    # 建立白名單 DataFrame
+    rows = []
+    for _, row in signals.iterrows():
+        sid = row["stock_id"]
+        pattern_date = row["pattern_date"]
+
+        if pattern_date not in date_rank:
+            continue
+
+        start_rank = date_rank[pattern_date] + 1
+        end_rank = start_rank + BREAKOUT_WINDOW
+        window_dates = all_dates_sorted[start_rank:end_rank]
+
+        for d in window_dates:
+            rows.append({"stock_id": sid, "date": d})
+
+    if not rows:
+        return pd.DataFrame()
+
+    whitelist = pd.DataFrame(rows).drop_duplicates()
+    filtered = data.merge(whitelist, on=["stock_id", "date"], how="inner")
+
+    return filtered

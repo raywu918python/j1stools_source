@@ -213,13 +213,8 @@ def find_triangle(df):
     return df_triangle
 
 
-# 呼叫方式
-# draw_multiple_triangles(df_triangle, n_plots=9)
-def test():
-    stocks = parquet_db.query_stocks_ids_list()
-    # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2026-01-01", "2026-03-01")
-    df_triangle = detect_strict_triangle(
+def find_good_triangle(df):
+    return detect_strict_triangle(
         df,
         order=7,
         max_slope_ratio=5,
@@ -227,20 +222,50 @@ def test():
         min_reduction=0.3,
     )
 
-    df_refined_triangle = df_triangle[df_triangle["is_refined_triangle"] == True]
+
+# 呼叫方式
+# draw_multiple_triangles(df_triangle, n_plots=9)
+def test():
+    stocks = parquet_db.query_stocks_ids_list()
+    # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
+    df = parquet_db.query_price(stocks, "2026-01-01", "2026-03-01")
+    df_source = detect_strict_triangle(
+        df,
+        order=5,
+        max_slope_ratio=5,
+        min_overlap_ratio=0.4,
+        min_reduction=0.3,
+    )
+
+    df_refined_triangle = df_source[df_source["is_refined_triangle"] == True]
+    df_triangle = df_source[df_source["is_triangle"] == True]
     print(
         "找到標記的三角形數量：",
+        len(df_source),
         len(df_triangle),
-        len(df_triangle[df_triangle["is_triangle"] == True]),
         len(df_refined_triangle),
     )
-    print(df_refined_triangle.head().T)
+    # print(df_refined_triangle.head().T)
 
     # print(df_triangle[df_triangle["is_triangle"] == True].head().T)
     draw_multiple_triangles_safe(
+        df_source,
         df_triangle,
-        df_refined_triangle,
+        # df_refined_triangle,
     )
+
+
+def find_refined_triangle(df):
+    df_source = detect_strict_triangle(
+        df,
+        order=7,
+        max_slope_ratio=5,
+        min_overlap_ratio=0.4,
+        min_reduction=0.3,
+    )
+
+    # return df_source[df_source["is_triangle"] == True]
+    return df_source[df_source["is_refined_triangle"] == True]
 
 
 # test()
