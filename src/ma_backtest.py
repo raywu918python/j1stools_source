@@ -3,8 +3,8 @@
 ========
 策略規則：
   進場：訊號當天收盤價（集合競價）
-  停損：進場價 × 0.95（-5%）
-  目標：進場價 × 1.10（+10%）
+  停損：進場價 - ATR14 × 2
+  目標：進場價 + ATR14 × 3
   強制出場：第 10 個交易日收盤
   資金：每次用總資金 10%，最多同時持倉 5 支
   漲停板：若進場當天漲停（無法集合競價買入），跳過該訊號
@@ -13,7 +13,7 @@
   from backtest import run_backtest
   equity, trades = run_backtest(signals, price_df, init_capital=1_000_000)
 
-signals   : ma_cross_xgb.run() 回傳的 signals DataFrame
+signals   : ma_cross_xgb.run() 回傳的 signals_model DataFrame
 price_df  : 原始日頻價格資料
 """
 
@@ -26,19 +26,38 @@ warnings.filterwarnings("ignore")
 # ============================================================
 # 參數
 # ============================================================
-STOP_LOSS = 0.05  # 停損 5%
-TARGET_RET = 0.10  # 目標 10%
+ATR_PERIOD = 14  # ATR 計算天數
+ATR_STOP = 2.0  # 初始停損 = 進場價 - ATR × 2
+ATR_TRAIL = 1.5  # 追蹤停損 = 最高點 - ATR × 1.5
+ATR_TARGET = 3.0  # 目標     = 進場價 + ATR × 3
 MAX_HOLD = 10  # 最長持倉天數
-POSITION_PCT = 0.10  # 每次用總資金 10%
+POSITION_PCT = 0.20  # 每次用總資金 20%（5支 = 100%）
 MAX_POSITIONS = 5  # 最多同時持倉 5 支
-LIMIT_UP_THR = 0.095  # 台股漲停判斷門檻（漲幅 ≥ 9.5%）
+LIMIT_UP_THR = 0.095  # 台股漲停判斷門檻
+
+
+# ============================================================
+# ATR 計算
+# ============================================================
+def _calc_atr(stock_df: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series:
+    """
+    True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+    ATR = TR 的 period 天移動平均
+    """
+    h = stock_df["high"]
+    l = stock_df["low"]
+    c = stock_df["close"].shift(1)
+
+    tr = pd.concat([h - l, (h - c).abs(), (l - c).abs()], axis=1).max(axis=1)
+
+    return tr.rolling(period).mean()
 
 
 # ============================================================
 # 資料準備
 # ============================================================
 def _prepare_price(price_df: pd.DataFrame) -> dict:
-    """建立 per-stock 價格字典，加速查詢"""
+    """建立 per-stock 價格字典（含 ATR），加速查詢"""
     d = price_df.copy()
     d.columns = d.columns.str.strip().str.lower()
     d["date"] = pd.to_datetime(d["date"])
@@ -53,7 +72,9 @@ def _prepare_price(price_df: pd.DataFrame) -> dict:
 
     price_map = {}
     for sid, grp in d.groupby("stock_id"):
-        price_map[sid] = grp.sort_values("date").reset_index(drop=True)
+        g = grp.sort_values("date").reset_index(drop=True).copy()
+        g["atr"] = _calc_atr(g)
+        price_map[sid] = g
     return price_map
 
 
@@ -164,23 +185,20 @@ def run_backtest(signals: pd.DataFrame, price_df: pd.DataFrame, init_capital: fl
     print("回測開始")
     print("=" * 60)
     print(f"初始資金     : {init_capital:,.0f}")
-    print(f"每次倉位     : {POSITION_PCT:.0%}  最多 {MAX_POSITIONS} 支")
-    print(f"停損         : -{STOP_LOSS:.0%}")
-    print(f"目標         : +{TARGET_RET:.0%}")
+    print(f"每次倉位     : {POSITION_PCT:.0%}  最多 {MAX_POSITIONS} 支（滿倉 {POSITION_PCT*MAX_POSITIONS:.0%}）")
+    print(f"初始停損     : ATR{ATR_PERIOD} × {ATR_STOP}（動態）")
+    print(f"追蹤停損     : 最高點 - ATR{ATR_PERIOD} × {ATR_TRAIL}（動態）")
+    print(f"目標         : ATR{ATR_PERIOD} × {ATR_TARGET}（動態）")
     print(f"強制出場     : 第 {MAX_HOLD} 個交易日")
 
     price_map = _prepare_price(price_df)
 
-    # 只用有 XGBoost 預測分數的訊號
-    # signals 裡 label 是真實標籤，需要用模型預測結果過濾
-    # 這裡假設 signals 已經是模型篩選後的進場訊號
     sig = signals.copy()
     sig["date"] = pd.to_datetime(sig["date"])
     sig = sig.sort_values("date").reset_index(drop=True)
 
-    # 資金與持倉狀態
     capital = init_capital
-    positions = {}  # {stock_id: {'entry_price', 'entry_date', 'size', 'cost'}}
+    positions = {}
     trades = []
     equity_curve = []
 
@@ -197,16 +215,22 @@ def run_backtest(signals: pd.DataFrame, price_df: pd.DataFrame, init_capital: fl
             if len(today) == 0:
                 continue
             row = today.iloc[0]
+            atr = pos["atr"]
 
-            # 停損
+            # 更新追蹤最高點，並上移追蹤停損
+            if row["high"] > pos["highest"]:
+                pos["highest"] = row["high"]
+                trail = pos["highest"] - ATR_TRAIL * atr
+                if trail > pos["stop"]:
+                    pos["stop"] = trail
+
+            # 判斷出場
             if row["low"] <= pos["stop"]:
                 exit_price = pos["stop"]
-                exit_reason = "stop_loss"
-            # 達標
+                exit_reason = "stop_loss" if pos["highest"] <= pos["entry_price"] else "trail_stop"
             elif row["high"] >= pos["target"]:
                 exit_price = pos["target"]
                 exit_reason = "target"
-            # 超過持倉天數
             elif (
                 stock[stock["date"] <= date].shape[0] - stock[stock["date"] <= pos["entry_date"]].shape[0]
             ) >= MAX_HOLD:
@@ -223,9 +247,13 @@ def run_backtest(signals: pd.DataFrame, price_df: pd.DataFrame, init_capital: fl
                     "stock_id": sid,
                     "entry_date": pos["entry_date"],
                     "entry_price": pos["entry_price"],
+                    "highest": round(pos["highest"], 4),
                     "exit_date": date,
                     "exit_price": round(exit_price, 4),
                     "exit_reason": exit_reason,
+                    "atr": round(atr, 4),
+                    "stop_pct": round((pos["entry_price"] - pos["init_stop"]) / pos["entry_price"] * 100, 2),
+                    "target_pct": round((pos["target"] - pos["entry_price"]) / pos["entry_price"] * 100, 2),
                     "cost": pos["cost"],
                     "pnl": round(pnl, 2),
                     "return_pct": round((exit_price / pos["entry_price"] - 1) * 100, 3),
@@ -239,25 +267,34 @@ def run_backtest(signals: pd.DataFrame, price_df: pd.DataFrame, init_capital: fl
         for sid in to_close:
             del positions[sid]
 
-        # ── 今天的新訊號 ──
+        # ── 今天的新訊號（依信心分數排序）──
         today_signals = sig[sig["date"] == date]
+        if "xgb_prob" in today_signals.columns:
+            today_signals = today_signals.sort_values("xgb_prob", ascending=False)
 
         for _, row in today_signals.iterrows():
             sid = row["stock_id"]
 
-            # 已持有同支股票，跳過
             if sid in positions:
                 continue
-
-            # 持倉已滿
             if len(positions) >= MAX_POSITIONS:
                 continue
-
-            # 漲停板判斷：當天漲停，集合競價買不到
             if _is_limit_up(sid, date, price_map):
                 continue
 
             entry_price = row["close"]
+
+            if sid not in price_map:
+                continue
+            stock_data = price_map[sid]
+            entry_row = stock_data[stock_data["date"] == date]
+            if len(entry_row) == 0 or pd.isna(entry_row.iloc[0]["atr"]):
+                continue
+            atr = entry_row.iloc[0]["atr"]
+
+            init_stop = entry_price - ATR_STOP * atr
+            target_price = entry_price + ATR_TARGET * atr
+
             size = (capital * POSITION_PCT) / entry_price
             cost = size * entry_price
 
@@ -268,8 +305,11 @@ def run_backtest(signals: pd.DataFrame, price_df: pd.DataFrame, init_capital: fl
             positions[sid] = {
                 "entry_date": date,
                 "entry_price": entry_price,
-                "stop": entry_price * (1 - STOP_LOSS),
-                "target": entry_price * (1 + TARGET_RET),
+                "init_stop": init_stop,
+                "stop": init_stop,
+                "target": target_price,
+                "highest": entry_price,
+                "atr": atr,
                 "size": size,
                 "cost": cost,
             }
@@ -345,6 +385,9 @@ def _print_results(equity: pd.DataFrame, trades: pd.DataFrame, init_capital: flo
     print(f"平均獲利     : {avg_win:>+.2f}%")
     print(f"平均虧損     : {avg_loss:>+.2f}%")
     print(f"獲利因子     : {abs(avg_win / avg_loss):.2f}x")
+    if "stop_pct" in trades.columns:
+        print(f"平均初始停損 : -{trades['stop_pct'].mean():.2f}%（ATR動態）")
+        print(f"平均目標幅度 : +{trades['target_pct'].mean():.2f}%（ATR動態）")
 
     # 出場原因分佈
     print(f"\n--- 出場原因 ---")
