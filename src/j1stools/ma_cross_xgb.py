@@ -29,6 +29,8 @@ MA_REGIME = 60
 TARGET_DAYS = 10
 TARGET_RET = 0.10
 
+MIN_DEV_MA60 = 0.07  # 進場時距離 MA60 最少 7%（0 = 不過濾）
+
 MIN_TRAIN = 252
 
 XGB_PARAMS = dict(
@@ -161,6 +163,7 @@ def _process_stock(grp: pd.DataFrame, market: pd.DataFrame) -> pd.DataFrame:
     d["label"] = (future_max >= d["close"] * (1 + TARGET_RET)).astype(int)
 
     # 只回傳有訊號且 label 有效的行
+    d["ma60"] = ma60  # 保留 ma60 供距離過濾用
     sig = d[d["signal"] & d["future_max_high"].notna()].copy()
     return sig
 
@@ -192,9 +195,15 @@ def _train_xgb(train, feats):
 # ============================================================
 # Walk-Forward（按年切）
 # ============================================================
-def _walk_forward(signals: pd.DataFrame) -> pd.DataFrame:
+def _walk_forward(signals: pd.DataFrame) -> tuple:
+    """
+    回傳 (results_df, signals_with_pred)
+    signals_with_pred 加入 xgb_pred / xgb_prob 欄位供回測使用
+    """
     valid_feats = _get_valid_feats(signals, FEATURE_COLS)
     d = signals.dropna(subset=valid_feats + ["label"]).copy()
+    d["xgb_pred"] = 0
+    d["xgb_prob"] = 0.0
 
     min_year = d["date"].dt.year.min()
     max_year = d["date"].dt.year.max()
@@ -220,6 +229,10 @@ def _walk_forward(signals: pd.DataFrame) -> pd.DataFrame:
         y_pred = clf.predict(test[valid_feats])
         y_prob = clf.predict_proba(test[valid_feats])[:, 1]
 
+        # 寫回預測結果
+        d.loc[test.index, "xgb_pred"] = y_pred
+        d.loc[test.index, "xgb_prob"] = y_prob
+
         prec = precision_score(test["label"], y_pred, zero_division=0)
         auc = roc_auc_score(test["label"], y_prob)
         n_sig = int(y_pred.sum())
@@ -242,7 +255,7 @@ def _walk_forward(signals: pd.DataFrame) -> pd.DataFrame:
             f"Precision={prec:.3f}  AUC={auc:.3f}  訊號={n_sig}"
         )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), d
 
 
 # ============================================================
@@ -301,12 +314,31 @@ def run(price_df: pd.DataFrame, market_df: pd.DataFrame) -> tuple:
 
     total = len(signals)
     baseline = signals["label"].mean()
-    print(f"\n總訊號數   : {total:,}")
+    print(f"\n過濾前訊號數  : {total:,}  基準勝率 {baseline:.1%}")
+
+    # MA60 距離過濾
+    if MIN_DEV_MA60 > 0:
+        signals["dev_ma60"] = (signals["close"] - signals["ma60"]) / signals["ma60"]
+        before = len(signals)
+        signals = signals[signals["dev_ma60"] >= MIN_DEV_MA60].reset_index(drop=True)
+        print(f"距離 MA60 ≥ {MIN_DEV_MA60:.0%} 過濾後：{len(signals):,} 筆" f"（移除 {before - len(signals):,} 筆）")
+
+    total = len(signals)
+    baseline = signals["label"].mean()
+    print(f"總訊號數   : {total:,}")
     print(f"基準勝率   : {baseline:.1%}  （10天內漲10%的比例）")
 
     # Walk-Forward
     print("\n--- Walk-Forward ---")
-    results = _walk_forward(signals)
+    results, signals_with_pred = _walk_forward(signals)
+
+    # 只保留有預測結果的樣本（訓練集那幾年沒有）
+    signals = signals_with_pred.copy()
+    signals_model = signals[signals["xgb_pred"] == 1].copy()
+    print(
+        f"\nXGBoost 篩選後進場訊號：{len(signals_model):,} 筆"
+        f"（共 {len(signals):,} 筆中的 {len(signals_model)/len(signals):.1%}）"
+    )
 
     if len(results) > 0:
         avg_prec = results["precision"].mean()
@@ -331,4 +363,4 @@ def run(price_df: pd.DataFrame, market_df: pd.DataFrame) -> tuple:
 
     _feature_importance(signals)
 
-    return results, signals
+    return results, signals, signals_model

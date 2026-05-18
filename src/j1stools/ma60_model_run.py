@@ -3,6 +3,7 @@ import random
 import pandas as pd
 
 from j1stools import ma_cross_xgb, parquet_db
+import ma_backtest
 
 
 def main():
@@ -16,7 +17,9 @@ def main():
     # print(triangle_df.shape)
 
     # print(triangle_df.head())
-    ma_cross_xgb.run(price_df, market_df)
+    results, signals, signals_model = ma_cross_xgb.run(price_df, market_df)
+
+    ma_backtest.run_backtest(signals, price_df, init_capital=1_000_000)
 
 
 main()
