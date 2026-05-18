@@ -226,9 +226,10 @@ def find_good_triangle(df):
 # 呼叫方式
 # draw_multiple_triangles(df_triangle, n_plots=9)
 def test():
-    stocks = parquet_db.query_stocks_ids_list()
-    # stocks = random.sample(parquet_db.query_stocks_no_etf(), 100)
-    df = parquet_db.query_price(stocks, "2026-01-01", "2026-03-01")
+    # stocks = parquet_db.query_stocks_ids_list()
+    stocks = random.sample(parquet_db.query_stocks_no_etf(), 500)
+    # stocks = ["6112"]
+    df = parquet_db.query_price(stocks, "2025-01-01", "2025-12-01")
     df_source = detect_strict_triangle(
         df,
         order=7,
@@ -250,22 +251,22 @@ def test():
     # print(df_triangle[df_triangle["is_triangle"] == True].head().T)
     draw_multiple_triangles_safe(
         df_source,
-        df_triangle,
-        # df_refined_triangle,
+        # df_triangle,
+        df_refined_triangle,
     )
 
 
 def find_refined_triangle(df):
     df_source = detect_strict_triangle(
         df,
-        order=7,
-        max_slope_ratio=5,
-        min_overlap_ratio=0.4,
-        min_reduction=0.3,
+        order=4,
+        max_slope_ratio=99,
+        min_overlap_ratio=0.35,
+        min_reduction=0.25,
     )
 
-    # return df_source[df_source["is_triangle"] == True]
-    return df_source[df_source["is_refined_triangle"] == True]
+    return df_source[df_source["is_triangle"] == True]
+    # return df_source[df_source["is_refined_triangle"] == True]
 
 
 # test()
