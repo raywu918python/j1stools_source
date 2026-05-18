@@ -168,7 +168,8 @@ def find_wedge(df):
 
 def test_wedge():
     stocks = parquet_db.query_stocks_ids_list()
-    df = parquet_db.query_price(stocks, "2026-01-01", "2026-03-01")
+    stocks = ["6209"]
+    df = parquet_db.query_price(stocks, "2025-01-01", "2099-01-01")
     # 呼叫新函數
     df_source = detect_falling_wedge(
         df, order=5, min_reduction=0.2, min_overlap_ratio=0.4  # 楔形收斂有時較慢，可調低一點
@@ -190,4 +191,4 @@ def test_wedge():
     )
 
 
-# test_wedge()
+test_wedge()

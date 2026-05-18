@@ -3,7 +3,7 @@ import random
 import pandas as pd
 
 from j1stools import parquet_db
-from j1stools.triangle_google import draw_multiple_triangles_safe, find_triangle
+from j1stools.price_pattern_triangle import draw_multiple_triangles_safe, find_triangle
 
 
 def find_break_price(df_price: pd.DataFrame, df_triangle: pd.DataFrame) -> pd.DataFrame:

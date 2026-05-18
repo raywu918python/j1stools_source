@@ -231,7 +231,7 @@ def test():
     df = parquet_db.query_price(stocks, "2026-01-01", "2026-03-01")
     df_source = detect_strict_triangle(
         df,
-        order=5,
+        order=7,
         max_slope_ratio=5,
         min_overlap_ratio=0.4,
         min_reduction=0.3,
