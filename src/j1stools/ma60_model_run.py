@@ -29,7 +29,6 @@ def sort_signals(signals: pd.DataFrame, pred) -> pd.DataFrame:
 
     print(f"原始訊號：{len(signals):,} 筆")
     print(f"有排序的：{len(selected):,} 筆")
-    selected.head(10)
     return selected
 
 
@@ -49,6 +48,35 @@ def get_sord_margin(stocks, st, end):
     return df_margin
 
 
+def good_search(signals, df_price, df_market):
+    """
+    momentum_stats.USE_COND5 = False
+    momentum_stats.USE_COND3 = False
+    --- 大盤比較 ---
+                                  策略          大盤          超額
+    總報酬                     +156.03%     +71.34%     +84.69%
+    年化報酬(CAGR)               +76.83%     +38.61%     +38.22%
+    最大回撤                     -14.55%     -27.48%     +12.94%
+    """
+    momentum_backtest.run_backtest(
+        signals,
+        df_price,
+        df_market=df_market,
+        stop_pct=0.07,
+        target_pct=0.15,
+        # exit_mode="trailing",
+        trail_pct=0.10,
+        max_positions=3,
+        position_pct=0.33,
+        max_hold=30,
+        sort_by=[
+            # momentum_backtest.SortBy.PRED_SCORE.desc(),  # 分數大→小
+            momentum_backtest.SortBy.MA60_TURN_DAYS.asc(),  # 天數小→大
+            momentum_backtest.SortBy.DEV_MA60.asc(),  # 距離小→大
+        ],
+    )
+
+
 def main():
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 500)
     st = "2024-01-01"
@@ -59,8 +87,8 @@ def main():
 
     #############################################################
     # momentum_stats.USE_DEDUP = False
-    # momentum_stats.USE_COND5 = False
-    # momentum_stats.USE_COND3 = False
+    momentum_stats.USE_COND5 = False
+    momentum_stats.USE_COND3 = False
     signals = momentum_stats.run(df_price, df_market)
     signals = sort_signals(signals, get_sord_margin(stocks, st, end))
 
@@ -70,13 +98,15 @@ def main():
             signals,
             df_price,
             df_market=df_market,
-            stop_pct=0.10,
-            target_pct=0.10,
+            stop_pct=0.07,
+            target_pct=0.15,
             # exit_mode="trailing",
             trail_pct=0.10,
+            max_positions=3,
+            position_pct=0.33,
             max_hold=30,
             sort_by=[
-                momentum_backtest.SortBy.PRED_SCORE.desc(),  # 分數大→小
+                # momentum_backtest.SortBy.PRED_SCORE.desc(),  # 分數大→小
                 momentum_backtest.SortBy.MA60_TURN_DAYS.asc(),  # 天數小→大
                 momentum_backtest.SortBy.DEV_MA60.asc(),  # 距離小→大
             ],
