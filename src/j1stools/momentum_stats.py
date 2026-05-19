@@ -29,6 +29,17 @@ MA_REGIME = 60
 ATR_PERIOD = 14
 LOOK_FORWARD = 10  # 進場後觀察幾天
 
+# ============================================================
+# 條件開關（True = 啟用，False = 關閉）
+# ============================================================
+USE_COND1 = True  # 收盤 > MA60
+USE_COND2 = True  # ATR > 昨日 ATR（波動擴張）
+USE_COND3 = True  # 當日振幅 > 前10日平均振幅（大K棒）
+USE_COND4 = True  # MA5 > MA10
+USE_COND5 = True  # 連3根上漲且都在 MA60 以上
+USE_COND6 = True  # MA60 過去10天斜率 > 0.5%
+USE_DEDUP = True  # 同支股票間隔 LOOK_FORWARD 天去重
+
 
 def _calc_atr(df: pd.DataFrame) -> pd.Series:
     h = df["high"]
@@ -36,6 +47,30 @@ def _calc_atr(df: pd.DataFrame) -> pd.Series:
     c = df["close"].shift(1)
     tr = pd.concat([h - l, (h - c).abs(), (l - c).abs()], axis=1).max(axis=1)
     return tr.rolling(ATR_PERIOD).mean()
+
+
+def _calc_ma60_turn_days(df: pd.DataFrame) -> pd.Series:
+    """
+    計算每天距離「MA60 斜率從負轉正」的天數
+    負轉正 = 昨日 MA60 斜率 < 0，今日 MA60 斜率 >= 0
+    回傳：每個交易日距離最近一次轉正的天數
+    """
+    ma60 = df["close"].rolling(60).mean()
+    ma60_slope = ma60 - ma60.shift(5)  # 5日斜率
+
+    # 找轉正點：昨日斜率 < 0，今日斜率 >= 0
+    turn_positive = (ma60_slope.shift(1) < 0) & (ma60_slope >= 0)
+
+    # 每天距離最近轉正點的天數
+    days_since_turn = pd.Series(np.nan, index=df.index)
+    last_turn = None
+    for i, (idx, is_turn) in enumerate(turn_positive.items()):
+        if is_turn:
+            last_turn = i
+        if last_turn is not None:
+            days_since_turn[idx] = i - last_turn
+
+    return days_since_turn
 
 
 def _process_stock(grp: pd.DataFrame) -> pd.DataFrame:
@@ -51,33 +86,43 @@ def _process_stock(grp: pd.DataFrame) -> pd.DataFrame:
     avg_candle = candle.rolling(10).mean().shift(1)
 
     # 4 個條件
-    cond1 = c > ma60  # MA60 以上
-    cond2 = atr > atr.shift(1)  # ATR 上升
-    cond3 = candle > avg_candle  # 當日振幅 > 前10日均
-    cond4 = ma5 > ma10  # MA5 > MA10
-    cond5 = (
-        (c > c.shift(1))
-        & (c.shift(1) > c.shift(2))
-        & (c.shift(2) > c.shift(3))  # 連3根上漲
-        & (c.shift(1) > ma60.shift(1))
-        & (c.shift(2) > ma60.shift(2))  # 前2根也在MA60以上
-    )
+    # 各條件（可透過開關控制）
+    true_series = pd.Series(True, index=d.index)
 
-    d["signal"] = cond1 & cond2 & cond3 & cond4 & cond5
+    cond1 = (c > ma60) if USE_COND1 else true_series
+    cond2 = (atr > atr.shift(1)) if USE_COND2 else true_series
+    cond3 = (candle > avg_candle) if USE_COND3 else true_series
+    cond4 = (ma5 > ma10) if USE_COND4 else true_series
+    cond5 = (
+        (
+            (c > c.shift(1))
+            & (c.shift(1) > c.shift(2))
+            & (c.shift(2) > c.shift(3))
+            & (c.shift(1) > ma60.shift(1))
+            & (c.shift(2) > ma60.shift(2))
+        )
+        if USE_COND5
+        else true_series
+    )
+    ma60_slope = (ma60 - ma60.shift(10)) / ma60.shift(10)
+    cond6 = (ma60_slope > 0.005) if USE_COND6 else true_series
+
+    d["signal"] = cond1 & cond2 & cond3 & cond4 & cond5 & cond6
 
     # 去重：同一支股票，兩個訊號之間至少間隔 LOOK_FORWARD 天
-    signal_rows = d[d["signal"]].copy()
-    if len(signal_rows) > 0:
-        valid = []
-        last_date = pd.Timestamp("2000-01-01")
-        for idx, row in signal_rows.iterrows():
-            if (row["date"] - last_date).days >= LOOK_FORWARD:
-                valid.append(idx)
-                last_date = row["date"]
-        mask = pd.Series(False, index=d.index)
-        if valid:
-            mask[valid] = True
-        d["signal"] = mask
+    if USE_DEDUP:
+        signal_rows = d[d["signal"]].copy()
+        if len(signal_rows) > 0:
+            valid = []
+            last_date = pd.Timestamp("2000-01-01")
+            for idx, row in signal_rows.iterrows():
+                if (row["date"] - last_date).days >= LOOK_FORWARD:
+                    valid.append(idx)
+                    last_date = row["date"]
+            mask = pd.Series(False, index=d.index)
+            if valid:
+                mask[valid] = True
+            d["signal"] = mask
 
     # 進場後 LOOK_FORWARD 天的最高漲幅
     future_max = pd.concat([d["high"].shift(-i) for i in range(1, LOOK_FORWARD + 1)], axis=1).max(axis=1)
@@ -88,8 +133,11 @@ def _process_stock(grp: pd.DataFrame) -> pd.DataFrame:
     d["future_close_ret"] = (future_close - c) / c * 100
 
     # 只保留 future_close_ret 也有值的樣本（確保 10 天窗口完整）
+    d["days_since_ma60_turn"] = _calc_ma60_turn_days(d)
+    d["dev_ma60"] = (d["close"] - ma60) / ma60  # 收盤距離 MA60 的幅度
+
     sig = d[d["signal"] & d["future_max_ret"].notna() & d["future_close_ret"].notna()].copy()
-    return sig[["date", "stock_id", "close", "future_max_ret", "future_close_ret"]]
+    return sig[["date", "stock_id", "close", "future_max_ret", "future_close_ret", "days_since_ma60_turn", "dev_ma60"]]
 
 
 def run(price_df: pd.DataFrame, market_df: pd.DataFrame = None) -> pd.DataFrame:
@@ -97,7 +145,21 @@ def run(price_df: pd.DataFrame, market_df: pd.DataFrame = None) -> pd.DataFrame:
     print("=" * 60)
     print("動能突破訊號統計")
     print("=" * 60)
-    print("條件：MA60以上 + ATR上升 + 大K棒 + MA5>MA10 + 連3根上漲且都在MA60以上（間隔10天去重）")
+    active = []
+    if USE_COND1:
+        active.append("MA60以上")
+    if USE_COND2:
+        active.append("ATR上升")
+    if USE_COND3:
+        active.append("大K棒")
+    if USE_COND4:
+        active.append("MA5>MA10")
+    if USE_COND5:
+        active.append("連3根上漲(MA60以上)")
+    if USE_COND6:
+        active.append("MA60斜率>0.5%")
+    dedup_str = f"（同支股票間隔{LOOK_FORWARD}天去重）" if USE_DEDUP else "（不去重）"
+    print(f"條件：{' + '.join(active)}{dedup_str}")
 
     prc = price_df.copy()
     prc.columns = prc.columns.str.strip().str.lower()
@@ -207,5 +269,35 @@ def _print_stats(df: pd.DataFrame) -> None:
             ["date", "stock_id", "close", "future_max_ret", "future_close_ret"]
         ].reset_index(drop=True)
         print(recent.to_string(index=False))
+
+    # 成功案例：最高漲幅 >= 10%
+    success = df[df["future_max_ret"] >= 10].copy()
+    if len(success) > 0:
+        print(f"\n{'='*60}")
+        print(f"成功樣本（10天最高漲幅 ≥ 10%，最近20筆）")
+        print(f"{'='*60}")
+        recent_success = success.nlargest(20, "date")[
+            ["date", "stock_id", "close", "future_max_ret", "future_close_ret"]
+        ].reset_index(drop=True)
+        print(recent_success.to_string(index=False))
+
+    # MA60 轉正天數分佈
+    if "days_since_ma60_turn" in df.columns:
+        d2 = df.dropna(subset=["days_since_ma60_turn"]).copy()
+        print(f"\n{'='*60}")
+        print(f"距離 MA60 斜率轉正的天數 vs 平均最高漲幅")
+        print(f"{'='*60}")
+        print(f"  平均 {d2['days_since_ma60_turn'].mean():.1f} 天  中位數 {d2['days_since_ma60_turn'].median():.0f} 天")
+
+        bins = [0, 5, 15, 30, 60, float("inf")]
+        labels = ["1-5天", "6-15天", "16-30天", "31-60天", ">60天"]
+        d2["turn_band"] = pd.cut(d2["days_since_ma60_turn"], bins=bins, labels=labels)
+
+        for band, grp in d2.groupby("turn_band", observed=True):
+            avg = grp["future_max_ret"].mean()
+            cnt = len(grp)
+            win_rate = (grp["future_max_ret"] >= 10).mean()
+            bar = "█" * int(avg * 2)
+            print(f"  {str(band):<10}  {bar:<20}  均 {avg:.1f}%  達+10% {win_rate:.1%}  ({cnt:,} 筆)")
 
     print(f"{'='*60}")

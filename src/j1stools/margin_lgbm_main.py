@@ -78,19 +78,19 @@ def main():
       → 下個月用新模型
     """
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    # st = "2015-01-01"
-    # end = "2024-01-01"  # "2026-02-01"
-    # models = train(
-    #     stocks=stocks,
-    #     st=st,
-    #     end=end,
-    # )
-
-    predict(
+    st = "2015-01-01"
+    end = "2024-01-01"  # "2026-02-01"
+    models = train(
         stocks=stocks,
-        st="2015-01-01",
-        end="2026-01-01",
+        st=st,
+        end=end,
     )
+
+    # predict(
+    #     stocks=stocks,
+    #     st="2015-01-01",
+    #     end="2026-01-01",
+    # )
 
 
 def prepare_data(stocks, st, end, model="train"):
@@ -114,8 +114,8 @@ def prepare_data(stocks, st, end, model="train"):
 
 def train(
     stocks=parquet_db.query_stocks_no_etf(),
-    st="2024-01-01",
-    end="2026-02-01",
+    st="2015-01-01",
+    end="2024-01-01",
     pick_import_feature=False,
 ):
     print(f"=" * 60, "lgbm start")
@@ -600,7 +600,7 @@ def work_flow():
     candidates = select_stocks(df_today, [final_model], df_market_history)
 
 
-main()
+# main()
 # predict(
 #     stocks=random.sample(parquet_db.query_stocks_no_etf(), 500),
 #     st="2024-01-01",

@@ -15,7 +15,6 @@ from j1stools.obj_macd_feature import MacdFeature
 from j1stools.obj_market_feature import MarketFeature
 from j1stools.obj_random_feature import RandomFeature
 from j1stools.obj_vwap_pvt_feature import VolumePriceFeature
-from j1stools.train_flow import print_target_counts
 
 
 def gen_feature(

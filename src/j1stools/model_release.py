@@ -23,7 +23,7 @@ def create_release(step=1):
         訓練模型並儲存
         "2021-01-01", "2024-01-01"
         """
-        import j1stools.lgbm_main as lgbm
+        import j1stools.margin_lgbm_main as lgbm
 
         lgbm.exec(
             parquet_db.query_stocks_ids_list(),

@@ -1,28 +1,92 @@
+from os import times
+import os
 import random
+import time
 
 import pandas as pd
+from pandas import Timestamp
 
-from j1stools import ma_cross_xgb, momentum_stats, parquet_db, triangle_stats
+from j1stools import ma_cross_xgb, margin_lgbm_main, momentum_backtest, momentum_stats, parquet_db, triangle_stats
 from j1stools.train_flow import print_target_counts
 import ma_backtest
 
 
+def sort_signals(signals: pd.DataFrame, pred) -> pd.DataFrame:
+    import pandas as pd
+
+    # 確保格式一致
+    signals["date"] = pd.to_datetime(signals["date"])
+    signals["stock_id"] = signals["stock_id"].astype(str).str.strip()
+
+    pred["date"] = pd.to_datetime(pred["date"])
+    pred["stock_id"] = pred["stock_id"].astype(str).str.strip()
+
+    # merge：只保留兩者都有的 (date, stock_id)
+    selected = signals.merge(pred[["date", "stock_id", "pred_score"]], on=["date", "stock_id"], how="inner")
+
+    # 每天按 pred_score 排序，取前 N 名
+    selected = selected.sort_values(["date", "pred_score"], ascending=[True, False]).reset_index(drop=True)
+
+    print(f"原始訊號：{len(signals):,} 筆")
+    print(f"有排序的：{len(selected):,} 筆")
+    selected.head(10)
+    return selected
+
+
+def get_sord_margin(stocks, st, end):
+    from datetime import date
+
+    today = date.today()
+    find_name = "margin" + today.strftime("%Y%m%d") + st + end + ".csv"
+
+    if os.path.exists(find_name):
+        df_margin = pd.read_csv(find_name)
+    else:
+        df_margin = margin_lgbm_main.predict(stocks, st, end)
+        df_margin.to_csv(find_name, index=False)
+
+    # df_margin = df_margin[df_margin["pred_score"] > 0.2]
+    return df_margin
+
+
 def main():
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 500)
+    st = "2024-01-01"
+    end = "2026-01-01"
     stocks = parquet_db.query_stocks_ids_list()
-    price_df = parquet_db.query_price(stocks, "2015-01-01", "2026-01-01")
-    market_df = parquet_db.query_price(["0050"], "2015-01-01", "2026-01-01")
-    # triangle_df: pd.DataFrame = find_refined_triangle(price_df)
-    # wedge_df = find_wedge(price_df)
+    df_price = parquet_db.query_price(stocks, st, end)
+    df_market = parquet_db.query_price(["0050"], st, end)
 
-    # print(triangle_df.shape)
+    #############################################################
+    # momentum_stats.USE_DEDUP = False
+    # momentum_stats.USE_COND5 = False
+    # momentum_stats.USE_COND3 = False
+    signals = momentum_stats.run(df_price, df_market)
+    signals = sort_signals(signals, get_sord_margin(stocks, st, end))
 
-    # print(triangle_df.head())
-    # triangle_stats.run(triangle_df, price_df)
-
-    momentum_stats.run(price_df, market_df)
-    # ma_backtest.run_backtest(signals, price_df, init_capital=1_000_000)
-    # ma_backtest.run_backtest(signals, price_df, init_capital=1_000_000)
+    #############################################################
+    if "pred_score" in signals.columns:
+        momentum_backtest.run_backtest(
+            signals,
+            df_price,
+            df_market=df_market,
+            stop_pct=0.10,
+            target_pct=0.10,
+            # exit_mode="trailing",
+            trail_pct=0.10,
+            max_hold=30,
+            sort_by=[
+                momentum_backtest.SortBy.PRED_SCORE.desc(),  # 分數大→小
+                momentum_backtest.SortBy.MA60_TURN_DAYS.asc(),  # 天數小→大
+                momentum_backtest.SortBy.DEV_MA60.asc(),  # 距離小→大
+            ],
+        )
+    else:
+        momentum_backtest.run_backtest(
+            signals,
+            df_price,
+            df_market=df_market,
+        )
 
 
 main()

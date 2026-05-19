@@ -1,11 +1,11 @@
-from j1stools import j1s_chart, lgbm_main, parquet_db, rfc_main
+from j1stools import j1s_chart, margin_lgbm_main, parquet_db, rfc_main
 from j1stools.backtest_engine import backtest_engine
 from j1stools.backtest_platform import PrepareDate, prepare_data_backtest, win6XX
 
 
 def web_backtest(stocks):
     """for web"""
-    signal = lgbm_main.predict(stocks, "2025-01-01", "2099-01-01")
+    signal = margin_lgbm_main.predict(stocks, "2025-01-01", "2099-01-01")
     portfolio_value, trades_df, positions, close = prepare_data_backtest(
         signal,
         threshold=0.6,
