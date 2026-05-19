@@ -88,7 +88,7 @@ def main():
 
     predict(
         stocks=stocks,
-        st="2024-01-01",
+        st="2015-01-01",
         end="2026-01-01",
     )
 
@@ -600,7 +600,7 @@ def work_flow():
     candidates = select_stocks(df_today, [final_model], df_market_history)
 
 
-# main()
+main()
 # predict(
 #     stocks=random.sample(parquet_db.query_stocks_no_etf(), 500),
 #     st="2024-01-01",
