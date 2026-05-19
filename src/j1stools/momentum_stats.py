@@ -38,6 +38,8 @@ USE_COND3 = True  # 當日振幅 > 前10日平均振幅（大K棒）
 USE_COND4 = True  # MA5 > MA10
 USE_COND5 = True  # 連3根上漲且都在 MA60 以上
 USE_COND6 = True  # MA60 過去10天斜率 > 0.5%
+USE_MAX_DEV_MA60 = True  # 過濾距離 MA60 超過 50% 的訊號
+MAX_DEV_MA60 = 0.50  # 距離上限（預設 50%）
 USE_DEDUP = True  # 同支股票間隔 LOOK_FORWARD 天去重
 
 
@@ -107,7 +109,11 @@ def _process_stock(grp: pd.DataFrame) -> pd.DataFrame:
     ma60_slope = (ma60 - ma60.shift(10)) / ma60.shift(10)
     cond6 = (ma60_slope > 0.005) if USE_COND6 else true_series
 
-    d["signal"] = cond1 & cond2 & cond3 & cond4 & cond5 & cond6
+    # 距離 MA60 上限過濾
+    dev_ma60 = (c - ma60) / ma60.clip(lower=1e-6)
+    cond_max_dev = (dev_ma60 <= MAX_DEV_MA60) if USE_MAX_DEV_MA60 else true_series
+
+    d["signal"] = cond1 & cond2 & cond3 & cond4 & cond5 & cond6 & cond_max_dev
 
     # 去重：同一支股票，兩個訊號之間至少間隔 LOOK_FORWARD 天
     if USE_DEDUP:
@@ -158,6 +164,8 @@ def run(price_df: pd.DataFrame, market_df: pd.DataFrame = None) -> pd.DataFrame:
         active.append("連3根上漲(MA60以上)")
     if USE_COND6:
         active.append("MA60斜率>0.5%")
+    if USE_MAX_DEV_MA60:
+        active.append(f"距MA60<{MAX_DEV_MA60:.0%}")
     dedup_str = f"（同支股票間隔{LOOK_FORWARD}天去重）" if USE_DEDUP else "（不去重）"
     print(f"條件：{' + '.join(active)}{dedup_str}")
 

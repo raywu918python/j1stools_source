@@ -89,6 +89,9 @@ def main():
     # momentum_stats.USE_DEDUP = False
     momentum_stats.USE_COND5 = False
     momentum_stats.USE_COND3 = False
+    # 調整門檻（例如 30%）
+    # momentum_stats.MAX_DEV_MA60 = 0.2
+    momentum_stats.USE_MAX_DEV_MA60 = True
     signals = momentum_stats.run(df_price, df_market)
     signals = sort_signals(signals, get_sord_margin(stocks, st, end))
 
@@ -106,9 +109,9 @@ def main():
             position_pct=0.33,
             max_hold=30,
             sort_by=[
-                # momentum_backtest.SortBy.PRED_SCORE.desc(),  # 分數大→小
+                # momentum_backtest.SortBy.DEV_MA60.asc(),  # 距離小→大
+                momentum_backtest.SortBy.PRED_SCORE.desc(),  # 分數大→小
                 momentum_backtest.SortBy.MA60_TURN_DAYS.asc(),  # 天數小→大
-                momentum_backtest.SortBy.DEV_MA60.asc(),  # 距離小→大
             ],
         )
     else:
