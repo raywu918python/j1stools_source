@@ -192,7 +192,7 @@ class MyappStocksupdateflag(BaseModel):
     class Meta:
         table_name = 'myapp_stocksupdateflag'
         indexes = (
-            (('stock_id', 'date'), True),
+            (('stock_id', 'date', 'note'), True),
         )
 
 class MyappTrades(BaseModel):

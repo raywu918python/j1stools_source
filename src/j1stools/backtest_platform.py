@@ -12,7 +12,7 @@ pd.set_option("future.no_silent_downcasting", True)
 from pandas_ta import ma
 import vectorbt as vbt
 
-from j1stools import j1s_chart, lgbm_main, parquet_db, rfc_main
+from j1stools import j1s_chart, parquet_db, rfc_main
 
 # ============================================================
 # 技術指標

@@ -115,9 +115,9 @@ def save(all_path, dfall, interval: INTERVAL):
         save_and_merge(stock, df)
 
 
-download(INTERVAL.day)
-download(INTERVAL.m1)
-download(INTERVAL.m5)
+# download(INTERVAL.day)
+# download(INTERVAL.m1)
+# download(INTERVAL.m5)
 
 # download(INTERVAL.day, ["6546"], period="3000d")
 # download(INTERVAL.m1, ["1609"], period="60d")

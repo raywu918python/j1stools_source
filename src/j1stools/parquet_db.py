@@ -8,14 +8,6 @@ import pyarrow.dataset as ds
 import j1stools.utils as utils
 import os
 import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
-
-import os
-import pandas as pd
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 # 將 Schema 移到最外層作為全域變數，確保所有邏輯共用，絕對不會再「找不到」
 MY_SCHEMA = pa.schema(
@@ -525,40 +517,3 @@ def query_stocks_no_etf():
 #############################################################
 # build_stock_parquet("2015-01", "2026-05")
 # build_stock_parquet("2026-05")
-#
-#
-# read_features()
-
-# create_info()
-# init_history_price()
-
-# read()
-# query_price()
-# query_info()
-
-
-# print(Random.sample(stocks(), 2))
-
-# df: pd.DataFrame = query_price(random.sample(stocks(), 10), "2019-01-01", "2022-01-01")
-# df = df["2330"]
-# df.close
-
-
-# for stock_id, group_df in df.groupby("stock_id"):
-#     print(f"處理股票 ID: {stock_id}")
-#     if stock_id == "0050":
-#         group_df["111"] = 123
-# df = df.groupby("stock_id").apply(reset_price)
-
-# df.loc[df["stock_id"] == "0050", "close"] = 0
-
-# df["abc"] = df.groupby("stock_id")["open"] + 999
-# df["abc"] = df.groupby("stock_id")["open"].m
-# df["abc"] = np.log(df.groupby("stock_id")["close"] / df.groupby("stock_id")["close"].shift(1))
-# df["abc"] = np.log(df["close"] / df["close"].shift(1))
-# df["abc"] = df.groupby("stock_id")["close"]
-
-
-# df = Label.add_label(df)
-# df = FilterData.get_data(df, True)
-# print(df[df["date"] > "2015-06"].head().T)

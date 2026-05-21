@@ -77,7 +77,7 @@ def main():
     cfg = MACDDataBuilterConfig()
     cfg.feature_type = FEATURE_TYPE.test_lgbm_feature
     cfg.train_config = train
-    cfg.st = add10day(end, days=-1000)
+    cfg.st = add_day(end, days=-1000)
     cfg.end = end
     cfg.atrcfg = FILTER_TYPE.del_
     data = DataBuilder(cfg).build()
@@ -169,7 +169,7 @@ def main():
 
     top10stocks = top10["stock_id"].to_list()
     st = cfg.end
-    end = add10day(st, 10)
+    end = add_day(st, 10)
     df10day = parquet_db.query_price(top10stocks, st, end)
     # print(df10day.head())
     # print(df10day)
@@ -266,7 +266,7 @@ def back_test(df):
     print("====================================")
 
 
-def add10day(date_str, days=10):
+def add_day(date_str, days=10):
     # 1. 將字串轉為 datetime 物件
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
 

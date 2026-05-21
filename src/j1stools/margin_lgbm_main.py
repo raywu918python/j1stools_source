@@ -1,3 +1,10 @@
+"""
+法人籌碼   → 數值（買賣超張數、比例）
+融資融券   → 數值（餘額、使用率）
+技術指標   → 數值（漲跌幅、乖離率）
+大盤環境   → 數值（波動率、成交量）
+"""
+
 import json
 from math import e
 from re import L
@@ -26,6 +33,7 @@ from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 from j1stools.j1s_split_date import lgbm_split_date
 from j1stools.lgbm_backtestt import run_backtest_engin
+from j1stools.lgbm_orgin_main import add_day
 from j1stools.market_filter import add_market_filter, apply_filter
 from j1stools.model_builder import gen_lgbm_orgin_model, gen_lgbm_r_model
 from j1stools.model_utils import drop_na_inf
@@ -45,6 +53,13 @@ def predict(
     feature_cols = json.load(open("models/feature_cols.json"))
 
     df_feature, df_market = prepare_data(stocks, st, end, model="predict")
+
+    evaluate_selection(
+        df=df_feature,
+        feature_cols=json.load(open("models/feature_cols.json")),
+        model=model,
+    )
+
     df_select_stocks = select_stocks(
         df_today=df_feature,
         df_market_history=df_market,
@@ -54,9 +69,6 @@ def predict(
     )
     if df_select_stocks is None:
         return
-
-    feature_cols = json.load(open("models/feature_cols.json"))
-    evaluate_selection(df=df_feature, feature_cols=feature_cols, model=model)
 
     df_select_stocks = df_select_stocks.sort_values(by=["date", "pred_score"], ascending=[False, False])
     df_select_stocks.to_csv("lgbm_signal_today.csv", index=False)
@@ -78,19 +90,19 @@ def main():
       → 下個月用新模型
     """
     stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
-    st = "2015-01-01"
-    end = "2024-01-01"  # "2026-02-01"
+    train_end_predict_st = "2025-01-01"
+
     models = train(
         stocks=stocks,
-        st=st,
-        end=end,
+        st="2015-01-01",
+        end=train_end_predict_st,
     )
 
-    # predict(
-    #     stocks=stocks,
-    #     st="2015-01-01",
-    #     end="2026-01-01",
-    # )
+    predict(
+        stocks=stocks,
+        st=train_end_predict_st,
+        end=add_day(train_end_predict_st, 250),
+    )
 
 
 def prepare_data(stocks, st, end, model="train"):
@@ -133,7 +145,11 @@ def train(
 
     # feature_ic = calc_feature_ic(df_feature, period_start=st, period_end=end)
     # feature_ic.to_csv("feature_ic.csv", index=False)
-    # result_df, stock_df, bottom_df = evaluate_selection(df_feature, models)
+    # evaluate_selection(
+    #     df=df_feature,
+    #     feature_cols=json.load(open("models/feature_cols.json")),
+    #     model=models,
+    # )
     # summary = analyze_frequent(stock_df)
 
     return models
@@ -331,6 +347,7 @@ def evaluate_selection(df, model, feature_cols, start_date=None, forward_days=20
                 "max_return": top["target"].max(),
                 "bot_win_rate_0": (bottom["target"] > 0).mean(),
                 "bot_win_rate_5": (bottom["target"] > 0.05).mean(),
+                "bot_win_rate_10": (bottom["target"] > 0.10).mean(),
                 "bot_avg_return": bottom["target"].mean(),
                 "bot_max_return": bottom["target"].max(),
                 "bot_min_return": bottom["target"].min(),
@@ -359,6 +376,7 @@ def evaluate_selection(df, model, feature_cols, start_date=None, forward_days=20
     print(f"\n【後{top_n}名（模型看壞）】")
     print(f"勝率 > 0%  : {result_df['bot_win_rate_0'].mean():.1%}")
     print(f"勝率 > 5%  : {result_df['bot_win_rate_5'].mean():.1%}")
+    print(f"勝率 > 10%  : {result_df['bot_win_rate_10'].mean():.1%}")
     print(f"平均最大超額：  {result_df['bot_avg_return'].mean():.2%}")
     print(f"平均最差股票：  {result_df['bot_min_return'].mean():.2%}")
     print(f"平均最強股票：  {result_df['bot_max_return'].mean():.2%}")
@@ -600,7 +618,7 @@ def work_flow():
     candidates = select_stocks(df_today, [final_model], df_market_history)
 
 
-# main()
+main()
 # predict(
 #     stocks=random.sample(parquet_db.query_stocks_no_etf(), 500),
 #     st="2024-01-01",
