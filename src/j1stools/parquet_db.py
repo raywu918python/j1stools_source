@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pyarrow as pa
 import pandas as pd
 import pyarrow.compute as pc
@@ -5,9 +7,9 @@ import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from db_models.peewee_models import MyappActivestocks
 import j1stools.utils as utils
 import os
-import pyarrow as pa
 
 # 將 Schema 移到最外層作為全域變數，確保所有邏輯共用，絕對不會再「找不到」
 MY_SCHEMA = pa.schema(
@@ -23,7 +25,7 @@ MY_SCHEMA = pa.schema(
 )
 
 
-def build_stock_parquet(start_date: str, end_date: str = None):
+def update_price(start_date: str, end_date: str = None):
     """
     通用型股票資料整合函式 (支援單月更新與歷史區間合併)
 
@@ -140,7 +142,6 @@ def query_last_price(stocks: list):
 
 def query_price(stocks: list, st="2015-01-01", end="2099-01-01", is_include_end=False):
     dataset = ds.dataset("db/price/", format="parquet")
-
     # 定義你的查詢條件
     # stocks = ["0050"]  # 這裡放你的 300 支股票代號
     st = pd.Timestamp(st)
@@ -239,9 +240,9 @@ def query_stock_info():
 #     # print(df.tail())
 
 
-def query_stocks_ids_list():
-    df: pd.DataFrame = pd.read_parquet("db/info/")
-    return df.iloc[:, 0].values.tolist()
+# def query_stocks_ids_list():
+# df: pd.DataFrame = pd.read_parquet("db/info/")
+# return df.iloc[:, 0].values.tolist()
 
 
 # print(query_info())
@@ -509,11 +510,13 @@ def stock0050():
 
 
 def query_stocks_no_etf():
-    all_stocks = set(query_stocks_ids_list())
+
+    all_stocks = set(s.stock_id for s in MyappActivestocks.select())
     excluded_stocks = set(stock0050()) | set(stock0056())  # 使用 | 進行聯集
     return list(all_stocks - excluded_stocks)
 
 
 #############################################################
 # build_stock_parquet("2015-01", "2026-05")
-# build_stock_parquet("2026-05")
+# date_str = datetime.now().strftime("%Y-%m")
+# update_price(date_str)

@@ -6,20 +6,13 @@
 """
 
 import json
-from math import e
-from re import L
-import select
-import signal
-from time import time
-
 import random
-from sklearn.model_selection import TimeSeriesSplit
 import lightgbm as lgb
-from numpy import add
 import pandas as pd
 import numpy as np
-from regex import P
-from sklearn.model_selection import TimeSeriesSplit
+
+import j1stools
+import j1stools.data_builder
 
 from j1stools import data_filter, feature_builder, label_builder, lite_db, parquet_db, rfc_main
 from j1stools.CONFIG import (
@@ -89,7 +82,12 @@ def main():
       → evaluate_selection → 確認新模型有效
       → 下個月用新模型
     """
-    stocks = list(set(parquet_db.query_stocks_ids_list()) - set(["0050", "0052", "0056"]))
+
+    stocks = [
+        row.stock_id
+        for row in MyappActivestocks.select(MyappActivestocks.stock_id)
+        if row.stock_id not in {"0050", "0052", "0056"}
+    ]
     train_end_predict_st = "2025-01-01"
 
     models = train(
@@ -618,9 +616,17 @@ def work_flow():
     candidates = select_stocks(df_today, [final_model], df_market_history)
 
 
-main()
-# predict(
-#     stocks=random.sample(parquet_db.query_stocks_no_etf(), 500),
-#     st="2024-01-01",
-#     end="2099-01-01",
-# )
+if __name__ == "__main__":
+    # main()
+
+    # stocks = [
+    #     row.stock_id
+    #     for row in MyappActivestocks.select(MyappActivestocks.stock_id)
+    #     if row.stock_id not in {"0050", "0052", "0056"}
+    # ]
+    # print(stocks)
+
+    from j1stools.django_orm import *
+
+    stocks = list(ActiveStocks.objects.values_list("stock_id", flat=True))
+    print(stocks)
