@@ -90,19 +90,19 @@ def main():
 
     stocks = list(ActiveStocks.objects.values_list("stock_id", flat=True))
     stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
-    train_end_predict_st = "2024-01-01"
+    train_end_predict_st = "2026-01-01"
 
-    models = train(
-        stocks=stocks,
-        st="2015-01-01",
-        end=train_end_predict_st,
-    )
-
-    # predict(
+    # models = train(
     #     stocks=stocks,
-    #     st=train_end_predict_st,
-    #     end=add_day(train_end_predict_st, 250),
+    #     st="2015-01-01",
+    #     end=train_end_predict_st,
     # )
+
+    select_stocks = predict(
+        stocks=stocks,
+        st=train_end_predict_st,
+        end=add_day(train_end_predict_st, 250),
+    )
 
 
 def prepare_data(stocks, st, end, model="train"):

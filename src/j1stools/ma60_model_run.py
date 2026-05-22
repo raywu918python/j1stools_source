@@ -11,7 +11,7 @@ from j1stools.train_flow import print_target_counts
 import ma_backtest
 
 
-def sort_signals(signals: pd.DataFrame, pred) -> pd.DataFrame:
+def marge_signals(signals: pd.DataFrame, pred) -> pd.DataFrame:
     import pandas as pd
 
     # 確保格式一致
@@ -80,7 +80,7 @@ def good_search(signals, df_price, df_market):
 def main():
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 500)
     st = "2024-01-01"
-    end = "2026-07-01"
+    end = "2026-01-01"
     # stocks = parquet_db.query_stocks_ids_list()
     stocks = parquet_db.query_stocks_no_etf()
     df_price = parquet_db.query_price(stocks, st, end)
@@ -94,11 +94,13 @@ def main():
     momentum_stats.MAX_DEV_MA60 = 0.2
     momentum_stats.USE_MAX_DEV_MA60 = False
     signals = momentum_stats.run(df_price, df_market)
-    signals = sort_signals(signals, get_sord_margin(stocks, st, end))
-
+    df_rank_stocks = get_sord_margin(stocks, st, end)
+    signals = marge_signals(signals, df_rank_stocks)
+    print("\n=== 排序後 ===")
+    print(signals.tail().T)
     #############################################################
     if "pred_score" in signals.columns:
-        momentum_backtest.run_backtest(
+        equity_df, trades_df, open_df = momentum_backtest.run_backtest(
             signals,
             df_price,
             df_market=df_market,
@@ -116,12 +118,93 @@ def main():
             ],
         )
     else:
-        momentum_backtest.run_backtest(
+        equity_df, trades_df, open_df = momentum_backtest.run_backtest(
             signals,
             df_price,
             df_market=df_market,
         )
 
+    print("\n=== 現金水位 ===")
+    print(equity_df.tail().T)
+    print("\n=== 交易記錄 ===")
+    print(trades_df.shape)
+    print(trades_df.tail().T)
+    print("\n=== 未平倉 ===")
+    print(open_df.to_string() if len(open_df) else "（無）")
+    draw_chart(equity_df, trades_df, df_market=df_market)
+
+
+def draw_chart(equity_df, trades_df, df_market=None, out="backtest_chart.html"):
+    import plotly.graph_objects as go
+
+    BG = "#0f1117"
+    ORANGE = "#ff8c00"
+    GRAY = "#888888"
+
+    eq = equity_df.copy()
+    eq["date"] = pd.to_datetime(eq["date"])
+    eq = eq.sort_values("date")
+    eq["cum_ret"] = (eq["total"] / eq["total"].iloc[0] - 1) * 100
+
+    traces = [
+        go.Scatter(
+            x=eq["date"],
+            y=eq["cum_ret"],
+            name="策略模型",
+            line=dict(color=ORANGE, width=2.5),
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.1f}%<extra></extra>",
+        )
+    ]
+
+    if df_market is not None:
+        mkt = df_market.copy()
+        mkt.columns = mkt.columns.str.strip().str.lower()
+        mkt["date"] = pd.to_datetime(mkt["date"])
+        mkt = mkt.sort_values("date")
+        mkt = mkt[(mkt["date"] >= eq["date"].iloc[0]) & (mkt["date"] <= eq["date"].iloc[-1])]
+        if len(mkt) >= 2:
+            mkt["cum_ret"] = (mkt["close"] / mkt["close"].iloc[0] - 1) * 100
+            traces.append(
+                go.Scatter(
+                    x=mkt["date"],
+                    y=mkt["cum_ret"],
+                    name="大盤對比",
+                    line=dict(color=GRAY, width=1.8, dash="dash"),
+                    hovertemplate="%{x|%Y-%m-%d}<br>%{y:.1f}%<extra></extra>",
+                )
+            )
+
+    fig = go.Figure(traces)
+    fig.update_layout(
+        title=dict(text="📊 近 2 年累計報酬率對比", font=dict(size=16, color="white"), x=0),
+        paper_bgcolor=BG,
+        plot_bgcolor=BG,
+        font=dict(color=GRAY),
+        legend=dict(orientation="h", x=1, xanchor="right", y=1.02, yanchor="bottom", font=dict(color="white")),
+        xaxis=dict(
+            tickformat="%Y-%m",
+            gridcolor="#1e2030",
+            linecolor="#1e2030",
+            tickcolor=GRAY,
+        ),
+        yaxis=dict(
+            ticksuffix="%",
+            gridcolor="#1e2030",
+            linecolor="#1e2030",
+            tickcolor=GRAY,
+            zeroline=True,
+            zerolinecolor="#333344",
+        ),
+        hovermode="x unified",
+        margin=dict(l=60, r=30, t=60, b=50),
+    )
+    fig.show()
+
+    with open("chartxxx.json", "w") as f:
+        f.write(fig.to_json())
+
 
 if __name__ == "__main__":
     main()
+    # df = parquet_db.query_price(["6291"], "2026-01-01", "2099-01-01")
+    # print(df.tail())

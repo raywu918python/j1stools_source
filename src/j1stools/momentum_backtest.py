@@ -108,6 +108,45 @@ def run_backtest(
     df_market=None,  # 大盤 ETF（date / close）
 ):
 
+    """
+    動能突破策略回測引擎
+
+    Parameters
+    ----------
+    signals      : DataFrame，需包含 date, stock_id, close；可含排序欄位
+    price_df     : DataFrame，需包含 date, stock_id, close（含 high/low 更準確）
+    init_capital : 初始資金，預設 1,000,000
+    stop_pct     : 初始停損比例，預設 8%
+    target_pct   : 停利目標比例，預設 10%
+    trail_pct    : 移動停損回落比例（exit_mode='trailing' 時生效），預設 5%
+    max_hold     : 強制出場天數，預設 10 個交易日
+    position_pct : 每筆倉位佔資金比例，預設 20%
+    max_positions: 最多同時持有幾支，預設 5
+    exit_mode    : 'fixed'（固定停利停損）或 'trailing'（移動停損）
+    sort_by      : SortBy enum 或 list[SortBy]，控制每日進場優先順序
+    df_market    : 大盤 ETF DataFrame（date, close），用於比較超額報酬
+
+    Returns
+    -------
+    equity_df : DataFrame，每日資產狀況
+        - date         : 日期
+        - cash         : 現金
+        - market_value : 持倉市值
+        - total        : 總資產（cash + market_value）
+        - n_positions  : 當日持倉數
+    trades_df : DataFrame，每筆交易明細
+        - stock_id     : 股票代號
+        - entry_date   : 進場日
+        - entry_price  : 進場價
+        - exit_date    : 出場日
+        - exit_price   : 出場價
+        - exit_reason  : 出場原因（stop_loss / trail_stop / target / timeout）
+        - highest      : 持倉期間最高價
+        - cost         : 進場成本
+        - pnl          : 損益金額
+        - return_pct   : 報酬率（%）
+        - hold_days    : 持倉天數（交易日）
+    """
     print("=" * 60)
     print("動能突破策略回測")
     print("=" * 60)
@@ -145,7 +184,12 @@ def run_backtest(
 
     capital, positions, trades, equity_curve = init_capital, {}, [], []
 
-    for date in sorted(sig["date"].unique()):
+    first_sig_date = sig["date"].min()
+    all_dates = sorted(
+        d for d in pd.to_datetime(price_df["date"]).unique() if d >= first_sig_date
+    )
+
+    for date in all_dates:
 
         # 出場
         to_close = []
@@ -251,10 +295,32 @@ def run_backtest(
             }
         )
 
-    equity_df = pd.DataFrame(equity_curve)
-    trades_df = pd.DataFrame(trades)
+    equity_df = pd.DataFrame(equity_curve).sort_values("date").reset_index(drop=True)
+    trades_df = pd.DataFrame(trades).sort_values("exit_date").reset_index(drop=True)
+
+    last_date = equity_df["date"].iloc[-1] if len(equity_df) else None
+    _OPEN_COLS = ["stock_id", "entry_date", "entry_price", "stop", "target", "highest", "cost", "last_date"]
+    if positions:
+        open_df = pd.DataFrame(
+            [
+                {
+                    "stock_id": sid,
+                    "entry_date": pos["entry_date"],
+                    "entry_price": pos["entry_price"],
+                    "stop": round(pos["stop"], 4),
+                    "target": round(pos["target"], 4),
+                    "highest": round(pos["highest"], 4),
+                    "cost": round(pos["cost"], 2),
+                    "last_date": last_date,
+                }
+                for sid, pos in positions.items()
+            ]
+        ).sort_values("entry_date").reset_index(drop=True)
+    else:
+        open_df = pd.DataFrame(columns=_OPEN_COLS)
+
     _print_results(equity_df, trades_df, init_capital, df_market)
-    return equity_df, trades_df
+    return equity_df, trades_df, open_df
 
 
 def _print_results(equity, trades, init_capital, df_market=None):
