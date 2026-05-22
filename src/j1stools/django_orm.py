@@ -16,4 +16,5 @@ from myapp.models import (
     StocksMargin,
     StocksUpdateFlag,
     StocksIbBuySell,
+    FeatureCols,
 )

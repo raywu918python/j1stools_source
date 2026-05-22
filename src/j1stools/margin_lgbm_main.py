@@ -5,6 +5,9 @@
 大盤環境   → 數值（波動率、成交量）
 """
 
+import time
+
+from j1stools.django_orm import *
 import json
 import random
 import lightgbm as lgb
@@ -43,13 +46,15 @@ def predict(
 ):
 
     model = joblib.load("models/lgbm_timeseries_ensemble.joblib")
-    feature_cols = json.load(open("models/feature_cols.json"))
+    feature_cols = list(
+        FeatureCols.objects.filter(model_name__startswith="margin_lgbm").values_list("feature_name", flat=True)
+    )
 
     df_feature, df_market = prepare_data(stocks, st, end, model="predict")
 
     evaluate_selection(
         df=df_feature,
-        feature_cols=json.load(open("models/feature_cols.json")),
+        feature_cols=feature_cols,
         model=model,
     )
 
@@ -64,7 +69,7 @@ def predict(
         return
 
     df_select_stocks = df_select_stocks.sort_values(by=["date", "pred_score"], ascending=[False, False])
-    df_select_stocks.to_csv("lgbm_signal_today.csv", index=False)
+    # df_select_stocks.to_csv("lgbm_signal_today.csv", index=False)
     # print(df_select_stocks.head())
     return df_select_stocks
 
@@ -83,12 +88,9 @@ def main():
       → 下個月用新模型
     """
 
-    stocks = [
-        row.stock_id
-        for row in MyappActivestocks.select(MyappActivestocks.stock_id)
-        if row.stock_id not in {"0050", "0052", "0056"}
-    ]
-    train_end_predict_st = "2025-01-01"
+    stocks = list(ActiveStocks.objects.values_list("stock_id", flat=True))
+    stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
+    train_end_predict_st = "2024-01-01"
 
     models = train(
         stocks=stocks,
@@ -96,14 +98,17 @@ def main():
         end=train_end_predict_st,
     )
 
-    predict(
-        stocks=stocks,
-        st=train_end_predict_st,
-        end=add_day(train_end_predict_st, 250),
-    )
+    # predict(
+    #     stocks=stocks,
+    #     st=train_end_predict_st,
+    #     end=add_day(train_end_predict_st, 250),
+    # )
 
 
 def prepare_data(stocks, st, end, model="train"):
+    warmup_st = add_day(st, -180)
+    st = min(st, warmup_st)
+
     df_margin = lite_db.margin(stocks, st, end)
     df_market = parquet_db.query_price(["0050"], st, end)
     df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
@@ -136,9 +141,10 @@ def train(
     models, scores = walk_forward_train(df_feature)
 
     final_model, feature_cols = train_final_model(df_feature, models)
-    with open("models/feature_cols.json", "w") as f:
-        json.dump(feature_cols, f)
+    # with open("models/feature_cols.json", "w") as f:
+    # json.dump(feature_cols, f)
 
+    update_features(feature_cols)
     joblib.dump(final_model, "models/lgbm_timeseries_ensemble.joblib")
 
     # feature_ic = calc_feature_ic(df_feature, period_start=st, period_end=end)
@@ -616,17 +622,15 @@ def work_flow():
     candidates = select_stocks(df_today, [final_model], df_market_history)
 
 
+def update_features(feature_list: list):
+    """更新特徵"""
+    df = pd.DataFrame(feature_list)
+    df["model_name"] = "margin_lgbm"  # + time.strftime("%Y%m%d")
+    df.rename(columns={0: "feature_name"}, inplace=True)
+    FeatureCols.objects.filter(model_name__startswith="margin_lgbm").delete()
+    FeatureCols.objects.bulk_create([FeatureCols(**row) for row in df.to_dict(orient="records")])
+
+
 if __name__ == "__main__":
-    # main()
-
-    # stocks = [
-    #     row.stock_id
-    #     for row in MyappActivestocks.select(MyappActivestocks.stock_id)
-    #     if row.stock_id not in {"0050", "0052", "0056"}
-    # ]
-    # print(stocks)
-
-    from j1stools.django_orm import *
-
-    stocks = list(ActiveStocks.objects.values_list("stock_id", flat=True))
-    print(stocks)
+    main()
+    pass

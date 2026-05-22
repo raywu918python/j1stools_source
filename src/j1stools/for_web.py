@@ -1,6 +1,8 @@
 from j1stools import j1s_chart, margin_lgbm_main, parquet_db, rfc_main
 from j1stools.backtest_engine import backtest_engine
 from j1stools.backtest_platform import PrepareDate, prepare_data_backtest, win6XX
+from j1stools.django_orm import *
+from j1stools.lgbm_orgin_main import add_day
 
 
 def web_backtest(stocks):
@@ -39,4 +41,23 @@ def web_query_last(
     return portfolio_value, trades_df, positions
 
 
-# web_query_last()
+def predict_margin_model():
+
+    stocks = list(ActiveStocks.objects.values_list("stock_id", flat=True))
+    stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
+    end = "2026-05-22"
+    st = add_day(end, -60)
+
+    df_select_stocks = margin_lgbm_main.predict(
+        stocks=stocks,
+        st=st,
+        end=end,
+    )
+
+    print(df_select_stocks)
+
+
+if __name__ == "__main__":
+    predict_margin_model()
+    # web_query_last()
+    pass
