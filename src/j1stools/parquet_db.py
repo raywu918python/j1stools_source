@@ -1,5 +1,6 @@
 from datetime import datetime
-
+from re import S
+from j1stools.django_orm import *
 import pyarrow as pa
 import pandas as pd
 import pyarrow.compute as pc
@@ -519,3 +520,13 @@ def query_stocks_no_etf():
 # build_stock_parquet("2015-01", "2026-05")
 # date_str = datetime.now().strftime("%Y-%m")
 # update_price(date_str)
+
+
+def init_margin():
+    qs = StocksMargin.objects.filter(date__gte="2015-01-01", date__lt="2026-05-01")
+    df = pd.DataFrame(list(qs.values()))
+    df.to_parquet("db/margin/201501_202605.parquet")
+
+
+if __name__ == "__main__":
+    init_margin()
