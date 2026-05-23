@@ -6,10 +6,9 @@
 """
 
 import time
-
-from j1stools.django_orm import *
-import json
 import random
+
+MODEL_NAME = "margin_lgbm"
 import lightgbm as lgb
 import pandas as pd
 import numpy as np
@@ -17,7 +16,7 @@ import numpy as np
 import j1stools
 import j1stools.data_builder
 
-from j1stools import data_filter, feature_builder, label_builder, lite_db, parquet_db, rfc_main
+from j1stools import data_filter, feature_builder, label_builder, parquet_db
 from j1stools.CONFIG import (
     BaseDataBuilderConfig,
     BaseLabelConfig,
@@ -46,9 +45,7 @@ def predict(
 ):
 
     model = joblib.load("models/lgbm_timeseries_ensemble.joblib")
-    feature_cols = list(
-        FeatureCols.objects.filter(model_name__startswith="margin_lgbm").values_list("feature_name", flat=True)
-    )
+    feature_cols = parquet_db.load_feature_cols(MODEL_NAME)
 
     df_feature, df_market = prepare_data(stocks, st, end, model="predict")
 
@@ -88,30 +85,33 @@ def main():
       → 下個月用新模型
     """
 
-    stocks = list(ActiveStocks.objects.values_list("stock_id", flat=True))
+    stocks = parquet_db.activate_stocks()
     stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
-    train_end_predict_st = "2026-01-01"
+    train_end_predict_st = "2024-01-01"
 
-    # models = train(
-    #     stocks=stocks,
-    #     st="2015-01-01",
-    #     end=train_end_predict_st,
-    # )
-
-    select_stocks = predict(
+    models = train(
         stocks=stocks,
-        st=train_end_predict_st,
-        end=add_day(train_end_predict_st, 250),
+        st="2015-01-01",
+        end=train_end_predict_st,
     )
+
+    # select_stocks = predict(
+    #     stocks=stocks,
+    #     st=train_end_predict_st,
+    #     end=add_day(train_end_predict_st, 250),
+    # )
 
 
 def prepare_data(stocks, st, end, model="train"):
     warmup_st = add_day(st, -180)
     st = min(st, warmup_st)
 
-    df_margin = lite_db.margin(stocks, st, end)
+    df_margin = parquet_db.query_margin(stocks, st, end)
     df_market = parquet_db.query_price(["0050"], st, end)
-    df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
+    df_ibbuysell = parquet_db.query_ib(stocks, st, end)
+    df_price = parquet_db.query_price(stocks, st, end)
+    df_margin = pd.merge(df_margin, df_price, on=["date", "stock_id"], how="left")
+
     df_margin = label_builder.add_target(
         df_margin,
         df_market=df_market,
@@ -165,9 +165,9 @@ def start_backtest(
     end="2024-01-01",
 ):
     print("=" * 60, "backtest")
-    df_margin = lite_db.margin(stocks, st, end)
+    df_margin = parquet_db.query_margin(stocks, st, end)
     df_market = parquet_db.query_price(["0050"], st, end)
-    df_ibbuysell = lite_db.ibbuysell(stocks, st, end)
+    df_ibbuysell = parquet_db.query_ib(stocks, st, end)
     df_margin = label_builder.add_target_forward(df_margin, df_market=df_market)
     df_feature = feature_builder.gen_feature(
         None,
@@ -623,12 +623,7 @@ def work_flow():
 
 
 def update_features(feature_list: list):
-    """更新特徵"""
-    df = pd.DataFrame(feature_list)
-    df["model_name"] = "margin_lgbm"  # + time.strftime("%Y%m%d")
-    df.rename(columns={0: "feature_name"}, inplace=True)
-    FeatureCols.objects.filter(model_name__startswith="margin_lgbm").delete()
-    FeatureCols.objects.bulk_create([FeatureCols(**row) for row in df.to_dict(orient="records")])
+    parquet_db.save_feature_cols(MODEL_NAME, feature_list)
 
 
 if __name__ == "__main__":

@@ -159,7 +159,7 @@ def query_price(stocks: list, st="2015-01-01", end="2099-01-01", is_include_end=
     ).sort_by([("date", "ascending")])
 
     df: pd.DataFrame = table.to_pandas()
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     df["close"] = df["close"].astype("float32")
     df["open"] = df["open"].astype("float32")
     df["high"] = df["high"].astype("float32")
@@ -525,8 +525,70 @@ def query_stocks_no_etf():
 def init_margin():
     qs = StocksMargin.objects.filter(date__gte="2015-01-01", date__lt="2026-05-01")
     df = pd.DataFrame(list(qs.values()))
+    df = df.drop(columns=["id"], errors="ignore")
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     df.to_parquet("db/margin/201501_202605.parquet")
 
 
+def init_ib():
+    qs = StocksIbBuySell.objects.filter(date__gte="2015-01-01", date__lt="2026-05-01")
+    df = pd.DataFrame(list(qs.values()))
+    df = df.drop(columns=["id"], errors="ignore")
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    df.to_parquet("db/ib/201501_202605.parquet")
+
+
+def activate_stocks():
+    return list(pd.read_parquet("db/active_stocks/")["stock_id"])
+
+
+def query_ib(stocks: list, st="2015-01-01", end="2099-01-01"):
+    dataset = ds.dataset("db/ib/", format="parquet")
+    condition = (ds.field("date") >= st) & (ds.field("date") < end) & (ds.field("stock_id").isin(stocks))
+    df = dataset.to_table(filter=condition).to_pandas()
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    df.sort_values(["date", "stock_id", "name"], inplace=True)
+    return df
+
+
+def query_margin(stocks: list, st="2015-01-01", end="2099-01-01"):
+    dataset = ds.dataset("db/margin/", format="parquet")
+    condition = (ds.field("date") >= st) & (ds.field("date") < end) & (ds.field("stock_id").isin(stocks))
+    df = dataset.to_table(filter=condition).to_pandas()
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    df.sort_values(["date", "stock_id"], inplace=True)
+    return df
+
+
+_FEATURE_COLS_PATH = "db/feature_cols/feature_cols.parquet"
+
+
+def save_feature_cols(model_name: str, feature_cols: list):
+    os.makedirs("db/feature_cols", exist_ok=True)
+    new_df = pd.DataFrame({"model_name": model_name, "feature_name": feature_cols})
+    if os.path.exists(_FEATURE_COLS_PATH):
+        old_df = pd.read_parquet(_FEATURE_COLS_PATH)
+        old_df = old_df[old_df["model_name"] != model_name]
+        new_df = pd.concat([old_df, new_df], ignore_index=True)
+    new_df.to_parquet(_FEATURE_COLS_PATH, index=False)
+
+
+def load_feature_cols(model_name: str) -> list:
+    df = pd.read_parquet(_FEATURE_COLS_PATH)
+    return list(df[df["model_name"] == model_name]["feature_name"])
+
+
 if __name__ == "__main__":
-    init_margin()
+    # init_margin()
+    # init_ib()
+    # df = query_ib(
+    #     stocks=["2003", "2330"],
+    #     st="2025-01-01",
+    #     end="2026-05-01",
+    # )
+    df = query_margin(
+        stocks=["2003", "2330"],
+        st="2025-01-01",
+        end="2026-05-01",
+    )
+    print(df.head())
