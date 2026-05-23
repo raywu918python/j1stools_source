@@ -1,6 +1,5 @@
 import pandas as pd
 
-from db_models.peewee_models import MyappActivestocks, MyappStocksibbuysell, MyappStocksinfo, MyappStocksmargin
 from j1stools import parquet_db
 
 

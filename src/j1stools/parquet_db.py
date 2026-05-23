@@ -7,7 +7,6 @@ import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from db_models.peewee_models import MyappActivestocks
 import j1stools.utils as utils
 import os
 
@@ -510,10 +509,10 @@ def stock0050():
 
 
 def query_stocks_no_etf():
-
-    all_stocks = set(s.stock_id for s in MyappActivestocks.select())
-    excluded_stocks = set(stock0050()) | set(stock0056())  # 使用 | 進行聯集
-    return list(all_stocks - excluded_stocks)
+    pass
+    # all_stocks = set(s.stock_id for s in MyappActivestocks.select())
+    # excluded_stocks = set(stock0050()) | set(stock0056())  # 使用 | 進行聯集
+    # return list(all_stocks - excluded_stocks)
 
 
 #############################################################

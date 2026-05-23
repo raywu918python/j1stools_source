@@ -9,7 +9,6 @@ django.setup()
 
 from myapp.models import (
     Portfolio,
-    Trades,
     Positions,
     StocksInfo,
     ActiveStocks,

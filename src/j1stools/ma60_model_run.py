@@ -1,14 +1,9 @@
 from os import times
 import os
-import random
-import time
-
+from j1stools.django_orm import *
 import pandas as pd
-from pandas import Timestamp
 
-from j1stools import ma_cross_xgb, margin_lgbm_main, momentum_backtest, momentum_stats, parquet_db, triangle_stats
-from j1stools.train_flow import print_target_counts
-import ma_backtest
+from j1stools import margin_lgbm_main, momentum_backtest, momentum_stats, parquet_db, triangle_stats
 
 
 def marge_signals(signals: pd.DataFrame, pred) -> pd.DataFrame:
@@ -80,7 +75,7 @@ def good_search(signals, df_price, df_market):
 def main():
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 500)
     st = "2024-01-01"
-    end = "2026-01-01"
+    end = "2029-01-01"
     # stocks = parquet_db.query_stocks_ids_list()
     stocks = parquet_db.query_stocks_no_etf()
     df_price = parquet_db.query_price(stocks, st, end)
@@ -94,10 +89,7 @@ def main():
     momentum_stats.MAX_DEV_MA60 = 0.2
     momentum_stats.USE_MAX_DEV_MA60 = False
     signals = momentum_stats.run(df_price, df_market)
-    df_rank_stocks = get_sord_margin(stocks, st, end)
-    signals = marge_signals(signals, df_rank_stocks)
-    print("\n=== 排序後 ===")
-    print(signals.tail().T)
+    signals = marge_signals(signals, get_sord_margin(stocks, st, end))
     #############################################################
     if "pred_score" in signals.columns:
         equity_df, trades_df, open_df = momentum_backtest.run_backtest(

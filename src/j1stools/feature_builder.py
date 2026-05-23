@@ -99,10 +99,10 @@ def gen_feature(
         # df = f_macd_hist_divergences_with_atr(df)
     print(f"gen_feature: {time() - t1:.2f} 秒")
 
-    f = df.select_dtypes(include="number").describe().T.round(2)
-    print(f)
-    print(f.shape)
-    f.to_csv("describe.csv")
+    feature_info = df.select_dtypes(include="number").describe().T.round(2)
+    print(feature_info)
+    # print(feature_info.shape)
+    # feature_info.to_csv("describe.csv")
 
     return df
 
