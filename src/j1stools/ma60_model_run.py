@@ -39,9 +39,9 @@ def get_sord_margin(stocks, st, end):
     #     df_margin = margin_lgbm_main.predict(stocks, st, end)
     #     df_margin.to_csv(find_name, index=False)
 
-    df_margin = margin_lgbm_main.predict(stocks, st, end)
-    df_margin = df_margin[df_margin["pred_score"] > 0.2]
-    return df_margin
+    df_select_stocks = margin_lgbm_main.predict(stocks, st, end)
+    df_select_stocks = df_select_stocks[df_select_stocks["pred_score"] > 0.2]
+    return df_select_stocks
 
 
 def good_search(signals, df_price, df_market):
@@ -73,12 +73,19 @@ def good_search(signals, df_price, df_market):
     )
 
 
-def main(st="2024-01-01", end="2026-01-01"):
+def main(
+    st="2026-01-01",
+    end="2099-01-01",
+):
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 500)
     # stocks = parquet_db.activate_stocks()
     stocks = parquet_db.query_stocks_no_etf()
-    df_price = parquet_db.query_price(stocks, st, end)
-    df_market = parquet_db.query_price(["0050"], st, end)
+    # 多往前抓 120 天，確保 st 第一天就能算出 MA60
+    warmup_st = (pd.Timestamp(st) - pd.DateOffset(days=120)).strftime("%Y-%m-%d")
+    # query_price 的 end 是 exclusive，+1 天確保 end 當天資料包含進來
+    end_excl = (pd.Timestamp(end) + pd.DateOffset(days=1)).strftime("%Y-%m-%d")
+    df_price = parquet_db.query_price(stocks, warmup_st, end_excl)
+    df_market = parquet_db.query_price(["0050"], warmup_st, end_excl)
 
     #############################################################
     # momentum_stats.USE_DEDUP = False
@@ -87,7 +94,7 @@ def main(st="2024-01-01", end="2026-01-01"):
     # 調整門檻（例如 30%）
     momentum_stats.MAX_DEV_MA60 = 0.2
     momentum_stats.USE_MAX_DEV_MA60 = False
-    signals = momentum_stats.run(df_price, df_market)
+    signals = momentum_stats.run(df_price, df_market, signal_date_from=st)
     signals = marge_signals(signals, get_sord_margin(stocks, st, end))
     #############################################################
     if "pred_score" in signals.columns:

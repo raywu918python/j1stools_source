@@ -142,11 +142,11 @@ def _process_stock(grp: pd.DataFrame) -> pd.DataFrame:
     d["days_since_ma60_turn"] = _calc_ma60_turn_days(d)
     d["dev_ma60"] = (d["close"] - ma60) / ma60  # 收盤距離 MA60 的幅度
 
-    sig = d[d["signal"] & d["future_max_ret"].notna() & d["future_close_ret"].notna()].copy()
+    sig = d[d["signal"]].copy()
     return sig[["date", "stock_id", "close", "future_max_ret", "future_close_ret", "days_since_ma60_turn", "dev_ma60"]]
 
 
-def run(price_df: pd.DataFrame, market_df: pd.DataFrame = None) -> pd.DataFrame:
+def run(price_df: pd.DataFrame, market_df: pd.DataFrame = None, signal_date_from: str = None) -> pd.DataFrame:
 
     print("=" * 60)
     print("動能突破訊號統計")
@@ -205,6 +205,9 @@ def run(price_df: pd.DataFrame, market_df: pd.DataFrame = None) -> pd.DataFrame:
 
     signals = pd.concat(all_signals, ignore_index=True)
     signals = signals.sort_values(["date", "stock_id"]).reset_index(drop=True)
+
+    if signal_date_from is not None:
+        signals = signals[signals["date"] >= pd.Timestamp(signal_date_from)].reset_index(drop=True)
 
     _print_stats(signals)
     return signals

@@ -15,7 +15,7 @@ import numpy as np
 
 
 from j1stools import data_filter, feature_builder, label_builder, parquet_db
-from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
+from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE, MARGIN_RUN
 
 
 from j1stools.j1s_split_date import lgbm_split_date
@@ -49,11 +49,10 @@ def predict(
         top_n=20,
     )
     if df_select_stocks is None:
-        return
+        return None
 
     df_select_stocks = df_select_stocks.sort_values(by=["date", "pred_score"], ascending=[False, False])
     # df_select_stocks.to_csv("lgbm_signal_today.csv", index=False)
-    # print(df_select_stocks.head())
     return df_select_stocks
 
 
@@ -71,33 +70,40 @@ def main():
       → 下個月用新模型
     """
 
+    run = MARGIN_RUN.full
+    run = MARGIN_RUN.predict
     stocks = parquet_db.activate_stocks()
     stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
-    stocks = ["2330"]
+    # stocks = ["2330"]
 
-    # models, df_feature = train(
-    #     stocks=stocks,
-    #     st="2015-01-01",
-    #     end="2024-01-01",
-    # )
+    models, df_feature, feature_cols = None, None, None
 
-    # final_model, feature_cols = train_final_model(df_feature, models)
-    # update_features(feature_cols)
-    # joblib.dump(final_model, "models/lgbm_timeseries_ensemble.joblib")
+    if MARGIN_RUN.train in run:
+        models, df_feature = train(
+            stocks=stocks,
+            st="2015-01-01",
+            end="2024-01-01",
+        )
 
-    #   evaluate_selection(
-    #         df=df_feature,
-    #         feature_cols=feature_cols,
-    #         model=model,
-    #         start_date=st,
-    #     )
+    if MARGIN_RUN.evaluate in run:
+        dates = sorted(df_feature["date"].unique())
+        val_start = dates[int(len(dates) * 0.8)]
+        df_val = df_feature[df_feature["date"] >= val_start]
+        feature_cols_all = [c for c in df_feature.columns if c.startswith("f_")]
+        evaluate_selection(df=df_val, feature_cols=feature_cols_all, model=models)
 
-    select_stocks = predict(
-        stocks=stocks,
-        st="2026-03-01",
-        # end=add_day("2025-01-01", 250),
-        end="2026-04-01",
-    )
+    if MARGIN_RUN.build in run:
+        final_model, feature_cols = train_final_model(df_feature, models)
+        update_features(feature_cols)
+        joblib.dump(final_model, "models/lgbm_timeseries_ensemble.joblib")
+
+    if MARGIN_RUN.predict in run:
+        predict(
+            stocks=stocks,
+            st="2026-01-01",
+            # end=add_day("2025-01-01", 250),
+            end="2026-03-01",
+        ).to_csv("lgbm_signal_today.csv", index=False)
 
 
 def prepare_data(stocks, st, end, model="train"):
@@ -126,7 +132,7 @@ def prepare_data(stocks, st, end, model="train"):
     )
 
     df_feature = df_feature[df_feature["date"] >= st].reset_index(drop=True)
-    df_market = df_market[df_market["date"] >= st].reset_index(drop=True)
+    # df_market 保留 warmup 段，讓 select_stocks 的 rolling(20)/pct_change(20) 有足夠歷史算出非 NaN
     return df_feature, df_market
 
 
@@ -513,20 +519,25 @@ def select_stocks(
     DataFrame（date, stock_id, pred_score）依日期和 pred_score 排列
     或 None（市場狀態不佳，建議空手）
     """
-    if use_filter:
-        mkt = df_market_history.copy().sort_values("date")
-        market_vol = mkt["close"].pct_change(1).rolling(20).std().iloc[-1]
-        market_trend = mkt["close"].pct_change(20).iloc[-1]
-
-        if not ((market_vol > vol_threshold) and (market_trend > trend_threshold)):
-            print(f"市場狀態不佳，今日不交易")
-            print(f"波動率：{market_vol:.4f}  門檻：{vol_threshold}")
-            print(f"20日趨勢：{market_trend:.2%}  門檻：{trend_threshold:.2%}")
-            return None
+    mkt = df_market_history.copy()
+    mkt["date"] = pd.to_datetime(mkt["date"])
+    mkt = mkt.sort_values("date").reset_index(drop=True)
+    mkt["_vol"] = mkt["close"].pct_change(1, fill_method=None).rolling(20).std()
+    mkt["_trend"] = mkt["close"].pct_change(20, fill_method=None)
 
     results = []
 
     for date, group in df_today.groupby("date"):
+        if use_filter:
+            mkt_row = mkt[mkt["date"] <= pd.Timestamp(date)]
+            if mkt_row.empty:
+                continue
+            market_vol = mkt_row["_vol"].iloc[-1]
+            market_trend = mkt_row["_trend"].iloc[-1]
+            if not ((market_vol > vol_threshold) and (market_trend > trend_threshold)):
+                print(f"{date} 市場狀態不佳，跳過  vol={market_vol:.4f}  trend={market_trend:.2%}")
+                continue
+
         group = group.copy()
         group["pred_score"] = model.predict(group[feature_cols])
 

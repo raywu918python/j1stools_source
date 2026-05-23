@@ -98,6 +98,7 @@ def gen_feature(
         # df = f_macd_hist_divergences_with_atr(df)
     print(f"gen_feature: {time() - t1:.2f} 秒")
 
+    pd.set_option("display.max_rows", 200)
     feature_info = df.select_dtypes(include="number").describe().T.round(2)
     print(feature_info)
     # print(feature_info.shape)

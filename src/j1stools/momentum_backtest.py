@@ -239,6 +239,7 @@ def run_backtest(
                     "hold_days": (
                         stock[stock["date"] <= date].shape[0] - stock[stock["date"] <= pos["entry_date"]].shape[0]
                     ),
+                    "weight": position_pct,
                 }
             )
             to_close.append(sid)
@@ -299,10 +300,16 @@ def run_backtest(
     trades_df = pd.DataFrame(trades).sort_values("exit_date").reset_index(drop=True)
 
     last_date = equity_df["date"].iloc[-1] if len(equity_df) else None
-    _OPEN_COLS = ["stock_id", "entry_date", "entry_price", "stop", "target", "highest", "cost", "last_date"]
+    _OPEN_COLS = ["stock_id", "entry_date", "entry_price", "stop", "target", "highest", "cost", "last_date", "pnl_pct", "weight"]
     if positions:
-        open_df = pd.DataFrame(
-            [
+        rows = []
+        for sid, pos in positions.items():
+            last_price = pos["entry_price"]
+            if sid in price_map and last_date is not None:
+                sub = price_map[sid][price_map[sid]["date"] <= last_date]
+                if len(sub):
+                    last_price = sub.iloc[-1]["close"]
+            rows.append(
                 {
                     "stock_id": sid,
                     "entry_date": pos["entry_date"],
@@ -312,10 +319,11 @@ def run_backtest(
                     "highest": round(pos["highest"], 4),
                     "cost": round(pos["cost"], 2),
                     "last_date": last_date,
+                    "pnl_pct": round((last_price / pos["entry_price"] - 1) * 100, 2),
+                    "weight": position_pct,
                 }
-                for sid, pos in positions.items()
-            ]
-        ).sort_values("entry_date").reset_index(drop=True)
+            )
+        open_df = pd.DataFrame(rows).sort_values("entry_date").reset_index(drop=True)
     else:
         open_df = pd.DataFrame(columns=_OPEN_COLS)
 
@@ -397,7 +405,7 @@ def _print_results(equity, trades, init_capital, df_market=None):
         print(f"  {yr}  {bar:<20}  勝率 {row['wr']:.1%}  " f"PnL {sign}{row['pnl']:,.0f}  ({int(row['n'])} 筆)")
 
     print(f"\n--- 最近 20 筆交易記錄 ---")
-    recent = trades.nlargest(20, "exit_date")[
+    recent = trades.nlargest(20, "entry_date")[
         ["entry_date", "stock_id", "entry_price", "exit_date", "exit_price", "exit_reason", "return_pct", "hold_days"]
     ].reset_index(drop=True)
     print(recent.to_string(index=False))
