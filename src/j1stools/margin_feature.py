@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-from j1stools import lite_db, parquet_db
+from j1stools import parquet_db
 
 import pandas as pd
 import numpy as np

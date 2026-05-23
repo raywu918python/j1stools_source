@@ -123,7 +123,8 @@ def main():
     print(trades_df.tail().T)
     print("\n=== 未平倉 ===")
     print(open_df.to_string() if len(open_df) else "（無）")
-    draw_chart(equity_df, trades_df, df_market=df_market)
+    return equity_df, trades_df, open_df
+    # draw_chart(equity_df, trades_df, df_market=df_market)
 
 
 def draw_chart(equity_df, trades_df, df_market=None, out="backtest_chart.html"):
@@ -200,3 +201,4 @@ if __name__ == "__main__":
     main()
     # df = parquet_db.query_price(["6291"], "2026-01-01", "2099-01-01")
     # print(df.tail())
+    pass

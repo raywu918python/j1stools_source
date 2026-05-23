@@ -103,25 +103,26 @@ class PrepareDate:
         print(f"前處理時間: {time() - t1:.2f} 秒")
 
 
-def calc_adx(high, low, close, cache_path="cache/adx.pkl", is_using_cache=False):
-    os.makedirs("cache", exist_ok=True)
+def calc_adx(high, low, close, cache_path="db/adx/adx.parquet", is_using_cache=False):
+    os.makedirs("db/adx", exist_ok=True)
 
     # ✅ 用資料的最後日期當作快取 key
     last_date = str(close.index[-1].date())
-    cache_path = f"cache/adx_{last_date}.pkl"
+    cache_path = f"db/adx/adx_{last_date}.parquet"
 
     if is_using_cache and os.path.exists(cache_path):
         print("載入 ADX 快取...")
-        return pd.read_pickle(cache_path)
+        return pd.read_parquet(cache_path)
 
     print("計算 ADX...")
     adx = vbt.pandas_ta("ADX").run(high, low, close, length=14).adx
-    adx.to_pickle(cache_path)
+    adx.columns = adx.columns.astype(str)
+    adx.to_parquet(cache_path)
 
     # ✅ 清掉舊快取
-    for f in os.listdir("cache"):
-        if f.startswith("adx_") and f != f"adx_{last_date}.pkl":
-            os.remove(f"cache/{f}")
+    for f in os.listdir("db/adx"):
+        if f.startswith("adx_") and f != f"adx_{last_date}.parquet":
+            os.remove(f"db/adx/{f}")
             print(f"刪除舊快取：{f}")
 
     return adx

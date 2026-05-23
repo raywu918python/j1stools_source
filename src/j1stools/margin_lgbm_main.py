@@ -13,16 +13,8 @@ import lightgbm as lgb
 import pandas as pd
 import numpy as np
 
-import j1stools
-import j1stools.data_builder
 
 from j1stools import data_filter, feature_builder, label_builder, parquet_db
-from j1stools.CONFIG import (
-    BaseDataBuilderConfig,
-    BaseLabelConfig,
-    LgbmTrainConfig,
-    MACDDataBuilterConfig,
-)
 from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE, TRAIN_TYPE, MODEL_TYPE
 
 
@@ -87,19 +79,22 @@ def main():
 
     stocks = parquet_db.activate_stocks()
     stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
-    train_end_predict_st = "2024-01-01"
 
-    models = train(
-        stocks=stocks,
-        st="2015-01-01",
-        end=train_end_predict_st,
-    )
-
-    # select_stocks = predict(
+    # models, df_feature = train(
     #     stocks=stocks,
-    #     st=train_end_predict_st,
-    #     end=add_day(train_end_predict_st, 250),
+    #     st="2015-01-01",
+    #     end="2024-01-01",
     # )
+
+    # final_model, feature_cols = train_final_model(df_feature, models)
+    # update_features(feature_cols)
+    # joblib.dump(final_model, "models/lgbm_timeseries_ensemble.joblib")
+
+    select_stocks = predict(
+        stocks=stocks,
+        st="2024-01-01",
+        end=add_day("2024-01-01", 999),
+    )
 
 
 def prepare_data(stocks, st, end, model="train"):
@@ -140,13 +135,6 @@ def train(
     df_feature, _ = prepare_data(stocks, st, end)
     models, scores = walk_forward_train(df_feature)
 
-    final_model, feature_cols = train_final_model(df_feature, models)
-    # with open("models/feature_cols.json", "w") as f:
-    # json.dump(feature_cols, f)
-
-    update_features(feature_cols)
-    joblib.dump(final_model, "models/lgbm_timeseries_ensemble.joblib")
-
     # feature_ic = calc_feature_ic(df_feature, period_start=st, period_end=end)
     # feature_ic.to_csv("feature_ic.csv", index=False)
     # evaluate_selection(
@@ -156,7 +144,7 @@ def train(
     # )
     # summary = analyze_frequent(stock_df)
 
-    return models
+    return models, df_feature
 
 
 def start_backtest(
@@ -606,23 +594,24 @@ def train_final_model(df, val_model, params=PARAMS, use_importance_filter=True, 
     return model, feature_cols
 
 
-def work_flow():
-    # 1. 評估模型
-    models, scores = walk_forward_train(df_feat, params)
+# def work_flow():
+#     # 1. 評估模型
+#     models, scores = walk_forward_train(df_feat, params)
 
-    # 2. 訓練最終模型（用 Feature Importance 篩選）
-    final_model, feature_cols = train_final_model(df_feat, models)
+#     # 2. 訓練最終模型（用 Feature Importance 篩選）
+#     final_model, feature_cols = train_final_model(df_feat, models)
 
-    # 3. 每季監控（只是警報器，不篩選特徵）
-    ic_df = calc_feature_ic(df_feat)
-    # IC 全面下降 → 重新跑步驟 1 和 2
+#     # 3. 每季監控（只是警報器，不篩選特徵）
+#     ic_df = calc_feature_ic(df_feat)
+#     # IC 全面下降 → 重新跑步驟 1 和 2
 
-    # 4. 預測
-    df_today = add_feature(df, df_ibbuysell, df_market, mode="predict")
-    candidates = select_stocks(df_today, [final_model], df_market_history)
+#     # 4. 預測
+#     df_today = add_feature(df, df_ibbuysell, df_market, mode="predict")
+#     candidates = select_stocks(df_today, [final_model], df_market_history)
 
 
 def update_features(feature_list: list):
+    parquet_db.delete_feature_cols(MODEL_NAME)
     parquet_db.save_feature_cols(MODEL_NAME, feature_list)
 
 

@@ -10,10 +10,4 @@ django.setup()
 from myapp.models import (
     Portfolio,
     Positions,
-    StocksInfo,
-    ActiveStocks,
-    StocksMargin,
-    StocksUpdateFlag,
-    StocksIbBuySell,
-    FeatureCols,
 )

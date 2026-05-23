@@ -14,20 +14,6 @@ import j1stools.django_orm
 import j1stools.utils as utils
 import os
 
-# 將 Schema 移到最外層作為全域變數，確保所有邏輯共用，絕對不會再「找不到」
-MY_SCHEMA = pa.schema(
-    [
-        ("open", pa.float32()),
-        ("high", pa.float32()),
-        ("low", pa.float32()),
-        ("close", pa.float32()),
-        ("volume", pa.int64()),
-        ("stock_id", pa.string()),
-        ("date", pa.timestamp("ns")),
-    ]
-)
-
-
 # def create_info():
 #     df: pd.DataFrame = pd.read_csv(utils.get_base_url() + f"stock_list.csv", dtype={"代號": str})
 #     df = df.iloc[:, 1:]
@@ -47,45 +33,6 @@ MY_SCHEMA = pa.schema(
 #     combined_df = combined_df.sort_values(["date", "stock_id"])
 #     table = pa.Table.from_pandas(combined_df)
 #     pq.write_table(table, "history.parquet")
-
-
-def query_last_price(stocks: list):
-    dataset = ds.dataset("db/price/", format="parquet")
-
-    table = dataset.to_table(
-        filter=ds.field("stock_id").isin(stocks), columns=["date", "stock_id", "close", "volume", "high", "low", "open"]
-    ).sort_by([("date", "ascending")])
-
-    return table.slice(table.num_rows - 1, 1).to_pandas()
-
-
-def query_price(stocks: list, st="2015-01-01", end="2099-01-01", is_include_end=False):
-    dataset = ds.dataset("db/price/", format="parquet")
-    # 定義你的查詢條件
-    # stocks = ["0050"]  # 這裡放你的 300 支股票代號
-    st = pd.Timestamp(st)
-    end = pd.Timestamp(end)
-
-    # 組合條件：時間區間 AND 股票清單
-    if is_include_end:
-        condition = (ds.field("date") >= st) & (ds.field("date") <= end) & (ds.field("stock_id").isin(stocks))
-    else:
-        condition = (ds.field("date") >= st) & (ds.field("date") < end) & (ds.field("stock_id").isin(stocks))
-
-    # 執行查詢並取出特定欄位
-    table = dataset.to_table(
-        filter=condition, columns=["date", "stock_id", "close", "volume", "high", "low", "open"]
-    ).sort_by([("date", "ascending")])
-
-    df: pd.DataFrame = table.to_pandas()
-    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
-    df["close"] = df["close"].astype("float32")
-    df["open"] = df["open"].astype("float32")
-    df["high"] = df["high"].astype("float32")
-    df["low"] = df["low"].astype("float32")
-
-    df.drop_duplicates(subset=["date", "stock_id"], keep="last", inplace=True)
-    return df
 
 
 # def merge_folder():
@@ -473,13 +420,6 @@ def query_margin(stocks: list, st="2015-01-01", end="2099-01-01"):
 _FEATURE_COLS_PATH = "db/feature_cols/feature_cols.parquet"
 
 
-def delete_feature_cols(model_name: str):
-    if not os.path.exists(_FEATURE_COLS_PATH):
-        return
-    df = pd.read_parquet(_FEATURE_COLS_PATH)
-    df[df["model_name"] != model_name].to_parquet(_FEATURE_COLS_PATH, index=False)
-
-
 def save_feature_cols(model_name: str, feature_cols: list):
     os.makedirs("db/feature_cols", exist_ok=True)
     new_df = pd.DataFrame({"model_name": model_name, "feature_name": feature_cols})
@@ -495,23 +435,15 @@ def load_feature_cols(model_name: str) -> list:
     return list(df[df["model_name"] == model_name]["feature_name"])
 
 
-def query_stock_info() -> pd.DataFrame:
-    """stock_id, name, market_type, group"""
-    return pd.read_parquet("db/info/")
+from j1stools.django_orm import *
+
+
+def init_info():
+    qs = StocksInfo.objects.all().values("stock_id", "name", "market_type", "group")
+    df = pd.DataFrame(list(qs))
+    os.makedirs("db/info", exist_ok=True)
+    df.to_parquet("db/info/info.parquet", index=False)
 
 
 if __name__ == "__main__":
-    pass
-    # init_margin()
-    # init_ib()
-    # df = query_ib(
-    #     stocks=["2003", "2330"],
-    #     st="2025-01-01",
-    #     end="2026-05-01",
-    # )
-    # df = query_margin(
-    #     stocks=["2003", "2330"],
-    #     st="2025-01-01",
-    #     end="2026-05-01",
-    # )
-    # print(df.head())
+    init_info()

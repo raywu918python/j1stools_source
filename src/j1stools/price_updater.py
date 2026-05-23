@@ -12,8 +12,7 @@ import yfinance as yf
 import os
 import pandas as pd
 from dotenv import load_dotenv
-from db_models.peewee_models import MyappActivestocks, MyappStocksinfo
-from j1stools import lite_db
+from j1stools import parquet_db
 from j1stools.utils import get_base_url, stock
 
 MY_SCHEMA = pa.schema(
@@ -83,28 +82,24 @@ def find_tickers_to_download(select_tickers: list = None):
     """
 
     if select_tickers is None:
-        stocks = MyappActivestocks.select(MyappActivestocks.stock_id)
-        stocks = list([x.stock_id for x in stocks])
+        stocks = parquet_db.activate_stocks()
     else:
         stocks = select_tickers
 
-    info = (
-        MyappStocksinfo.select(MyappStocksinfo.stock_id, MyappStocksinfo.market_type)
-        .where(MyappStocksinfo.stock_id.in_(stocks))
-        .dicts()
-    )
+    info_df = parquet_db.query_stock_info()
+    info_df = info_df[info_df["stock_id"].isin(stocks)][["stock_id", "market_type"]]
 
     all_tickers = []
-    for i in info:
-        stock_id = i.get("stock_id")
-        market_type = "TW" if i.get("market_type") == "twse" else "TWO"
-        ticker = SimpleNamespace({"stock_id": stock_id, "market_type": market_type})
+    for _, row in info_df.iterrows():
+        stock_id = row["stock_id"]
+        market_type = "TW" if row["market_type"] == "twse" else "TWO"
+        ticker = SimpleNamespace(stock_id=stock_id, market_type=market_type)
         all_tickers.append(ticker)
 
     return all_tickers
 
 
-def download(
+def update(
     interval: INTERVAL,
     select_tickers: list = None,
     period="5d",
@@ -137,4 +132,6 @@ def download(
         time.sleep(2)
 
 
-download(INTERVAL.day, period="1d")
+if __name__ == "__main__":
+    # price_updater(INTERVAL.day)
+    update(INTERVAL.day, period="5d")
