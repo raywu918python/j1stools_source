@@ -49,14 +49,14 @@ MY_SCHEMA = pa.schema(
 #     pq.write_table(table, "history.parquet")
 
 
-def query_last_price(stocks: list):
-    dataset = ds.dataset("db/price/", format="parquet")
+# def query_last_price(stocks: list):
+#     dataset = ds.dataset("db/price/", format="parquet")
 
-    table = dataset.to_table(
-        filter=ds.field("stock_id").isin(stocks), columns=["date", "stock_id", "close", "volume", "high", "low", "open"]
-    ).sort_by([("date", "ascending")])
+#     table = dataset.to_table(
+#         filter=ds.field("stock_id").isin(stocks), columns=["date", "stock_id", "close", "volume", "high", "low", "open"]
+#     ).sort_by([("date", "ascending")])
 
-    return table.slice(table.num_rows - 1, 1).to_pandas()
+#     return table.slice(table.num_rows - 1, 1).to_pandas()
 
 
 def query_price(stocks: list, st="2015-01-01", end="2099-01-01", is_include_end=False):
@@ -78,101 +78,6 @@ def query_price(stocks: list, st="2015-01-01", end="2099-01-01", is_include_end=
     df["low"] = df["low"].astype("float32")
     df.drop_duplicates(subset=["date", "stock_id"], keep="last", inplace=True)
     return df
-
-
-# def merge_folder():
-#     # 只要指定資料夾路徑，PyArrow 會自動把裡面所有的 .parquet 視為同一個大表
-#     dataset = ds.dataset("my_data/", format="parquet")
-
-#     # 查詢時，它會同時掃描 part-1 和 part-2
-#     table = dataset.to_table(filter=ds.field("stock_id") == "2330")
-
-
-# def merge():
-
-#     # 1. 讀取舊的歷史資料 (建議用 pyarrow table 讀取，省記憶體)
-#     old_table = pq.read_table("history.parquet")
-
-#     # 2. 準備 4 月的新資料 (DataFrame)
-#     new_df = pd.get_4_month_data()  # 假設這是你獲取資料的 function
-#     new_df = new_df.reset_index()  # 確保與歷史資料結構一致
-#     new_table = pa.Table.from_pandas(new_df)
-
-#     # 3. 合併 (Concatenate)
-#     combined_table = pa.concat_tables([old_table, new_table])
-
-#     # 4. 重新排序 (重要！因為新資料在最下面，為了維持查詢效能需要重排)
-#     import pyarrow.compute as pc
-
-#     indices = pc.sort_indices(combined_table, sort_keys=[("date", "ascending"), ("stock_id", "ascending")])
-#     sorted_table = combined_table.take(indices)
-
-#     # 5. 寫回檔案 (覆蓋舊檔)
-#     pq.write_table(sorted_table, "history.parquet", row_group_size=100000)
-
-
-# def read():
-#     dataset = ds.dataset("db/price/2026_3.parquet", format="parquet")
-#     table = dataset.to_table()
-#     # table = dataset.to_table(
-#     #     filter=ds.field("stock_id") == "2330", columns=["date", "stock_id", "close"]  # 篩選行  # 選取特定欄位
-#     # )
-#     df: pd.DataFrame = table.to_pandas()
-#     print(df.head())
-#     print(df.tail())
-
-
-# def query_info():
-#     dataset = ds.dataset("db/info/", format="parquet")
-
-#     # 組合條件：時間區間 AND 股票清單
-#     condition = (
-#         (ds.field("date") >= start_date) & (ds.field("date") < end_date) & (ds.field("stock_id").isin(target_stocks))
-#     )
-
-#     # 執行查詢並取出特定欄位
-#     table = dataset.to_table(filter=condition, columns=["date", "stock_id", "close", "volume"]).sort_by(
-#         [("date", "ascending")]
-#     )
-
-#     df: pd.DataFrame = table.to_pandas()
-#     print(df.head())
-#     print(df.tail())
-
-
-#     # print(df.head())
-#     # print(df.tail())
-
-
-# def query_stocks_ids_list():
-# df: pd.DataFrame = pd.read_parquet("db/info/")
-# return df.iloc[:, 0].values.tolist()
-
-
-# print(query_info())
-
-
-# def reset_price(group):
-#     if group.name == "0050":
-#         group["close"] = group["close"] + 1000
-#     return group
-
-
-# def create_features(df: pd.DataFrame):
-#     df.reset_index(drop=True, inplace=True)
-#     df.to_parquet("db/feature/history.parquet")
-
-
-# def read_features():
-#     dataset = ds.dataset("db/feature/history.parquet", format="parquet")
-#     table = dataset.to_table()
-#     # table = dataset.to_table(
-#     #     filter=ds.field("stock_id") == "2330", columns=["date", "stock_id", "close"]  # 篩選行  # 選取特定欄位
-#     # )
-#     df: pd.DataFrame = table.to_pandas()
-#     # print(df.head().T)
-#     # print(df.tail().T)
-#     print(df.describe())
 
 
 def create_stock_group():
@@ -450,6 +355,7 @@ def query_ib(stocks: list, st="2015-01-01", end="2099-01-01"):
     df = dataset.to_table(filter=condition).to_pandas()
     df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     df.sort_values(["date", "stock_id", "name"], inplace=True)
+    df.drop_duplicates(subset=["date", "stock_id", "name"], inplace=True)
     return df
 
 
@@ -459,6 +365,7 @@ def query_margin(stocks: list, st="2015-01-01", end="2099-01-01"):
     df = dataset.to_table(filter=condition).to_pandas()
     df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     df.sort_values(["date", "stock_id"], inplace=True)
+    df.drop_duplicates(subset=["date", "stock_id"], inplace=True)
     return df
 
 
@@ -494,7 +401,6 @@ def query_stock_info() -> pd.DataFrame:
 
 if __name__ == "__main__":
     pass
-    check_data()
     # init_margin()
     # init_ib()
     # df = query_ib(
