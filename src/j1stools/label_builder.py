@@ -161,7 +161,7 @@ def check_bug_price(df: pd.DataFrame):
 
 
 def add_target(
-    df, df_market, price_col="close", stock_col="stock_id", date_col="date", forward_days=20, max_return=3.0
+    df, df_market, price_col="close", stock_col="stock_id", date_col="date", forward_days=20, max_return=5.0
 ):
     """
     計算每支股票未來N天內的最大超額報酬作為 target

@@ -71,7 +71,7 @@ def main():
     """
 
     run = MARGIN_RUN.full
-    run = MARGIN_RUN.train | MARGIN_RUN.evaluate | MARGIN_RUN.build
+    run = MARGIN_RUN.train | MARGIN_RUN.evaluate
     stocks = parquet_db.activate_stocks()
     stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
     # stocks = ["2330"]
@@ -246,15 +246,15 @@ def start_backtest(
 PARAMS = {
     "objective": "regression",
     "metric": "rmse",
-    "num_leaves": 255,
-    "learning_rate": 0.03,
+    "num_leaves": 63,
+    "learning_rate": 0.005,
     "min_child_samples": 50,
     "subsample": 0.8,
     "subsample_freq": 1,
     "colsample_bytree": 0.7,
     "reg_alpha": 0.1,
     "reg_lambda": 2.0,
-    "n_estimators": 2000,
+    "n_estimators": 5000,
     "n_jobs": -1,
     "verbose": -1,
 }

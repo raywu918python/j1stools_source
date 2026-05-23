@@ -27,20 +27,20 @@ def marge_signals(signals: pd.DataFrame, pred) -> pd.DataFrame:
     return selected
 
 
-def get_sord_margin(stocks, st, end):
-    from datetime import date
-
-    # today = date.today()
-    # find_name = "margin" + today.strftime("%Y%m%d") + st + end + ".csv"
-
-    # if os.path.exists(find_name):
-    #     df_margin = pd.read_csv(find_name)
-    # else:
-    #     df_margin = margin_lgbm_main.predict(stocks, st, end)
-    #     df_margin.to_csv(find_name, index=False)
-
+def get_sord_margin(stocks, st, end, mode="top20"):
+    """
+    mode="score" : pred_score > 0.2
+    mode="top20" : 每日前20名
+    """
     df_select_stocks = margin_lgbm_main.predict(stocks, st, end)
-    df_select_stocks = df_select_stocks[df_select_stocks["pred_score"] > 0.2]
+    if mode == "score":
+        df_select_stocks = df_select_stocks[df_select_stocks["pred_score"] > 0.2]
+    else:
+        df_select_stocks = (
+            df_select_stocks.groupby("date", group_keys=False)
+            .apply(lambda g: g.nlargest(20, "pred_score"))
+            .reset_index(drop=True)
+        )
     return df_select_stocks
 
 
@@ -74,7 +74,7 @@ def good_search(signals, df_price, df_market):
 
 
 def main(
-    st="2026-01-01",
+    st="2024-01-01",
     end="2099-01-01",
 ):
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 500)
@@ -95,7 +95,7 @@ def main(
     momentum_stats.MAX_DEV_MA60 = 0.2
     momentum_stats.USE_MAX_DEV_MA60 = False
     signals = momentum_stats.run(df_price, df_market, signal_date_from=st)
-    signals = marge_signals(signals, get_sord_margin(stocks, st, end))
+    signals = marge_signals(signals, get_sord_margin(stocks, st, end, mode="score"))
     #############################################################
     if "pred_score" in signals.columns:
         equity_df, trades_df, open_df = momentum_backtest.run_backtest(

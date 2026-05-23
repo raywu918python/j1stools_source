@@ -611,7 +611,7 @@ def _check_dataset(path: str, label: str, cutoff="2026-05-01"):
 
 
 def check_ib_margin():
-    _check_dataset("db/ib/", "ib")
+    # _check_dataset("db/ib/", "ib")
     _check_dataset("db/margin/", "margin")
 
 
