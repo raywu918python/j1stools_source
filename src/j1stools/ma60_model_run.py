@@ -30,16 +30,17 @@ def marge_signals(signals: pd.DataFrame, pred) -> pd.DataFrame:
 def get_sord_margin(stocks, st, end):
     from datetime import date
 
-    today = date.today()
-    find_name = "margin" + today.strftime("%Y%m%d") + st + end + ".csv"
+    # today = date.today()
+    # find_name = "margin" + today.strftime("%Y%m%d") + st + end + ".csv"
 
-    if os.path.exists(find_name):
-        df_margin = pd.read_csv(find_name)
-    else:
-        df_margin = margin_lgbm_main.predict(stocks, st, end)
-        df_margin.to_csv(find_name, index=False)
+    # if os.path.exists(find_name):
+    #     df_margin = pd.read_csv(find_name)
+    # else:
+    #     df_margin = margin_lgbm_main.predict(stocks, st, end)
+    #     df_margin.to_csv(find_name, index=False)
 
-    # df_margin = df_margin[df_margin["pred_score"] > 0.2]
+    df_margin = margin_lgbm_main.predict(stocks, st, end)
+    df_margin = df_margin[df_margin["pred_score"] > 0.2]
     return df_margin
 
 
@@ -72,11 +73,9 @@ def good_search(signals, df_price, df_market):
     )
 
 
-def main():
+def main(st="2024-01-01", end="2026-01-01"):
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 500)
-    st = "2024-01-01"
-    end = "2029-01-01"
-    # stocks = parquet_db.query_stocks_ids_list()
+    # stocks = parquet_db.activate_stocks()
     stocks = parquet_db.query_stocks_no_etf()
     df_price = parquet_db.query_price(stocks, st, end)
     df_market = parquet_db.query_price(["0050"], st, end)
@@ -116,15 +115,15 @@ def main():
             df_market=df_market,
         )
 
-    print("\n=== 現金水位 ===")
-    print(equity_df.tail().T)
-    print("\n=== 交易記錄 ===")
-    print(trades_df.shape)
-    print(trades_df.tail().T)
-    print("\n=== 未平倉 ===")
-    print(open_df.to_string() if len(open_df) else "（無）")
-    return equity_df, trades_df, open_df
+    # print("\n=== 現金水位 ===")
+    # print(equity_df.tail().T)
+    # print("\n=== 交易記錄 ===")
+    # print(trades_df.shape)
+    # print(trades_df.tail().T)
+    # print("\n=== 未平倉 ===")
+    # print(open_df.to_string() if len(open_df) else "（無）")
     # draw_chart(equity_df, trades_df, df_market=df_market)
+    return equity_df, trades_df, open_df
 
 
 def draw_chart(equity_df, trades_df, df_market=None, out="backtest_chart.html"):
@@ -191,10 +190,10 @@ def draw_chart(equity_df, trades_df, df_market=None, out="backtest_chart.html"):
         hovermode="x unified",
         margin=dict(l=60, r=30, t=60, b=50),
     )
-    fig.show()
+    return fig
 
-    with open("chartxxx.json", "w") as f:
-        f.write(fig.to_json())
+    # with open("chartxxx.json", "w") as f:
+    # f.write(fig.to_json())
 
 
 if __name__ == "__main__":

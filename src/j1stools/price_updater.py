@@ -17,13 +17,13 @@ from j1stools.utils import get_base_url, stock
 
 MY_SCHEMA = pa.schema(
     [
+        ("date", pa.string()),
+        ("stock_id", pa.string()),
         ("open", pa.float32()),
         ("high", pa.float32()),
         ("low", pa.float32()),
         ("close", pa.float32()),
         ("volume", pa.int64()),
-        ("stock_id", pa.string()),
-        ("date", pa.timestamp("ns")),
     ]
 )
 
@@ -49,6 +49,7 @@ def save(dfall):
         inplace=True,
     )
     long_df["stock_id"] = long_df["stock_id"].str.split(".").str[0]
+    long_df["date"] = pd.to_datetime(long_df["date"]).dt.strftime("%Y-%m-%d")
     columns = ["date", "stock_id", "open", "high", "low", "close", "volume"]
     new: pd.DataFrame = long_df[columns]
 
@@ -57,8 +58,8 @@ def save(dfall):
         new[col] = new[col].astype("float32")
 
     # 5. 分月存檔
-    for month, group in new.groupby(new["date"].dt.to_period("M")):
-        path = f"{month.strftime('%Y_%m')}.parquet"
+    for month, group in new.groupby(new["date"].str[:7].str.replace("-", "_")):
+        path = f"{month}.parquet"
 
         if os.path.exists(path):
             old = pd.read_parquet(path=path, engine="pyarrow")
@@ -134,4 +135,4 @@ def update(
 
 if __name__ == "__main__":
     # price_updater(INTERVAL.day)
-    update(INTERVAL.day, period="5d")
+    update(INTERVAL.day, period="10d")

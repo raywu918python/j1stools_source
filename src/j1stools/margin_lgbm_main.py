@@ -41,12 +41,6 @@ def predict(
 
     df_feature, df_market = prepare_data(stocks, st, end, model="predict")
 
-    evaluate_selection(
-        df=df_feature,
-        feature_cols=feature_cols,
-        model=model,
-    )
-
     df_select_stocks = select_stocks(
         df_today=df_feature,
         df_market_history=df_market,
@@ -79,6 +73,7 @@ def main():
 
     stocks = parquet_db.activate_stocks()
     stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
+    stocks = ["2330"]
 
     # models, df_feature = train(
     #     stocks=stocks,
@@ -90,22 +85,33 @@ def main():
     # update_features(feature_cols)
     # joblib.dump(final_model, "models/lgbm_timeseries_ensemble.joblib")
 
+    #   evaluate_selection(
+    #         df=df_feature,
+    #         feature_cols=feature_cols,
+    #         model=model,
+    #         start_date=st,
+    #     )
+
     select_stocks = predict(
         stocks=stocks,
-        st="2024-01-01",
-        end=add_day("2024-01-01", 999),
+        st="2026-03-01",
+        # end=add_day("2025-01-01", 250),
+        end="2026-04-01",
     )
 
 
 def prepare_data(stocks, st, end, model="train"):
     warmup_st = add_day(st, -180)
-    st = min(st, warmup_st)
 
-    df_margin = parquet_db.query_margin(stocks, st, end)
-    df_market = parquet_db.query_price(["0050"], st, end)
-    df_ibbuysell = parquet_db.query_ib(stocks, st, end)
-    df_price = parquet_db.query_price(stocks, st, end)
+    df_margin = parquet_db.query_margin(stocks, warmup_st, end)
+    df_market = parquet_db.query_price(["0050"], warmup_st, end)
+    df_ibbuysell = parquet_db.query_ib(stocks, warmup_st, end)
+    df_price = parquet_db.query_price(stocks, warmup_st, end)
     df_margin = pd.merge(df_margin, df_price, on=["date", "stock_id"], how="left")
+
+    df_margin.to_csv("df_margin.csv", index=False)
+    df_ibbuysell.to_csv("df_ibbuysell.csv", index=False)
+    df_market.to_csv("df_market.csv", index=False)
 
     df_margin = label_builder.add_target(
         df_margin,
@@ -119,6 +125,8 @@ def prepare_data(stocks, st, end, model="train"):
         argv=model,
     )
 
+    df_feature = df_feature[df_feature["date"] >= st].reset_index(drop=True)
+    df_market = df_market[df_market["date"] >= st].reset_index(drop=True)
     return df_feature, df_market
 
 
@@ -467,7 +475,14 @@ def calc_feature_ic(df, lookback_days=60):
 
 
 def select_stocks(
-    df_today, model, feature_cols, df_market_history, top_n=20, use_filter=True, vol_threshold=0.008, trend_threshold=0
+    df_today,
+    model,
+    feature_cols,
+    df_market_history,
+    top_n=20,
+    use_filter=True,
+    vol_threshold=0.008,
+    trend_threshold=0,
 ):
     """
     每日選股，回傳候選股票清單交給 B 模型操作

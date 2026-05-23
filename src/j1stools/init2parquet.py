@@ -435,6 +435,68 @@ def load_feature_cols(model_name: str) -> list:
     return list(df[df["model_name"] == model_name]["feature_name"])
 
 
+MY_SCHEMA = pa.schema(
+    [
+        ("date", pa.string()),
+        ("stock_id", pa.string()),
+        ("open", pa.float32()),
+        ("high", pa.float32()),
+        ("low", pa.float32()),
+        ("close", pa.float32()),
+        ("volume", pa.int64()),
+    ]
+)
+
+
+def init_price(csv_dir="data", out_dir="db/price"):
+    """把 data/*_1d.csv 全部存成分月 parquet"""
+    import glob
+
+    os.makedirs(out_dir, exist_ok=True)
+    files = glob.glob(os.path.join(csv_dir, "*_1d.csv"))
+    print(f"找到 {len(files)} 支股票 CSV")
+
+    dfs = []
+    for f in files:
+        stock_id = os.path.basename(f).replace("_1d.csv", "")
+        df = pd.read_csv(f, dtype={"Volume": "Int64"})
+        df["stock_id"] = stock_id
+        dfs.append(df)
+
+    all_df = pd.concat(dfs, ignore_index=True)
+    all_df.rename(
+        columns={"Date": "date", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"},
+        inplace=True,
+    )
+    all_df["date"] = pd.to_datetime(all_df["date"]).dt.strftime("%Y-%m-%d")
+    for col in ["open", "high", "low", "close"]:
+        all_df[col] = all_df[col].astype("float32")
+    all_df["volume"] = all_df["volume"].fillna(0).astype("int64")
+
+    columns = ["date", "stock_id", "open", "high", "low", "close", "volume"]
+    all_df = all_df[columns].drop_duplicates(subset=["date", "stock_id"], keep="last")
+    all_df = all_df.sort_values(["date", "stock_id"]).reset_index(drop=True)
+
+    cutoff = "2026-05-01"
+
+    # 2026-05 前：存成一份 history.parquet
+    hist = all_df[all_df["date"] < cutoff].reset_index(drop=True)
+    hist_path = os.path.join(out_dir, "history.parquet")
+    hist.to_parquet(hist_path, engine="pyarrow", schema=MY_SCHEMA, compression="zstd", index=False)
+    print(f"  {hist_path}  {len(hist):,} 筆")
+
+    # 2026-05 起：按月分檔
+    recent = all_df[all_df["date"] >= cutoff]
+    for month, group in recent.groupby(recent["date"].str[:7]):
+        out_path = os.path.join(out_dir, f"{month.replace('-', '_')}.parquet")
+        group.reset_index(drop=True).to_parquet(
+            out_path, engine="pyarrow", schema=MY_SCHEMA, compression="zstd", index=False
+        )
+        print(f"  {out_path}  {len(group):,} 筆")
+
+    print("init_price 完成")
+
+
 from j1stools.django_orm import *
 
 
@@ -445,5 +507,116 @@ def init_info():
     df.to_parquet("db/info/info.parquet", index=False)
 
 
+def check_data_loss(st="2024-01-01", end="2026-01-01"):
+    """检查 price / ib / margin 資料完整性"""
+    checks = [
+        ("price", "db/price/"),
+        ("ib", "db/ib/"),
+        ("margin", "db/margin/"),
+    ]
+
+    stock_sets = {}
+
+    for name, path in checks:
+        try:
+            dataset = ds.dataset(path, format="parquet")
+            date_type = dataset.schema.field("date").type
+            if pa.types.is_timestamp(date_type):
+                condition = (ds.field("date") >= pd.Timestamp(st)) & (ds.field("date") < pd.Timestamp(end))
+            else:
+                condition = (ds.field("date") >= st) & (ds.field("date") < end)
+            df = dataset.to_table(filter=condition, columns=["date", "stock_id"]).to_pandas()
+            df["date"] = pd.to_datetime(df["date"])
+            df["ym"] = df["date"].dt.to_period("M")
+
+            stock_sets[name] = set(df["stock_id"].unique())
+            months = df["ym"].nunique()
+            date_min = df["date"].min().date()
+            date_max = df["date"].max().date()
+            monthly = df.groupby("ym")["stock_id"].nunique()
+            low_months = monthly[monthly < monthly.median() * 0.8]
+
+            print(f"\n[{name}]  {date_min} ~ {date_max}  月數:{months}  股票數:{len(stock_sets[name])}")
+            if len(low_months):
+                print(f"  ⚠ 資料偏少的月份：{list(low_months.index)}")
+            else:
+                print(f"  ✓ 無明顯缺漏月份")
+        except Exception as e:
+            print(f"\n[{name}]  ✗ 讀取失敗：{e}")
+
+    # 跨資料集比對
+    if len(stock_sets) > 1:
+        print("\n=== 股票數量差異 ===")
+        names = list(stock_sets.keys())
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                a, b = names[i], names[j]
+                only_a = sorted(stock_sets[a] - stock_sets[b])
+                only_b = sorted(stock_sets[b] - stock_sets[a])
+                if only_a or only_b:
+                    print(f"\n  [{a}] 有但 [{b}] 沒有（{len(only_a)} 支）：{only_a}")
+                    print(f"  [{b}] 有但 [{a}] 沒有（{len(only_b)} 支）：{only_b}")
+                else:
+                    print(f"\n  [{a}] vs [{b}]：完全相同")
+
+
+def check_price():
+    dataset = ds.dataset("db/price/", format="parquet")
+
+    # 5月之前的歷史股票（不含5月）
+    hist_condition = ds.field("date") < "2026-05-01"
+    all_stocks = set(dataset.to_table(filter=hist_condition, columns=["stock_id"]).to_pandas()["stock_id"].unique())
+
+    # 5月的股票
+    condition = (ds.field("date") >= "2026-05-01") & (ds.field("date") < "2026-06-01")
+    may_stocks = set(dataset.to_table(filter=condition, columns=["stock_id"]).to_pandas()["stock_id"].unique())
+
+    only_hist = sorted(all_stocks - may_stocks)
+    only_may = sorted(may_stocks - all_stocks)
+
+    print(f"歷史全部股票數：{len(all_stocks)}")
+    print(f"2026-05 股票數：{len(may_stocks)}")
+    if only_hist:
+        print(f"\n歷史有但5月沒有（{len(only_hist)} 支）：{only_hist}")
+    if only_may:
+        print(f"\n5月有但歷史沒有（{len(only_may)} 支）：{only_may}")
+    if not only_hist and not only_may:
+        print("\n兩者股票完全相同")
+
+    # 2024後下市的股票
+    condition_2024 = (ds.field("date") >= "2024-01-01") & (ds.field("date") < "2026-01-01")
+    active_2024 = set(dataset.to_table(filter=condition_2024, columns=["stock_id"]).to_pandas()["stock_id"].unique())
+    delisted = sorted(all_stocks - active_2024)
+    print(f"\n2024前下市（歷史有但2024後無資料）（{len(delisted)} 支）：{delisted}")
+
+
+def _check_dataset(path: str, label: str, cutoff="2026-05-01"):
+    dataset = ds.dataset(path, format="parquet")
+    before = set(
+        dataset.to_table(filter=ds.field("date") < cutoff, columns=["stock_id"]).to_pandas()["stock_id"].unique()
+    )
+    after = set(
+        dataset.to_table(filter=ds.field("date") >= cutoff, columns=["stock_id"]).to_pandas()["stock_id"].unique()
+    )
+    only_before = sorted(before - after)
+    only_after = sorted(after - before)
+
+    print(f"\n[{label}]  {cutoff} 前：{len(before)} 支  /  後：{len(after)} 支")
+    if only_before:
+        print(f"  前有後無（{len(only_before)} 支）：{only_before}")
+    if only_after:
+        print(f"  後有前無（{len(only_after)} 支）：{only_after}")
+    if not only_before and not only_after:
+        print("  兩段股票完全相同")
+
+
+def check_ib_margin():
+    _check_dataset("db/ib/", "ib")
+    _check_dataset("db/margin/", "margin")
+
+
 if __name__ == "__main__":
-    init_info()
+    # init_price()
+    # check_price()
+    # check_data_loss()
+    check_ib_margin()
