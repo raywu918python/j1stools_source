@@ -71,7 +71,7 @@ def main():
     """
 
     run = MARGIN_RUN.full
-    run = MARGIN_RUN.predict
+    run = MARGIN_RUN.train | MARGIN_RUN.evaluate | MARGIN_RUN.build
     stocks = parquet_db.activate_stocks()
     stocks = list(set(stocks) - set(["0050", "0052", "0056"]))
     # stocks = ["2330"]
@@ -90,7 +90,13 @@ def main():
         val_start = dates[int(len(dates) * 0.8)]
         df_val = df_feature[df_feature["date"] >= val_start]
         feature_cols_all = [c for c in df_feature.columns if c.startswith("f_")]
-        evaluate_selection(df=df_val, feature_cols=feature_cols_all, model=models)
+        evaluate_selection(
+            df=df_val,
+            feature_cols=feature_cols_all,
+            model=models,
+            # start_date="2022-01-01",
+            # forward_days=10,
+        )
 
     if MARGIN_RUN.build in run:
         final_model, feature_cols = train_final_model(df_feature, models)
@@ -102,7 +108,7 @@ def main():
             stocks=stocks,
             st="2026-01-01",
             # end=add_day("2025-01-01", 250),
-            end="2026-03-01",
+            end="2029-01-01",
         ).to_csv("lgbm_signal_today.csv", index=False)
 
 
@@ -122,7 +128,7 @@ def prepare_data(stocks, st, end, model="train"):
     df_margin = label_builder.add_target(
         df_margin,
         df_market=df_market,
-        forward_days=20,
+        forward_days=30,
     )
     df_feature = feature_builder.gen_feature(
         None,
