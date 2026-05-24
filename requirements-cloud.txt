@@ -9,3 +9,7 @@ joblib
 numpy
 scikit-learn
 pandas_ta
+sympy
+scipy
+statsmodels
+regex
