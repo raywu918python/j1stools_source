@@ -8,3 +8,4 @@ lightgbm
 joblib
 numpy
 scikit-learn
+pandas_ta
