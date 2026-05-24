@@ -5,13 +5,14 @@ _REPO_ID = os.environ.get("HF_REPO_ID", "raywu918python/j1s-data")
 
 
 def pull(folders: list, local_dir="."):
-    """從 HF Hub 下載指定資料夾到本地（公開 repo，不需要 token）"""
+    token = os.environ.get("HF_TOKEN")
     for folder in folders:
         snapshot_download(
             repo_id=_REPO_ID,
             repo_type="dataset",
             local_dir=local_dir,
             allow_patterns=f"{folder}/**",
+            token=token,
         )
         print(f"[hf_sync] pulled: {folder}")
 

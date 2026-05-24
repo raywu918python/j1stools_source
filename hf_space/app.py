@@ -19,6 +19,7 @@ app.add_middleware(
 REPO_ID = "raywu918python/j1s-data"
 DEFAULT_MODEL = "lgbm_timeseries_ensemble"
 _API_KEY = os.environ.get("API_KEY", "")
+_HF_TOKEN = os.environ.get("HF_TOKEN", "")
 _key_header = APIKeyHeader(name="X-API-Key")
 
 
@@ -41,11 +42,19 @@ def _backtest_url(date_str: str, model: str, kind: str) -> str:
     )
 
 
+def _read_parquet(url: str) -> pd.DataFrame:
+    headers = {"Authorization": f"Bearer {_HF_TOKEN}"} if _HF_TOKEN else {}
+    import io, httpx
+    r = httpx.get(url, headers=headers, follow_redirects=True, timeout=30)
+    r.raise_for_status()
+    return _read_parquet(io.BytesIO(r.content))
+
+
 def _load_latest_pred(model: str):
     for delta in range(7):
         d = (date.today() - timedelta(days=delta)).strftime("%Y-%m-%d")
         try:
-            return pd.read_parquet(_pred_url(d, model)), d
+            return _read_parquet(_pred_url(d, model)), d
         except Exception:
             continue
     raise HTTPException(status_code=404, detail="No prediction found in last 7 days")
@@ -55,14 +64,14 @@ def _load_latest_backtest(model: str):
     for delta in range(7):
         d = (date.today() - timedelta(days=delta)).strftime("%Y-%m-%d")
         try:
-            equity = pd.read_parquet(_backtest_url(d, model, "equity"))
-            trades = pd.read_parquet(_backtest_url(d, model, "trades"))
+            equity = _read_parquet(_backtest_url(d, model, "equity"))
+            trades = _read_parquet(_backtest_url(d, model, "trades"))
             try:
-                open_pos = pd.read_parquet(_backtest_url(d, model, "open"))
+                open_pos = _read_parquet(_backtest_url(d, model, "open"))
             except Exception:
                 open_pos = pd.DataFrame()
             try:
-                market = pd.read_parquet(_backtest_url(d, model, "market"))
+                market = _read_parquet(_backtest_url(d, model, "market"))
             except Exception:
                 market = pd.DataFrame()
             return equity, trades, open_pos, market, d
@@ -80,7 +89,7 @@ def get_predictions(model: Optional[str] = Query(default=DEFAULT_MODEL), _=Depen
 @app.get("/predictions/{date_str}")
 def get_predictions_by_date(date_str: str, model: Optional[str] = Query(default=DEFAULT_MODEL), _=Depends(_verify_key)):
     try:
-        df = pd.read_parquet(_pred_url(date_str, model))
+        df = _read_parquet(_pred_url(date_str, model))
     except Exception:
         raise HTTPException(status_code=404, detail=f"No prediction for {date_str} model={model}")
     return {"date": date_str, "model": model, "data": df.to_dict(orient="records")}
@@ -102,14 +111,14 @@ def get_backtest(model: Optional[str] = Query(default=DEFAULT_MODEL), _=Depends(
 @app.get("/backtest/{date_str}")
 def get_backtest_by_date(date_str: str, model: Optional[str] = Query(default=DEFAULT_MODEL), _=Depends(_verify_key)):
     try:
-        equity = pd.read_parquet(_backtest_url(date_str, model, "equity"))
-        trades = pd.read_parquet(_backtest_url(date_str, model, "trades"))
+        equity = _read_parquet(_backtest_url(date_str, model, "equity"))
+        trades = _read_parquet(_backtest_url(date_str, model, "trades"))
         try:
-            open_pos = pd.read_parquet(_backtest_url(date_str, model, "open"))
+            open_pos = _read_parquet(_backtest_url(date_str, model, "open"))
         except Exception:
             open_pos = pd.DataFrame()
         try:
-            market = pd.read_parquet(_backtest_url(date_str, model, "market"))
+            market = _read_parquet(_backtest_url(date_str, model, "market"))
         except Exception:
             market = pd.DataFrame()
     except Exception:
