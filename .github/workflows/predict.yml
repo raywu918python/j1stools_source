@@ -1,0 +1,22 @@
+name: Predict
+
+on:
+  schedule:
+    - cron: '0 23 * * *'  # 早上 7:00 CST，ib/margin 更新完後
+  workflow_dispatch:
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: Run predict
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+        run: python scripts/run_predict.py

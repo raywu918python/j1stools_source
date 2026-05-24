@@ -4,3 +4,7 @@ pyarrow
 yfinance
 requests
 python-dotenv
+lightgbm
+joblib
+numpy
+scikit-learn
