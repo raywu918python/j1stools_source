@@ -2,6 +2,7 @@ import os
 from datetime import date, timedelta
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Security
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +41,17 @@ def _backtest_url(date_str: str, model: str, kind: str) -> str:
         f"https://huggingface.co/datasets/{REPO_ID}/resolve/main"
         f"/db/backtest/{model}/{kind}_{date_str}.parquet"
     )
+
+
+def _to_records(df: pd.DataFrame) -> list:
+    df = df.copy()
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].dt.strftime("%Y-%m-%d")
+    return [
+        {k: (None if isinstance(v, float) and np.isnan(v) else v) for k, v in row.items()}
+        for row in df.to_dict(orient="records")
+    ]
 
 
 def _read_parquet(url: str) -> pd.DataFrame:
@@ -83,7 +95,7 @@ def _load_latest_backtest(model: str):
 @app.get("/predictions")
 def get_predictions(model: Optional[str] = Query(default=DEFAULT_MODEL), _=Depends(_verify_key)):
     df, d = _load_latest_pred(model)
-    return {"date": d, "model": model, "data": df.to_dict(orient="records")}
+    return {"date": d, "model": model, "data": _to_records(df)}
 
 
 @app.get("/predictions/{date_str}")
@@ -92,7 +104,7 @@ def get_predictions_by_date(date_str: str, model: Optional[str] = Query(default=
         df = _read_parquet(_pred_url(date_str, model))
     except Exception:
         raise HTTPException(status_code=404, detail=f"No prediction for {date_str} model={model}")
-    return {"date": date_str, "model": model, "data": df.to_dict(orient="records")}
+    return {"date": date_str, "model": model, "data": _to_records(df)}
 
 
 @app.get("/backtest")
@@ -101,10 +113,10 @@ def get_backtest(model: Optional[str] = Query(default=DEFAULT_MODEL), _=Depends(
     return {
         "date": d,
         "model": model,
-        "equity": equity.to_dict(orient="records"),
-        "trades": trades.to_dict(orient="records"),
-        "open": open_pos.to_dict(orient="records"),
-        "market": market.to_dict(orient="records"),
+        "equity": _to_records(equity),
+        "trades": _to_records(trades),
+        "open": _to_records(open_pos),
+        "market": _to_records(market),
     }
 
 
@@ -126,10 +138,10 @@ def get_backtest_by_date(date_str: str, model: Optional[str] = Query(default=DEF
     return {
         "date": date_str,
         "model": model,
-        "equity": equity.to_dict(orient="records"),
-        "trades": trades.to_dict(orient="records"),
-        "open": open_pos.to_dict(orient="records"),
-        "market": market.to_dict(orient="records"),
+        "equity": _to_records(equity),
+        "trades": _to_records(trades),
+        "open": _to_records(open_pos),
+        "market": _to_records(market),
     }
 
 
