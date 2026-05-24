@@ -10,7 +10,6 @@ import pyarrow.dataset as ds
 
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import j1stools
-import j1stools.django_orm
 import j1stools.utils as utils
 import os
 
