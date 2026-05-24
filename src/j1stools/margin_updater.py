@@ -129,8 +129,8 @@ def update_margin(start_date: str = None):
             df = _download_margin(stock_id, start_date)
             if not df.empty:
                 _save_margin(df, file_path)
-            _update_flag(stock_id, date_str)
-            print(stock_id, "下載完成")
+                _update_flag(stock_id, date_str)
+                print(stock_id, "下載完成")
         except Exception as e:
             print(f"{stock_id} 失敗: {e}")
 
