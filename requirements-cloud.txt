@@ -13,3 +13,7 @@ sympy
 scipy
 statsmodels
 regex
+attrs
+patsy
+xgboost
+plotly
