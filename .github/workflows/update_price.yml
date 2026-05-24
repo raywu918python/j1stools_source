@@ -2,7 +2,7 @@ name: Update Price
 
 on:
   schedule:
-    - cron: '0,15,30,45 4 * * *'  # 中午 12:00~12:45 CST，每15分鐘
+    - cron: '40 4 * * *'  # 中午 12:40 CST
   workflow_dispatch:
 
 jobs:
