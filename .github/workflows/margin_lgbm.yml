@@ -26,9 +26,9 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO_ID: raywu918python/j1s-data
-        run: python scripts/run_predict.py
+        run: python scripts/run_margin_lgbm_predict.py
       - name: Run backtest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO_ID: raywu918python/j1s-data
-        run: python scripts/run_backtest.py
+        run: python scripts/run_margin_lgbm_backtest.py
