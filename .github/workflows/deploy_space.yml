@@ -1,0 +1,30 @@
+name: Deploy HF Space
+
+on:
+  push:
+    paths:
+      - 'hf_space/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - name: Push to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install -q huggingface_hub
+          python - <<'EOF'
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.upload_folder(
+              repo_id="raywu918python/j1s-api",
+              repo_type="space",
+              folder_path="hf_space",
+              path_in_repo=".",
+          )
+          print("deployed")
+          EOF

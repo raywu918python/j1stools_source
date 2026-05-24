@@ -13,11 +13,12 @@ MODEL_NAME = "lgbm_timeseries_ensemble"
 today = datetime.now().strftime("%Y-%m-%d")
 out_dir = f"db/backtest/{MODEL_NAME}"
 
-equity_df, trades_df, open_df = ma60_model_run.main(st="2024-01-01")
+equity_df, trades_df, open_df, market_df = ma60_model_run.main(st="2024-01-01")
 
 os.makedirs(out_dir, exist_ok=True)
 equity_df.to_parquet(f"{out_dir}/equity_{today}.parquet", index=False)
 trades_df.to_parquet(f"{out_dir}/trades_{today}.parquet", index=False)
+market_df.to_parquet(f"{out_dir}/market_{today}.parquet", index=False)
 if len(open_df):
     open_df.to_parquet(f"{out_dir}/open_{today}.parquet", index=False)
 

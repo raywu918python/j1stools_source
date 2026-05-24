@@ -129,7 +129,15 @@ def main(
     # print("\n=== 未平倉 ===")
     # print(open_df.to_string() if len(open_df) else "（無）")
     # draw_chart(equity_df, trades_df, df_market=df_market)
-    return equity_df, trades_df, open_df
+
+    # 0050 轉成與 equity_df 相同格式（date + total）
+    start_val = equity_df["total"].iloc[0]
+    mkt = df_market[["date", "close"]].copy()
+    mkt = mkt[mkt["date"].isin(equity_df["date"])].reset_index(drop=True)
+    mkt["total"] = (mkt["close"] / mkt["close"].iloc[0] * start_val).round(2)
+    market_df = mkt[["date", "total"]]
+
+    return equity_df, trades_df, open_df, market_df
 
 
 def draw_chart(equity_df, trades_df, df_market=None, out="backtest_chart.html"):

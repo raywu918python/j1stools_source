@@ -61,7 +61,11 @@ def _load_latest_backtest(model: str):
                 open_pos = pd.read_parquet(_backtest_url(d, model, "open"))
             except Exception:
                 open_pos = pd.DataFrame()
-            return equity, trades, open_pos, d
+            try:
+                market = pd.read_parquet(_backtest_url(d, model, "market"))
+            except Exception:
+                market = pd.DataFrame()
+            return equity, trades, open_pos, market, d
         except Exception:
             continue
     raise HTTPException(status_code=404, detail="No backtest found in last 7 days")
@@ -84,13 +88,14 @@ def get_predictions_by_date(date_str: str, model: Optional[str] = Query(default=
 
 @app.get("/backtest")
 def get_backtest(model: Optional[str] = Query(default=DEFAULT_MODEL), _=Depends(_verify_key)):
-    equity, trades, open_pos, d = _load_latest_backtest(model)
+    equity, trades, open_pos, market, d = _load_latest_backtest(model)
     return {
         "date": d,
         "model": model,
         "equity": equity.to_dict(orient="records"),
         "trades": trades.to_dict(orient="records"),
         "open": open_pos.to_dict(orient="records"),
+        "market": market.to_dict(orient="records"),
     }
 
 
@@ -103,6 +108,10 @@ def get_backtest_by_date(date_str: str, model: Optional[str] = Query(default=DEF
             open_pos = pd.read_parquet(_backtest_url(date_str, model, "open"))
         except Exception:
             open_pos = pd.DataFrame()
+        try:
+            market = pd.read_parquet(_backtest_url(date_str, model, "market"))
+        except Exception:
+            market = pd.DataFrame()
     except Exception:
         raise HTTPException(status_code=404, detail=f"No backtest for {date_str} model={model}")
     return {
@@ -111,6 +120,7 @@ def get_backtest_by_date(date_str: str, model: Optional[str] = Query(default=DEF
         "equity": equity.to_dict(orient="records"),
         "trades": trades.to_dict(orient="records"),
         "open": open_pos.to_dict(orient="records"),
+        "market": market.to_dict(orient="records"),
     }
 
 
