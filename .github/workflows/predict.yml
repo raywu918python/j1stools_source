@@ -2,7 +2,7 @@ name: Predict
 
 on:
   schedule:
-    - cron: '0 23 * * *'  # 早上 7:00 CST，ib/margin 更新完後
+    - cron: '0 5 * * *'  # 下午 13:00 CST
   workflow_dispatch:
 
 jobs:
