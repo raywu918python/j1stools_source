@@ -399,13 +399,13 @@ def _print_results(equity, trades, init_capital, df_market=None):
     print(f"獲利因子       : {abs(avg_win/avg_loss):.2f}x" if avg_loss != 0 else "獲利因子       : N/A")
 
     print(f"\n--- 出場原因 ---")
-    for reason, cnt in trades["exit_reason"].value_counts().items():
-        bar = "█" * int(cnt / len(trades) * 30)
-        print(f"  {reason:<12} {bar:<30}  {cnt:,} ({cnt/len(trades):.1%})")
+    for reason, cnt in stock_trades["exit_reason"].value_counts().items():
+        bar = "█" * int(cnt / n_trades * 30)
+        print(f"  {reason:<12} {bar:<30}  {cnt:,} ({cnt/n_trades:.1%})")
 
-    trades = trades.copy()
-    trades["year"] = pd.to_datetime(trades["entry_date"]).dt.year
-    yearly = trades.groupby("year").agg(
+    st_copy = stock_trades.copy()
+    st_copy["year"] = pd.to_datetime(st_copy["entry_date"]).dt.year
+    yearly = st_copy.groupby("year").agg(
         n=("pnl", "count"), pnl=("pnl", "sum"), wr=("return_pct", lambda x: (x > 0).mean())
     )
     print(f"\n--- 各年統計 ---")
@@ -415,7 +415,7 @@ def _print_results(equity, trades, init_capital, df_market=None):
         print(f"  {yr}  {bar:<20}  勝率 {row['wr']:.1%}  " f"PnL {sign}{row['pnl']:,.0f}  ({int(row['n'])} 筆)")
 
     print(f"\n--- 最近 20 筆交易記錄 ---")
-    recent = trades.nlargest(20, "entry_date")[
+    recent = stock_trades.nlargest(20, "entry_date")[
         ["entry_date", "stock_id", "entry_price", "exit_date", "exit_price", "exit_reason", "return_pct", "hold_days"]
     ].reset_index(drop=True)
     print(recent.to_string(index=False))
