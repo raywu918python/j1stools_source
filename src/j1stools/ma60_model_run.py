@@ -141,12 +141,12 @@ def marge_signals(signals: pd.DataFrame, pred) -> pd.DataFrame:
     return selected
 
 
-def get_sord_margin(stocks, st, end, mode="top20", df_margin_daily=None):
+def get_sord_margin(stocks, st, end, mode="top20"):
     """
     mode="score" : pred_score > 0.2
     mode="top20" : 每日前20名
     """
-    df_select_stocks = margin_lgbm_main.predict(stocks, st, end, df_margin_daily=df_margin_daily)
+    df_select_stocks = margin_lgbm_main.predict(stocks, st, end)
     if mode == "score":
         df_select_stocks = df_select_stocks[df_select_stocks["pred_score"] > 0.2]
     else:
@@ -208,13 +208,8 @@ def main(
     # 調整門檻（例如 30%）
     momentum_stats.MAX_DEV_MA60 = 0.2
     momentum_stats.USE_MAX_DEV_MA60 = True
-    df_mg = parquet_db.query_margin(stocks, warmup_st, end_excl)
-    df_mg["date"] = pd.to_datetime(df_mg["date"])
-    df_mg["margin_chg"] = df_mg["margin_purchase_today_balance"] - df_mg["margin_purchase_yesterday_balance"]
-    margin_daily = df_mg.groupby("date")["margin_chg"].sum()
-
     signals = momentum_stats.run(df_price, df_market, signal_date_from=st)
-    signals = marge_signals(signals, get_sord_margin(stocks, st, end, mode="score", df_margin_daily=margin_daily))
+    signals = marge_signals(signals, get_sord_margin(stocks, st, end, mode="score"))
     #############################################################
     if "pred_score" in signals.columns:
         equity_df, trades_df, open_df = momentum_backtest.run_backtest(
