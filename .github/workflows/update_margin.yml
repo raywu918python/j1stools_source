@@ -1,0 +1,23 @@
+name: Update Margin
+
+on:
+  schedule:
+    - cron: '30 8 * * 1-5'  # 16:30 CST, 週一到週五
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: Run margin updater
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: python scripts/run_margin_update.py

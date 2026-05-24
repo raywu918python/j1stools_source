@@ -58,8 +58,9 @@ def save(dfall):
         new[col] = new[col].astype("float32")
 
     # 5. 分月存檔
+    os.makedirs("db/price", exist_ok=True)
     for month, group in new.groupby(new["date"].str[:7].str.replace("-", "_")):
-        path = f"{month}.parquet"
+        path = f"db/price/{month}.parquet"
 
         if os.path.exists(path):
             old = pd.read_parquet(path=path, engine="pyarrow")

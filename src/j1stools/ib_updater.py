@@ -6,7 +6,7 @@ import requests
 
 from j1stools.parquet_db import activate_stocks
 
-token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoic3VwZXJ3bXIiLCJlbWFpbCI6InN1cGVyd21yQGdtYWlsLmNvbSIsInRva2VuX3ZlcnNpb24iOjB9.tjvjaid1Xp8PBiGFhmTgRRVv6obyYYCO412RmtZNmAo"
+token = os.environ.get("FINMIND_TOKEN", "")
 
 _FLAG_PATH = "db/ib_flags/ib_flag.parquet"
 
