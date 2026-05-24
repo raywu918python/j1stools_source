@@ -1,6 +1,5 @@
 from os import times
 import os
-from j1stools.django_orm import *
 import pandas as pd
 
 from j1stools import margin_lgbm_main, momentum_backtest, momentum_stats, parquet_db, triangle_stats
