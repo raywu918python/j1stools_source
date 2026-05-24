@@ -47,7 +47,7 @@ def _read_parquet(url: str) -> pd.DataFrame:
     import io, httpx
     r = httpx.get(url, headers=headers, follow_redirects=True, timeout=30)
     r.raise_for_status()
-    return _read_parquet(io.BytesIO(r.content))
+    return pd.read_parquet(io.BytesIO(r.content))
 
 
 def _load_latest_pred(model: str):
