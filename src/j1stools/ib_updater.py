@@ -27,7 +27,10 @@ def _download_ib(stock_id, start_date):
             "token": token,
         },
     )
-    return pd.DataFrame(r.json()["data"])
+    data = r.json()
+    if "data" not in data or not data["data"]:
+        return pd.DataFrame()
+    return pd.DataFrame(data["data"])
 
 
 def _save_ib(new_df, file_path):
