@@ -264,9 +264,10 @@ def run_backtest(
                 continue
 
             entry_price = row["close"]
-            size = (capital * position_pct) / entry_price
-            cost = size * entry_price
-            if cost > capital:
+            remaining_slots = max_positions - len(positions)
+            cost = capital / remaining_slots if remaining_slots > 0 else 0
+            size = cost / entry_price
+            if cost > capital or cost <= 0:
                 continue
 
             capital -= cost
@@ -342,11 +343,19 @@ def _print_results(equity, trades, init_capital, df_market=None):
     cagr = ((final / init_capital) ** (1 / years) - 1) * 100
     max_dd = ((equity["total"] - equity["total"].cummax()) / equity["total"].cummax() * 100).min()
 
-    n_trades = len(trades)
-    n_win = (trades["return_pct"] > 0).sum()
+    stock_trades = trades[trades["exit_reason"] != "etf_exit"]
+    n_trades = len(stock_trades)
+    if n_trades == 0:
+        print("❌ 沒有個股交易")
+        return
+    win_trades    = stock_trades[stock_trades["exit_reason"].isin(["target", "trail_stop"])]
+    loss_trades   = stock_trades[stock_trades["exit_reason"].isin(["stop_loss"])]
+    timeout_trades = stock_trades[stock_trades["exit_reason"] == "timeout"]
+    n_win  = len(win_trades)
+    n_loss = len(loss_trades)
     win_rate = n_win / n_trades
-    avg_win = trades[trades["return_pct"] > 0]["return_pct"].mean()
-    avg_loss = trades[trades["return_pct"] <= 0]["return_pct"].mean()
+    avg_win  = win_trades["return_pct"].mean()  if len(win_trades)  else 0.0
+    avg_loss = loss_trades["return_pct"].mean() if len(loss_trades) else 0.0
 
     print(f"\n{'='*60}")
     print(f"回測結果")
@@ -380,13 +389,14 @@ def _print_results(equity, trades, init_capital, df_market=None):
             print(f"{'年化報酬(CAGR)':20}  {cagr:>+9.2f}%  {mkt_cagr:>+9.2f}%  {cagr-mkt_cagr:>+9.2f}%")
             print(f"{'最大回撤':20}  {max_dd:>+9.2f}%  {mkt_dd:>+9.2f}%  {max_dd-mkt_dd:>+9.2f}%")
 
-    print(f"\n--- 交易統計 ---")
+    print(f"\n--- 交易統計（個股）---")
     print(f"總交易次數     : {n_trades:,}")
-    print(f"勝             : {n_win:,}  ({win_rate:.1%})")
-    print(f"敗             : {n_trades-n_win:,}  ({1-win_rate:.1%})")
+    print(f"停利（勝）     : {n_win:,}  ({win_rate:.1%})")
+    print(f"停損（敗）     : {n_loss:,}  ({n_loss/n_trades:.1%})")
+    print(f"逾期出場       : {len(timeout_trades):,}  ({len(timeout_trades)/n_trades:.1%})")
     print(f"平均獲利       : {avg_win:>+.2f}%")
     print(f"平均虧損       : {avg_loss:>+.2f}%")
-    print(f"獲利因子       : {abs(avg_win/avg_loss):.2f}x")
+    print(f"獲利因子       : {abs(avg_win/avg_loss):.2f}x" if avg_loss != 0 else "獲利因子       : N/A")
 
     print(f"\n--- 出場原因 ---")
     for reason, cnt in trades["exit_reason"].value_counts().items():
