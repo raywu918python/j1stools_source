@@ -2,7 +2,7 @@ name: Update Margin
 
 on:
   schedule:
-    - cron: '30 8 * * 1-5'  # 16:30 CST, 週一到週五
+    - cron: '0 17,18,19,20,21,22 * * *'  # 凌晨 1~6 點 CST
   workflow_dispatch:
 
 jobs:
