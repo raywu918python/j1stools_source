@@ -44,20 +44,22 @@ def _etf_rows(equity_df, df_market, init_capital=1_000_000, min_pct=0.02, max_po
             ep = _price(date)
             if entry_price and ep:
                 ret = (ep / entry_price - 1) * 100
-                trade_rows.append({
-                    "stock_id": "0050",
-                    "entry_date": entry_date,
-                    "entry_price": round(entry_price, 4),
-                    "exit_date": date,
-                    "exit_price": round(ep, 4),
-                    "exit_reason": "etf_exit",
-                    "highest": round(max(entry_price, ep), 4),
-                    "cost": round(cost, 2),
-                    "pnl": round((ep - entry_price) / entry_price * cost, 2),
-                    "return_pct": round(ret, 3),
-                    "hold_days": _hold(entry_date, date),
-                    "weight": entry_weight,
-                })
+                trade_rows.append(
+                    {
+                        "stock_id": "0050",
+                        "entry_date": entry_date,
+                        "entry_price": round(entry_price, 4),
+                        "exit_date": date,
+                        "exit_price": round(ep, 4),
+                        "exit_reason": "etf_exit",
+                        "highest": round(max(entry_price, ep), 4),
+                        "cost": round(cost, 2),
+                        "pnl": round((ep - entry_price) / entry_price * cost, 2),
+                        "return_pct": round(ret, 3),
+                        "hold_days": _hold(entry_date, date),
+                        "weight": entry_weight,
+                    }
+                )
             entry_date = entry_price = cost = entry_weight = None
 
         if has_cash and entry_date is None:
@@ -108,7 +110,11 @@ def _print_etf_adjusted(equity_df, etf_trades, etf_open, df_market, init_capital
     start_date, end_date = equity_df["date"].iloc[0], equity_df["date"].iloc[-1]
     mkt = mkt[(mkt["date"] >= start_date) & (mkt["date"] <= end_date)]
     mkt_ret = (mkt["close"].iloc[-1] / mkt["close"].iloc[0] - 1) * 100 if len(mkt) >= 2 else 0.0
-    mkt_cagr = ((mkt["close"].iloc[-1] / mkt["close"].iloc[0]) ** (1 / years) - 1) * 100 if len(mkt) >= 2 and years > 0 else 0.0
+    mkt_cagr = (
+        ((mkt["close"].iloc[-1] / mkt["close"].iloc[0]) ** (1 / years) - 1) * 100
+        if len(mkt) >= 2 and years > 0
+        else 0.0
+    )
 
     print(f"{'含0050停泊':20}  {adj_ret:>+9.2f}%  {mkt_ret:>+9.2f}%  {adj_ret-mkt_ret:>+9.2f}%")
     print(f"{'年化報酬(含0050)':20}  {adj_cagr:>+9.2f}%  {mkt_cagr:>+9.2f}%  {adj_cagr-mkt_cagr:>+9.2f}%")
@@ -238,7 +244,9 @@ def main(
     # 把 0050 停泊記錄 append 進 trades_df / open_df（不影響統計）
     etf_trades, etf_open = _etf_rows(equity_df, df_market, max_positions=3)
     if len(etf_trades):
-        trades_df = pd.concat([trades_df, etf_trades], ignore_index=True).sort_values("exit_date").reset_index(drop=True)
+        trades_df = (
+            pd.concat([trades_df, etf_trades], ignore_index=True).sort_values("exit_date").reset_index(drop=True)
+        )
     if etf_open:
         stock_weight_sum = open_df["weight"].sum() if len(open_df) else 0.0
         etf_open["weight"] = round(max(0.0, 1.0 - stock_weight_sum), 4)
