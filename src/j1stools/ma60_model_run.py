@@ -189,7 +189,7 @@ def good_search(signals, df_price, df_market):
 
 def main(
     st="2024-01-01",
-    end="2026-01-01",
+    end="2029-01-01",
 ):
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 500)
     # stocks = parquet_db.activate_stocks()
