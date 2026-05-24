@@ -132,8 +132,14 @@ def main(
 
     # 0050 轉成與 equity_df 相同格式（date + total）
     start_val = equity_df["total"].iloc[0]
+    eq_dates = pd.to_datetime(equity_df["date"]).dt.normalize()
     mkt = df_market[["date", "close"]].copy()
-    mkt = mkt[mkt["date"].isin(equity_df["date"])].reset_index(drop=True)
+    mkt["date"] = pd.to_datetime(mkt["date"]).dt.normalize()
+    mkt = mkt[mkt["date"].isin(eq_dates)].reset_index(drop=True)
+    if mkt.empty:
+        mkt = df_market[["date", "close"]].copy()
+        mkt["date"] = pd.to_datetime(mkt["date"]).dt.normalize()
+        mkt = mkt[mkt["date"] >= eq_dates.iloc[0]].reset_index(drop=True)
     mkt["total"] = (mkt["close"] / mkt["close"].iloc[0] * start_val).round(2)
     market_df = mkt[["date", "total"]]
 
