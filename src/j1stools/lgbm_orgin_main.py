@@ -9,7 +9,7 @@ import pandas as pd
 from regex import T
 from websockets import Data
 
-from j1stools import parquet_db, rfc_main
+from j1stools import parquet_db
 from j1stools.CONFIG import (
     BaseDataBuilderConfig,
     BaseLabelConfig,
@@ -26,6 +26,7 @@ import joblib
 
 
 def add_rfc_feature(df, data: BaseDataBuilderConfig):
+    from j1stools import rfc_main
     signal = rfc_main.test(
         stocks=data.stocks,
         st=data.st,
