@@ -1,4 +1,4 @@
-name: Predict
+name: Margin LGBM
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  predict:
+  run:
     runs-on: ubuntu-latest
     environment: j1s
     steps:
