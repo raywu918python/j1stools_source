@@ -6,7 +6,6 @@ import time
 from types import SimpleNamespace
 import pyarrow as pa
 from patsy.mgcv_cubic_splines import te
-from pytest import mark
 from regex import P
 import yfinance as yf
 import os
