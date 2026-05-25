@@ -136,6 +136,14 @@ def draw_multiple_triangles_safe(df_source, df_signals, n_plots=9):
     df_source: 原始完整大表 (包含所有歷史資料)
     df_signals: 過濾後只有 True 的標籤表
     """
+    # 如果日期是字串，轉成 datetime（避免 .date() 呼叫失敗）
+    if "date" in df_source.columns and not pd.api.types.is_datetime64_any_dtype(df_source["date"]):
+        df_source = df_source.copy()
+        df_source["date"] = pd.to_datetime(df_source["date"])
+    if "date" in df_signals.columns and not pd.api.types.is_datetime64_any_dtype(df_signals["date"]):
+        df_signals = df_signals.copy()
+        df_signals["date"] = pd.to_datetime(df_signals["date"])
+
     # 按照日期由新到舊排序
     all_matches = df_signals.sort_values("date", ascending=False)
 
@@ -145,30 +153,35 @@ def draw_multiple_triangles_safe(df_source, df_signals, n_plots=9):
 
     n_plots = min(len(all_matches), n_plots)
     rows = (n_plots + 2) // 3
-    fig = make_subplots(
-        rows=rows,
-        cols=3,
-        subplot_titles=[f"{r['stock_id']} | {r['date'].date()}" for _, r in all_matches.head(n_plots).iterrows()],
-    )
+
+    # 建立子圖標題（使用已轉換的 datetime）
+    subplot_titles = []
+    for _, r in all_matches.head(n_plots).iterrows():
+        try:
+            title_date = r["date"].date()
+        except Exception:
+            title_date = pd.to_datetime(r["date"]).date()
+        subplot_titles.append(f"{r['stock_id']} | {title_date}")
+
+    fig = make_subplots(rows=rows, cols=3, subplot_titles=subplot_titles)
 
     for idx, (original_idx, target) in enumerate(all_matches.head(n_plots).iterrows()):
         r, c = (idx // 3) + 1, (idx % 3) + 1
 
-        # --- 關鍵修正：去 source 大表抓該股票的連續資料 ---
-        stock_data = df_source[df_source["stock_id"] == target["stock_id"]].sort_values("date")
+        # 取出該股票的完整時間序列，並重置 index 以使用位置索引
+        stock_data = df_source[df_source["stock_id"] == target["stock_id"]].sort_values("date").reset_index(drop=True)
 
         # 設定繪圖範圍 (取前後緩衝)
         p_min = int(min(target["h1_idx"], target["l1_idx"]))
         p_max = int(max(target["h2_idx"], target["l2_idx"]))
 
-        # 使用 iloc 前後切片，確保 K 線連續
-        # 這裡假設你的 index 是重置過的 0,1,2...
-        df_crop = stock_data.loc[max(0, p_min - 10) : min(len(stock_data), p_max + 20)]
+        # 使用 iloc 前後切片，確保 K 線連續；加 1 包含 p_max
+        df_crop = stock_data.iloc[max(0, p_min - 10) : min(len(stock_data) - 1, p_max + 20) + 1]
 
-        # 繪製 K 線
+        # 繪製 K 線（以日期為 x 軸）
         fig.add_trace(
             go.Candlestick(
-                x=df_crop.index,
+                x=df_crop["date"],
                 open=df_crop["open"],
                 high=df_crop["high"],
                 low=df_crop["low"],
@@ -179,18 +192,22 @@ def draw_multiple_triangles_safe(df_source, df_signals, n_plots=9):
             col=c,
         )
 
-        # 繪製紅綠線 (使用 target 存下的座標)
+        # 繪製紅綠線 (使用 target 存下的座標，且以位置對應到重置後的 stock_data)
         for pts, color in [
             ([target["h1_idx"], target["h2_idx"]], "red"),
             ([target["l1_idx"], target["l2_idx"]], "green"),
         ]:
             p1, p2 = int(pts[0]), int(pts[1])
-            # 從 stock_data (大表) 抓取精確價格
-            y1 = stock_data.loc[p1, "high" if color == "red" else "low"]
-            y2 = stock_data.loc[p2, "high" if color == "red" else "low"]
+            # 確保位置在範圍內
+            if p1 < 0 or p2 < 0 or p1 >= len(stock_data) or p2 >= len(stock_data):
+                continue
+            x1 = stock_data.iloc[p1]["date"]
+            x2 = stock_data.iloc[p2]["date"]
+            y1 = stock_data.iloc[p1]["high" if color == "red" else "low"]
+            y2 = stock_data.iloc[p2]["high" if color == "red" else "low"]
             fig.add_trace(
                 go.Scatter(
-                    x=[p1, p2], y=[y1, y2], mode="lines+markers", line=dict(color=color, width=3), showlegend=False
+                    x=[x1, x2], y=[y1, y2], mode="lines+markers", line=dict(color=color, width=3), showlegend=False
                 ),
                 row=r,
                 col=c,
@@ -269,4 +286,5 @@ def find_refined_triangle(df):
     # return df_source[df_source["is_refined_triangle"] == True]
 
 
-# test()
+if __name__ == "__main__":
+    test()
