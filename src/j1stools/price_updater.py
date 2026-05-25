@@ -55,6 +55,7 @@ def save(dfall):
         else:
             rename[col] = lower
     long_df.rename(columns=rename, inplace=True)
+    print(f"[debug] columns after rename: {list(long_df.columns)}")
     long_df["stock_id"] = long_df["stock_id"].str.split(".").str[0]
     long_df["date"] = pd.to_datetime(long_df["date"]).dt.strftime("%Y-%m-%d")
     columns = ["date", "stock_id", "open", "high", "low", "close", "volume"]
