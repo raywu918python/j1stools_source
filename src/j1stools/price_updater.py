@@ -40,27 +40,25 @@ def save(dfall):
         # 新版 yfinance: (Price, Ticker)；舊版: (Ticker, Price)
         level0_vals = dfall.columns.get_level_values(0)
         if any("." in str(v) for v in level0_vals):
-            long_df = dfall.stack(level=0).reset_index()  # 舊版
+            long_df = dfall.stack(level=0, future_stack=True).reset_index()
         else:
-            long_df = dfall.stack(level=1).reset_index()  # 新版
+            long_df = dfall.stack(level=1, future_stack=True).reset_index()
     else:
         long_df = dfall.reset_index()
-    long_df.rename(
-        columns={
-            "Ticker": "stock_id",
-            "Date": "date",
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Volume": "volume",
-        },
-        inplace=True,
-    )
+    rename = {}
+    for col in long_df.columns:
+        lower = str(col).lower()
+        if lower in ("date", "datetime"):
+            rename[col] = "date"
+        elif lower == "ticker":
+            rename[col] = "stock_id"
+        else:
+            rename[col] = lower
+    long_df.rename(columns=rename, inplace=True)
     long_df["stock_id"] = long_df["stock_id"].str.split(".").str[0]
     long_df["date"] = pd.to_datetime(long_df["date"]).dt.strftime("%Y-%m-%d")
     columns = ["date", "stock_id", "open", "high", "low", "close", "volume"]
-    new: pd.DataFrame = long_df[columns]
+    new = long_df[columns].copy()
 
     # 轉型
     for col in ["open", "high", "low", "close"]:
