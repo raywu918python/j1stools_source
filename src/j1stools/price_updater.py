@@ -46,16 +46,19 @@ def save(dfall):
     else:
         long_df = dfall.reset_index()
     rename = {}
+    date_assigned = False
     for col in long_df.columns:
         lower = str(col).lower()
-        if lower in ("date", "datetime"):
+        if not date_assigned and lower in ("date", "datetime", "level_0", "index"):
             rename[col] = "date"
+            date_assigned = True
         elif lower == "ticker":
             rename[col] = "stock_id"
         else:
             rename[col] = lower
     long_df.rename(columns=rename, inplace=True)
-    print(f"[debug] columns after rename: {list(long_df.columns)}")
+    # 移除 yfinance repair 產生的多餘欄位
+    long_df = long_df[[c for c in long_df.columns if not str(c).startswith("repaired")]]
     long_df["stock_id"] = long_df["stock_id"].str.split(".").str[0]
     long_df["date"] = pd.to_datetime(long_df["date"]).dt.strftime("%Y-%m-%d")
     columns = ["date", "stock_id", "open", "high", "low", "close", "volume"]
