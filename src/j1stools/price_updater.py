@@ -34,7 +34,17 @@ class INTERVAL(Enum):
 
 
 def save(dfall):
-    long_df = dfall.stack(level=0).reset_index()
+    if dfall.empty:
+        return
+    if isinstance(dfall.columns, pd.MultiIndex):
+        # 新版 yfinance: (Price, Ticker)；舊版: (Ticker, Price)
+        level0_vals = dfall.columns.get_level_values(0)
+        if any("." in str(v) for v in level0_vals):
+            long_df = dfall.stack(level=0).reset_index()  # 舊版
+        else:
+            long_df = dfall.stack(level=1).reset_index()  # 新版
+    else:
+        long_df = dfall.reset_index()
     long_df.rename(
         columns={
             "Ticker": "stock_id",
