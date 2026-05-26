@@ -1,8 +1,6 @@
 name: Update Price
 
 on:
-  schedule:
-    - cron: '40 4 * * *'  # 中午 12:40 CST
   workflow_dispatch:
 
 jobs:

@@ -1,8 +1,6 @@
 name: Margin LGBM
 
 on:
-  schedule:
-    - cron: '0 5 * * *'  # 下午 13:00 CST
   workflow_dispatch:
 
 jobs:
