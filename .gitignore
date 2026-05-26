@@ -8,6 +8,7 @@ dist/
 *.c
 *.csv
 .DS_Store
+.env
 *.egg-info
 db
 models/
@@ -20,3 +21,4 @@ tmp.txt
 *.pyc
 src/db_models/__pycache__/peewee_models.cpython-313.pyc
 *.png
+*.pkl
