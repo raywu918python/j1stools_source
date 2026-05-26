@@ -21,6 +21,8 @@ REPO_ID = "raywu918python/j1s-data"
 DEFAULT_MODEL = "lgbm_timeseries_ensemble"
 _API_KEY = os.environ.get("API_KEY", "")
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
+_GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+_GITHUB_REPO = "raywu918python/j1stools_source"
 _key_header = APIKeyHeader(name="X-API-Key")
 
 
@@ -143,6 +145,34 @@ def get_backtest_by_date(date_str: str, model: Optional[str] = Query(default=DEF
         "open": _to_records(open_pos),
         "market": _to_records(market),
     }
+
+
+def _trigger_workflow(workflow_file: str) -> bool:
+    import httpx
+    url = f"https://api.github.com/repos/{_GITHUB_REPO}/actions/workflows/{workflow_file}/dispatches"
+    r = httpx.post(
+        url,
+        headers={"Authorization": f"Bearer {_GITHUB_TOKEN}", "Accept": "application/vnd.github+json"},
+        json={"ref": "main"},
+        timeout=10,
+    )
+    return r.status_code == 204
+
+
+@app.get("/trigger/update-price")
+def trigger_update_price(key: str = Query(default="")):
+    if key != _API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid key")
+    ok = _trigger_workflow("update_price.yml")
+    return {"ok": ok}
+
+
+@app.get("/trigger/margin-lgbm")
+def trigger_margin_lgbm(key: str = Query(default="")):
+    if key != _API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid key")
+    ok = _trigger_workflow("margin_lgbm.yml")
+    return {"ok": ok}
 
 
 @app.get("/health")
