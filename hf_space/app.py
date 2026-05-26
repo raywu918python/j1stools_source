@@ -160,16 +160,16 @@ def _trigger_workflow(workflow_file: str) -> bool:
 
 
 @app.get("/trigger/update-price")
-def trigger_update_price(key: str = Query(default="")):
-    if key != _API_KEY:
+def trigger_update_price(token: str = Query(default="")):
+    if token != _API_KEY:
         raise HTTPException(status_code=403, detail="Invalid key")
     ok = _trigger_workflow("update_price.yml")
     return {"ok": ok}
 
 
 @app.get("/trigger/margin-lgbm")
-def trigger_margin_lgbm(key: str = Query(default="")):
-    if key != _API_KEY:
+def trigger_margin_lgbm(token: str = Query(default="")):
+    if token != _API_KEY:
         raise HTTPException(status_code=403, detail="Invalid key")
     ok = _trigger_workflow("margin_lgbm.yml")
     return {"ok": ok}
