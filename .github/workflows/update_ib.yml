@@ -2,7 +2,7 @@ name: Update IB
 
 on:
   schedule:
-    - cron: '30 16,18,20,22,0 * * *'  # 台灣 0:30~8:30 共5次（偶數小時）
+    - cron: '0 17,19,21,23,1 * * *'  # 台灣 1:00~9:00 共5次
   workflow_dispatch:
 
 jobs:
