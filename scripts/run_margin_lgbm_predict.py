@@ -1,5 +1,7 @@
 import os, sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+_TW = timezone(timedelta(hours=8))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -12,8 +14,8 @@ from j1stools import margin_lgbm_main, parquet_db
 stocks = parquet_db.activate_stocks()
 stocks = list(set(stocks) - {"0050", "0052", "0056"})
 
-today = datetime.now().strftime("%Y-%m-%d")
-st = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+today = datetime.now(_TW).strftime("%Y-%m-%d")
+st = (datetime.now(_TW) - timedelta(days=10)).strftime("%Y-%m-%d")
 
 df = margin_lgbm_main.predict(stocks, st, "2099-01-01")
 

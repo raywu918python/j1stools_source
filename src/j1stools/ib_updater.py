@@ -1,4 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_TW = timezone(timedelta(hours=8))
 import os
 
 import pandas as pd
@@ -12,7 +14,7 @@ _FLAG_PATH = "db/ib_flags/ib_flag.parquet"
 
 
 def _ib_file_path():
-    now = datetime.now()
+    now = datetime.now(_TW)
     return f"db/ib/{now.year}_{now.month}.parquet"
 
 
@@ -69,7 +71,7 @@ def _get_wait_update_stocks(date_str):
 
 def update_ib(start_date: str = None):
     """法人買賣超"""
-    now = datetime.now()
+    now = datetime.now(_TW)
     file_path = _ib_file_path()
     date_str = now.strftime("%Y-%m-%d")
     os.makedirs("db/ib", exist_ok=True)

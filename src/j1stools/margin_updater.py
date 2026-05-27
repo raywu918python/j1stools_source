@@ -1,4 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_TW = timezone(timedelta(hours=8))
 import os
 import threading
 
@@ -32,7 +34,7 @@ _COL_MAP = {
 
 
 def _margin_file_path():
-    now = datetime.now()
+    now = datetime.now(_TW)
     return f"db/margin/{now.year}_{now.month}.parquet"
 
 
@@ -111,7 +113,7 @@ def update_margin(start_date: str = None):
     融券昨日餘額# ShortSaleYesterdayBalance
     """
 
-    now = datetime.now()
+    now = datetime.now(_TW)
     file_path = _margin_file_path()
     date_str = now.strftime("%Y-%m-%d")
     os.makedirs("db/margin", exist_ok=True)
