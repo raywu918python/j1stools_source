@@ -988,6 +988,27 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
     final_text    = ""
     _rate_limit_count = 0
     _call_count   = 0
+    _tool_usage: dict = {}   # tool 名稱 → 呼叫次數
+
+    def _get_tools_with_usage() -> list:
+        import copy as _copy
+        sig_entries  = _load_signal_log(hypothesis, max_entries=9999)
+        n_tested     = len(sig_entries)
+        n_passed     = len([e for e in sig_entries if e.get("hit_rate", 0) >= 0.35])
+        result = _copy.deepcopy(TOOLS)
+        for tool in result:
+            name  = tool["function"]["name"]
+            count = _tool_usage.get(name, 0)
+            notes = []
+            if count > 0:
+                notes.append(f"已呼叫 {count} 次")
+            if name == "analyze_signal":
+                notes.append(f"本 session 已測 {n_tested} 個條件，{n_passed} 個通過")
+            if name == "scan_correlations" and count >= 1:
+                notes.append("本 session 無需再呼叫")
+            if notes:
+                tool["function"]["description"] += f"（{'；'.join(notes)}）"
+        return result
 
     print(f"\n[{cfg['name']}] 開始探索... {'（測試：最多 ' + str(max_calls) + ' 次工具呼叫）' if max_calls else ''}\n{'─' * 60}")
 
@@ -998,7 +1019,7 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
             response = _current_client().chat.completions.create(
                 model=_current_model(),
                 messages=_trim_messages(messages, keep_last=20),
-                tools=TOOLS,
+                tools=_get_tools_with_usage(),
                 tool_choice="auto",
             )
         except Exception as e:
@@ -1072,6 +1093,7 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
             compressed = _compress_result(fn_name, result)
             print(f"  {compressed}")
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": compressed})
+            _tool_usage[fn_name] = _tool_usage.get(fn_name, 0) + 1
             _call_count += 1
             if max_calls and _call_count >= max_calls:
                 print(f"\n[測試] 已達 {max_calls} 次工具呼叫上限，停止")
