@@ -381,6 +381,17 @@ def _normalize_condition(cond: str) -> str:
 
 # ── 工具執行 ───────────────────────────────────────────────
 def execute_tool(name: str, inputs: dict) -> dict:
+    # 累計 tool 呼叫次數
+    _tool_usage_path = os.path.join(RESULTS_DIR, "tool_usage.json")
+    try:
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        _usage = json.load(open(_tool_usage_path)) if os.path.exists(_tool_usage_path) else {}
+        _usage[name] = _usage.get(name, 0) + 1
+        with open(_tool_usage_path, "w", encoding="utf-8") as _f:
+            json.dump(_usage, _f, ensure_ascii=False)
+    except Exception:
+        pass
+
     if name == "scan_correlations":
         hold_days = inputs.get("hold_days", 10)
         profit_target = inputs.get("profit_target", 0.15)
@@ -437,6 +448,12 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
         corr_list.sort(key=lambda r: abs(r["correlation"]), reverse=True)
 
+        # 存完整相關係數供報表使用（每次覆蓋，保留最新一次）
+        corr_path = os.path.join(RESULTS_DIR, "scan_correlations.json")
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        with open(corr_path, "w", encoding="utf-8") as _f:
+            json.dump({"date": datetime.now().strftime("%Y-%m-%d %H:%M"), "correlations": corr_list}, _f, ensure_ascii=False, indent=2)
+
         return {
             "hold_days": hold_days,
             "profit_target": profit_target,
@@ -468,8 +485,11 @@ def execute_tool(name: str, inputs: dict) -> dict:
         target_long.columns = ["date", "stock_id", "target"]
         feat_df = feat_df.merge(target_long, on=["date", "stock_id"], how="left")
 
-        # 把 agent 統計通過的條件加成 binary 特徵
-        passing = [e for e in _load_signal_log() if e.get("hit_rate", 0) >= 0.35 and "condition" in e]
+        # 把 agent 統計通過的條件加成 binary 特徵（按 hit_rate 排序取前20）
+        passing = sorted(
+            [e for e in _load_signal_log() if e.get("hit_rate", 0) >= 0.35 and "condition" in e],
+            key=lambda x: x["hit_rate"], reverse=True,
+        )
         added_signal_feats = []
         if passing:
             try:
@@ -489,45 +509,48 @@ def execute_tool(name: str, inputs: dict) -> dict:
             except Exception:
                 pass
 
-        f_cols = [c for c in feat_df.columns if c.startswith("f_")]
-        feat_df = feat_df.dropna(subset=[c for c in f_cols if c not in added_signal_feats] + ["target"])
+        tech_cols = [c for c in feat_df.columns if c.startswith("f_") and c not in added_signal_feats]
+        all_cols  = tech_cols + added_signal_feats
+        feat_df = feat_df.dropna(subset=tech_cols + ["target"])
 
         # 時間切分：前 80% 訓練，後 20% 測試
         dates = sorted(feat_df["date"].unique())
         cutoff = dates[int(len(dates) * 0.8)]
         train = feat_df[feat_df["date"] < cutoff]
-        test = feat_df[feat_df["date"] >= cutoff]
+        test  = feat_df[feat_df["date"] >= cutoff]
 
         if len(train) < 200 or len(test) < 100:
             return {"error": f"資料不足：train={len(train)}, test={len(test)}"}
 
-        rfc = RandomForestClassifier(n_estimators=100, max_depth=6, n_jobs=-1, random_state=42)
-        rfc.fit(train[f_cols], train["target"])
-        proba = rfc.predict_proba(test[f_cols])[:, 1]
         actual = test["target"].values
-
-        # 基準率：不用模型，直接看有多少筆命中
         base_rate = round(float(actual.mean()), 4)
-
-        # 各信心度門檻：proba >= th 時的實際命中率
-        results = {}
-        for th in [0.5, 0.6, 0.7, 0.8]:
-            mask = proba >= th
-            n = int(mask.sum())
-            if n < 10:
-                results[f"proba>={th}"] = {"n": n, "note": "樣本不足"}
-                continue
-            hit = float(actual[mask].mean())
-            results[f"proba>={th}"] = {"n": n, "hit_rate": round(hit, 4)}
-
-        # feature importance 排名
-        importance = sorted(zip(f_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
-        top_features = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:10]]
 
         import joblib
 
-        model_path = os.path.join(os.path.dirname(__file__), "quick_rfc.joblib")
-        joblib.dump(rfc, model_path)
+        def _eval_rfc(feat_cols, model_path):
+            rfc = RandomForestClassifier(n_estimators=100, max_depth=6, n_jobs=-1, random_state=42)
+            rfc.fit(train[feat_cols], train["target"])
+            proba = rfc.predict_proba(test[feat_cols])[:, 1]
+            thresholds = {}
+            for th in [0.5, 0.6, 0.7, 0.8]:
+                mask = proba >= th
+                n = int(mask.sum())
+                if n < 10:
+                    thresholds[f"proba>={th}"] = {"n": n, "note": "樣本不足"}
+                else:
+                    thresholds[f"proba>={th}"] = {"n": n, "hit_rate": round(float(actual[mask].mean()), 4)}
+            importance = sorted(zip(feat_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
+            top_features = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:10]]
+            joblib.dump(rfc, model_path)
+            return thresholds, top_features
+
+        # 模型A：只用技術指標
+        model_a_path = os.path.join(os.path.dirname(__file__), "quick_rfc_tech.joblib")
+        th_a, feat_a = _eval_rfc(tech_cols, model_a_path)
+
+        # 模型B：技術指標 + top20 f_signal
+        model_b_path = os.path.join(os.path.dirname(__file__), "quick_rfc.joblib")
+        th_b, feat_b = _eval_rfc(all_cols, model_b_path)
 
         return {
             "hold_days": hold_days,
@@ -535,10 +558,9 @@ def execute_tool(name: str, inputs: dict) -> dict:
             "train_size": len(train),
             "test_size": len(test),
             "base_rate": base_rate,
-            "thresholds": results,
-            "top_features": top_features,
+            "model_a": {"name": "技術指標", "thresholds": th_a, "top_features": feat_a, "model_saved": model_a_path},
+            "model_b": {"name": f"技術指標 + top{len(added_signal_feats)} f_signal", "thresholds": th_b, "top_features": feat_b, "model_saved": model_b_path},
             "signal_feats_added": len(added_signal_feats),
-            "model_saved": model_path,
         }
 
     if name == "run_backtest":
@@ -610,7 +632,8 @@ def execute_tool(name: str, inputs: dict) -> dict:
             from j1stools.j1s_chart import plot_performance
             import plotly.graph_objects as go, json as _json
 
-            fig_json = plot_performance(portfolio_value, trades_df, is_web=True)
+            pv_clean = portfolio_value.replace([np.inf, -np.inf], np.nan).dropna()
+            fig_json = plot_performance(pv_clean, trades_df, is_web=True)
             fig = go.Figure(_json.loads(fig_json))
             os.makedirs(RESULTS_DIR, exist_ok=True)
             slug = (
@@ -1091,8 +1114,24 @@ def _load_backtested_conditions() -> set:
 
 
 def validate_and_train():
-    """純 Python，不用 LLM：對新通過條件跑回測 + RFC，存圖表"""
-    passing = [e for e in _load_signal_log() if e.get("hit_rate", 0) >= 0.35]
+    """
+    Agent 統計篩選後的驗證與訓練流程（不用 LLM）
+
+    流程：
+        Agent 統計篩選 (hit_rate >= 0.35, n >= 100)
+            ↓
+        1. 回測驗證：用歷史價格模擬真實進出場（停損8%、停利15%、持10天）
+                    確認統計上有效的條件，在真實交易情境下是否真的賺錢
+            ↓
+        2. RFC 訓練：把通過的條件轉成 binary 特徵（0/1），
+                    加上技術指標，訓練模型學「哪些特徵組合未來10天有機會漲15%」
+            ↓
+        3. 產報表：回測結果整理成 report.html
+    """
+    passing = [
+        e for e in _load_signal_log()
+        if e.get("hit_rate", 0) >= 0.35 and e.get("sample_count", 0) >= 100
+    ]
     if not passing:
         print("沒有通過的條件，跳過驗證")
         return
@@ -1144,6 +1183,356 @@ def validate_and_train():
     print("\n[驗證] 訓練 RFC...")
     rfc = execute_tool("quick_rfc", {"hold_days": 10, "profit_target": 0.15})
     print(f"  {json.dumps(rfc, ensure_ascii=False)}")
+
+    # 存 RFC 結果供報表使用
+    rfc_log = os.path.join(RESULTS_DIR, "rfc_result.json")
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    with open(rfc_log, "w", encoding="utf-8") as f:
+        json.dump({**rfc, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}, f, ensure_ascii=False, indent=2)
+
+    _generate_report()
+
+
+def _generate_report():
+    """讀 backtest_log + rfc_result.json，產 HTML 報表到 results/report.html"""
+    import re as _re
+
+    # 所有 Agent 可用 tool 定義（固定清單，讓 0 次也能顯示）
+    _ALL_TOOLS = {
+        "scan_correlations":    "掃描指標與未來報酬的相關係數，作為選指標的依據",
+        "analyze_signal":       "測試任意條件的統計勝率（hit_rate）與樣本數",
+        "analyze_pattern_signal":"測試型態訊號（ABCD、三角收斂等）的勝率",
+    }
+
+    # 讀 tool 呼叫次數
+    tool_usage: dict = {}
+    tool_usage_path = os.path.join(RESULTS_DIR, "tool_usage.json")
+    if os.path.exists(tool_usage_path):
+        with open(tool_usage_path, encoding="utf-8") as f:
+            tool_usage = json.load(f)
+
+    # 讀 RFC 結果
+    rfc_data = {}
+    rfc_log = os.path.join(RESULTS_DIR, "rfc_result.json")
+    if os.path.exists(rfc_log):
+        with open(rfc_log, encoding="utf-8") as f:
+            rfc_data = json.load(f)
+
+    # 讀 scan_correlations 結果
+    corr_map: dict = {}
+    corr_date = ""
+    corr_path = os.path.join(RESULTS_DIR, "scan_correlations.json")
+    if os.path.exists(corr_path):
+        with open(corr_path, encoding="utf-8") as f:
+            corr_raw = json.load(f)
+            corr_date = corr_raw.get("date", "")
+            for item in corr_raw.get("correlations", []):
+                corr_map[item["feature"]] = item["correlation"]
+
+    rows = []
+    if not os.path.exists(BACKTEST_LOG):
+        return
+    with open(BACKTEST_LOG, encoding="utf-8") as f:
+        for line in f:
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            bt = e.get("backtest", {})
+            if "error" in bt or bt.get("total_trades", 0) < 50:
+                continue
+            rows.append({
+                "condition": e["condition"],
+                "hit_rate": e.get("hit_rate", 0),
+                "sample_count": e.get("sample_count", 0),
+                "trades": bt.get("total_trades"),
+                "total_return": bt.get("total_return", 0),
+                "sharpe": bt.get("sharpe", 0),
+                "max_drawdown": bt.get("max_drawdown", 0),
+                "win_rate": bt.get("win_rate", 0),
+                "avg_win": bt.get("avg_win", 0),
+                "avg_loss": bt.get("avg_loss", 0),
+                "chart": bt.get("chart"),
+            })
+
+    if not rows:
+        print("[報表] 無有效回測資料，跳過")
+        return
+
+    rows.sort(key=lambda x: x["sharpe"], reverse=True)
+
+    # 指標使用頻率
+    all_ind: dict = {}
+    for r in rows:
+        cond = r["condition"]
+        # 有比較符號的指標：rsi > 0.5
+        for t in _re.findall(r"([a-z_]+)\s*[><!=]", cond):
+            all_ind[t] = all_ind.get(t, 0) + 1
+        # 純布林指標：(ma5_x_ma10)
+        for t in _re.findall(r"\(\s*([a-z_]+)\s*\)", cond):
+            all_ind[t] = all_ind.get(t, 0) + 1
+    all_ind_sorted = sorted(all_ind.items(), key=lambda x: -x[1])
+
+    sharpes = [r["sharpe"] for r in rows]
+    wrs = [r["win_rate"] for r in rows]
+    rets = [r["total_return"] for r in rows]
+
+    def _sc(s):
+        if s >= 2.0: return "#1a7a3a"
+        if s >= 1.5: return "#2ecc71"
+        if s >= 1.0: return "#f39c12"
+        if s >= 0:   return "#e67e22"
+        return "#e74c3c"
+
+    rows_html = ""
+    for i, r in enumerate(rows):
+        chart_link = f'<a href="{r["chart"]}" target="_blank">📊</a>' if r.get("chart") else ""
+        dd_color = "#e74c3c" if r["max_drawdown"] < -0.15 else "#e67e22" if r["max_drawdown"] < -0.10 else "#2ecc71"
+        cond = r["condition"]
+        n_ind = len(_re.findall(r"([a-z_]+)\s*[><!=]", cond))
+        rows_html += (
+            f'<tr>'
+            f'<td style="text-align:center">{i+1}</td>'
+            f'<td style="font-family:monospace;font-size:12px;white-space:nowrap">{cond}</td>'
+            f'<td style="text-align:center">{n_ind}</td>'
+            f'<td style="text-align:center;color:{_sc(r["sharpe"])};font-weight:bold">{r["sharpe"]:.2f}</td>'
+            f'<td style="text-align:center">{r["win_rate"]:.1%}</td>'
+            f'<td style="text-align:center">{r["total_return"]:+.2f}</td>'
+            f'<td style="text-align:center;color:{dd_color}">{r["max_drawdown"]:.1%}</td>'
+            f'<td style="text-align:center">{r["trades"]}</td>'
+            f'<td style="text-align:center">{r["hit_rate"]:.1%}</td>'
+            f'<td style="text-align:center">{r["sample_count"]}</td>'
+            f'<td style="text-align:center">{chart_link}</td>'
+            f'</tr>'
+        )
+
+    _IND_DESC = {
+        "adx":                    "趨勢強度（>25 代表趨勢明確）",
+        "atr_rank":               "波動率排名（ATR 在歷史中的百分位）",
+        "bb_width":               "布林通道寬度（越大代表波動越劇烈）",
+        "dealer_rank":            "自營商買超排名",
+        "f_n_ab_gain":            "ABCD型態 AB段漲幅",
+        "f_n_confirmed":          "ABCD型態確認度",
+        "f_n_d_breakout_strength":"ABCD型態 D點突破強度",
+        "f_n_structure_score":    "ABCD型態結構分數",
+        "f_n_volume_confirm":     "ABCD型態成交量確認",
+        "foreign_rank":           "外資買超排名",
+        "inst_rank":              "三大法人合計買超排名",
+        "macd":                   "MACD線（快線-慢線）",
+        "macdh":                  "MACD柱（多頭時 > 0）",
+        "margin_chg":             "融資增減量",
+        "margin_chg_rank":        "融資增減排名（越高代表散戶加碼越積極）",
+        "net_dealer":             "自營商買賣超（正值買超）",
+        "net_foreign":            "外資買賣超（正值買超）",
+        "net_inst":               "三大法人合計買賣超",
+        "net_trust":              "投信買賣超（正值買超）",
+        "obv":                    "能量潮（累計成交量）",
+        "plus_di":                "DMI正向指標（上漲力道）",
+        "rsi":                    "相對強弱指數（0~1，>0.5 偏強勢）",
+        "short_bal":              "融券餘額（正值有融券）",
+        "short_chg":              "融券增減量",
+        "short_ratio":            "融券比率（融券/融資）",
+        "short_ratio_rank":       "融券比率排名",
+        "trust_rank":             "投信買超排名",
+        "vol_ratio":              "今日成交量 / 近期均量",
+        "vol_trend":              "成交量趨勢（正值量增）",
+        "ma5_x_ma10":             "5日均線向上穿越10日均線（黃金交叉）",
+        "plus_di_gt_minus_di":    "上漲力道 > 下跌力道",
+        "obv_ma":                 "OBV均線（能量潮均值）",
+    }
+
+    max_cnt = all_ind_sorted[0][1] if all_ind_sorted else 1
+    ind_rows = ""
+    for ind, cnt in all_ind_sorted:
+        pct = cnt / max_cnt * 100
+        corr = corr_map.get(ind)
+        corr_str = f'{corr:+.4f}' if corr is not None else "—"
+        corr_color = "#1a7a3a" if corr and corr > 0.1 else "#e74c3c" if corr and corr < -0.1 else "#888"
+        desc = _IND_DESC.get(ind, "")
+        ind_rows += (
+            f'<tr>'
+            f'<td style="font-family:monospace">{ind}</td>'
+            f'<td style="font-size:12px;color:#666">{desc}</td>'
+            f'<td style="text-align:center">{cnt}</td>'
+            f'<td><div style="background:#3498db;height:14px;width:{pct:.0f}%;border-radius:3px;min-width:4px"></div></td>'
+            f'<td style="text-align:center;color:{corr_color};font-weight:{"bold" if corr and abs(corr)>0.1 else "normal"}">{corr_str}</td>'
+            f'</tr>'
+        )
+
+    # Agent 工具使用區塊
+    total_calls = sum(tool_usage.get(t, 0) for t in _ALL_TOOLS)
+    tool_rows = ""
+    for tool_name, tool_desc in _ALL_TOOLS.items():
+        cnt = tool_usage.get(tool_name, 0)
+        pct = cnt / max(total_calls, 1) * 100
+        bar_color = "#2ecc71" if cnt > 0 else "#ddd"
+        cnt_color = "#2c3e50" if cnt > 0 else "#bbb"
+        tool_rows += (
+            f'<tr>'
+            f'<td style="font-family:monospace">{tool_name}</td>'
+            f'<td style="font-size:12px;color:#666">{tool_desc}</td>'
+            f'<td style="text-align:center;color:{cnt_color};font-weight:{"bold" if cnt>0 else "normal"}">{cnt}</td>'
+            f'<td><div style="background:{bar_color};height:14px;width:{max(pct,2):.0f}%;border-radius:3px"></div></td>'
+            f'</tr>'
+        )
+    tool_section = f"""
+  <div class="sec">
+    <h2>Agent 可用工具清單（累計呼叫次數）</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 10px">以下是 Agent 可以使用的所有工具。呼叫次數 = 歷史累計實際使用次數，0 次代表 Agent 從未呼叫過（工具存在但未被使用）</p>
+    <table style="width:auto;min-width:500px">
+      <thead><tr><th>工具名稱</th><th>說明</th><th style="text-align:center">呼叫次數</th><th style="min-width:200px">佔比</th></tr></thead>
+      <tbody>{tool_rows}</tbody>
+    </table>
+  </div>"""
+
+    # RFC 區塊 HTML
+    rfc_section = ""
+    if rfc_data and "error" not in rfc_data:
+        base_rate = rfc_data.get("base_rate", 0)
+        rfc_date  = rfc_data.get("date", "")
+
+        def _th_rows(thresholds):
+            html = ""
+            for th, v in thresholds.items():
+                if "note" in v:
+                    html += f'<tr><td>{th}</td><td style="color:#aaa">{v["n"]} 筆（樣本不足）</td><td>—</td></tr>'
+                else:
+                    hit = v["hit_rate"]
+                    color = "#1a7a3a" if hit >= 0.4 else "#f39c12" if hit >= 0.35 else "#e74c3c"
+                    html += f'<tr><td>{th}</td><td>{v["n"]} 筆</td><td style="color:{color};font-weight:bold">{hit:.1%}</td></tr>'
+            return html
+
+        def _feat_bars(top_features, color):
+            max_imp = top_features[0]["importance"] if top_features else 1
+            html = ""
+            for f in top_features:
+                pct = f["importance"] / max_imp * 100
+                html += (
+                    f'<div style="margin:3px 0;display:flex;align-items:center;gap:6px">'
+                    f'<div style="width:140px;font-family:monospace;font-size:11px;text-align:right">{f["feature"]}</div>'
+                    f'<div style="background:{color};height:14px;width:{pct:.0f}%;border-radius:3px"></div>'
+                    f'<div style="font-size:11px;color:#666">{f["importance"]:.4f}</div>'
+                    f'</div>'
+                )
+            return html
+
+        # 相容舊格式（只有 thresholds/top_features）和新格式（model_a/model_b）
+        if "model_a" in rfc_data and "model_b" in rfc_data:
+            ma, mb = rfc_data["model_a"], rfc_data["model_b"]
+            col_a = _th_rows(ma.get("thresholds", {}))
+            col_b = _th_rows(mb.get("thresholds", {}))
+            bar_a = _feat_bars(ma.get("top_features", []), "#3498db")
+            bar_b = _feat_bars(mb.get("top_features", []), "#9b59b6")
+            model_tables = f"""
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:12px">
+      <div>
+        <p style="font-size:13px;font-weight:600;margin:0 0 8px">A｜{ma.get('name','技術指標')}</p>
+        <table style="width:auto"><thead><tr><th>門檻</th><th>篩出</th><th>命中率</th></tr></thead>
+        <tbody>{col_a}</tbody></table>
+        <p style="font-size:12px;color:#555;margin:10px 0 6px">特徵重要性 Top 10</p>
+        {bar_a}
+      </div>
+      <div>
+        <p style="font-size:13px;font-weight:600;margin:0 0 8px">B｜{mb.get('name','技術指標 + f_signal')}</p>
+        <table style="width:auto"><thead><tr><th>門檻</th><th>篩出</th><th>命中率</th></tr></thead>
+        <tbody>{col_b}</tbody></table>
+        <p style="font-size:12px;color:#555;margin:10px 0 6px">特徵重要性 Top 10</p>
+        {bar_b}
+      </div>
+    </div>"""
+        else:
+            thresholds  = rfc_data.get("thresholds", {})
+            top_features = rfc_data.get("top_features", [])
+            model_tables = f"""
+    <table style="width:auto;margin-top:12px">
+      <thead><tr><th>門檻</th><th>篩出</th><th>命中率</th></tr></thead>
+      <tbody>{_th_rows(thresholds)}</tbody>
+    </table>
+    <p style="font-size:12px;color:#555;margin:10px 0 6px">特徵重要性 Top 10</p>
+    {_feat_bars(top_features, "#9b59b6")}"""
+
+        rfc_section = f"""
+  <div class="sec">
+    <h2>RFC 模型比較（訓練時間：{rfc_date}）</h2>
+    <p style="font-size:13px;color:#555;margin:0">
+      訓練集：{rfc_data.get('train_size','?'):,} 筆｜
+      測試集：{rfc_data.get('test_size','?'):,} 筆｜
+      自然命中率（不用模型）：<strong>{base_rate:.1%}</strong>｜
+      命中 = 進場後10天內最高點 ≥ +15%
+    </p>
+    {model_tables}
+  </div>"""
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    html = f"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>Free Agent 回測報表 {now_str[:10]}</title>
+<style>
+  body{{font-family:-apple-system,Arial,sans-serif;margin:0;background:#f5f6fa;color:#2c3e50}}
+  .hd{{background:linear-gradient(135deg,#2c3e50,#3498db);color:white;padding:28px 40px}}
+  .hd h1{{margin:0 0 6px;font-size:24px}}.hd p{{margin:0;opacity:.8;font-size:14px}}
+  .ct{{max-width:1400px;margin:24px auto;padding:0 24px}}
+  .cards{{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}}
+  .card{{background:white;border-radius:10px;padding:18px 22px;box-shadow:0 2px 8px rgba(0,0,0,.07)}}
+  .card .lb{{font-size:12px;color:#888;margin-bottom:6px}}
+  .card .vl{{font-size:28px;font-weight:700;color:#2c3e50}}
+  .card .sb{{font-size:12px;color:#aaa;margin-top:4px}}
+  .sec{{background:white;border-radius:10px;padding:20px 24px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.07)}}
+  .sec h2{{margin:0 0 16px;font-size:16px;border-left:4px solid #3498db;padding-left:10px}}
+  table{{width:100%;border-collapse:collapse;font-size:13px}}
+  th{{background:#f8f9fa;padding:10px 8px;text-align:left;border-bottom:2px solid #e0e0e0;white-space:nowrap}}
+  td{{padding:8px;border-bottom:1px solid #f0f0f0}}
+  tr:hover td{{background:#fafbff}}
+</style>
+</head>
+<body>
+<div class="hd">
+  <h1>Free Agent 回測報表</h1>
+  <p>統計期間：{SESSION_START} ~ {SESSION_END}（3年）｜股票池：{len(WATCH_STOCKS)}支｜生成：{now_str}</p>
+</div>
+<div class="ct">
+  <div class="cards">
+    <div class="card"><div class="lb">有效條件數</div><div class="vl">{len(rows)}</div><div class="sb">trades ≥ 50 筆</div></div>
+    <div class="card"><div class="lb">Sharpe ≥ 1.5</div><div class="vl" style="color:#1a7a3a">{sum(1 for r in rows if r["sharpe"]>=1.5)}</div><div class="sb">最高 {max(sharpes):.2f}</div></div>
+    <div class="card"><div class="lb">平均勝率</div><div class="vl">{sum(wrs)/len(wrs):.1%}</div><div class="sb">最高 {max(wrs):.1%}</div></div>
+    <div class="card"><div class="lb">平均報酬（回測3年）</div><div class="vl" style="color:#2980b9">{sum(rets)/len(rets):+.2f}</div><div class="sb">最高 {max(rets):+.2f}</div></div>
+  </div>
+  <div class="sec">
+    <h2>指標使用統計（共 {len(all_ind_sorted)} 個）{f"｜相關係數來源：{corr_date}" if corr_date else ""}</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 12px">相關係數 = Agent 呼叫 scan_correlations 時與未來漲跌的線性相關（正值＝正相關）</p>
+    <div style="overflow-x:auto">
+    <table style="width:auto;min-width:500px">
+      <thead><tr><th>指標名稱</th><th>說明</th><th style="text-align:center">出現次數</th><th style="min-width:200px">頻率</th><th style="text-align:center">相關係數</th></tr></thead>
+      <tbody>{ind_rows}</tbody>
+    </table>
+    </div>
+  </div>
+  {tool_section}
+  {rfc_section}
+  <div class="sec">
+    <h2>條件回測結果（{len(rows)} 筆，依 Sharpe 排序）</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 12px">持有10天｜停損8%｜停利15%</p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th>#</th><th>進場條件</th><th>指標數</th><th>Sharpe</th><th>勝率</th><th>報酬</th>
+        <th>最大回撤</th><th>交易筆數</th><th>統計勝率</th><th>統計樣本</th><th>圖表</th>
+      </tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+    </div>
+  </div>
+</div>
+</body>
+</html>"""
+
+    report_path = os.path.join(RESULTS_DIR, "report.html")
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"\n[報表] 已存：{report_path}（{len(rows)} 筆條件）")
 
 
 def daily_task():
