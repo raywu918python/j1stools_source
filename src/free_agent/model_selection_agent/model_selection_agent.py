@@ -34,11 +34,16 @@ _deepseek_client = OpenAI(
     api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
     base_url="https://api.deepseek.com",
 )
+_gemini_client = OpenAI(
+    api_key=os.environ.get("GEMINI_API_KEY", ""),
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+)
 
 MODELS = [
-    ("deepseek-v4-flash", _deepseek_client),
-    ("qwen2.5:14b", _ollama_client),
-    ("llama-3.3-70b-versatile", _groq_client),
+    ("deepseek-v4-flash", _deepseek_client),                                    # 主力
+    (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),       # 備用1：免費（每天20次）
+    # ("llama-3.3-70b-versatile", _groq_client),                                # 備用2：tool_use 完全不穩，停用
+    ("qwen2.5:14b", _ollama_client),                                            # 備用3：本機
 ]
 _model_idx = 0
 
@@ -67,54 +72,147 @@ HYPOTHESIS_CONFIGS: dict[str, dict] = {
     "squeeze": {
         "name": "軋空型",
         "description": "融券部位被迫回補，配合外資或法人買超，形成短期強烈上漲",
-        "key_indicators": ["short_bal", "short_chg", "short_ratio", "short_ratio_rank", "net_foreign", "net_trust", "vol_ratio"],
+        "indicator_categories": {
+            "融券端": ["short_bal", "short_chg", "short_ratio", "short_ratio_rank"],
+            "法人端": ["net_foreign", "net_trust", "net_dealer", "foreign_rank", "trust_rank", "inst_rank"],
+            "量能端": ["vol_ratio", "vol_trend", "obv_ma"],
+            "型態確認": ["f_n_confirmed", "f_n_structure_score", "f_n_ab_gain", "f_n_d_breakout_strength", "f_n_volume_confirm"],
+            "技術確認": ["rsi", "adx", "bb_width", "atr_rank"],
+        },
         "explore_hint": (
-            "重點在融券部位的變化：融券餘額高但開始減少（short_chg < 0），"
-            "同時法人買超（net_foreign > 0 或 net_trust > 0），成交量爆增（vol_ratio > 2）。"
-            "組合這三個方向的條件，找出軋空發生前的特徵。"
+            "融券回補信號：short_chg < 0（融券減少），short_bal > 0（有融券部位），short_ratio_rank > 0.8（融券比率歷史高位）。"
+            "法人承接信號：net_foreign > 0 或 net_trust > 0（法人買超），inst_rank > 0.7。"
+            "型態確認：f_n_structure_score > 0.7（ABCD高品質型態），f_n_d_breakout_strength > 0.5（D點突破強）。"
+            "量能確認：vol_ratio > 2（爆量）。"
+            "重要提示：試試「融券高位 + ABCD型態 + 法人買超」的三角組合，例如 short_ratio_rank > 0.9 & f_n_structure_score > 0.7 & net_foreign > 0。"
         ),
     },
     "chip": {
         "name": "籌碼堆積型",
         "description": "外資、投信、自營商同步買超，籌碼集中到法人手中，後續動能強",
-        "key_indicators": ["net_foreign", "net_trust", "net_dealer", "net_inst", "foreign_rank", "trust_rank", "inst_rank"],
+        "indicator_categories": {
+            "外資端": ["net_foreign", "foreign_rank"],
+            "投信端": ["net_trust", "trust_rank"],
+            "自營端": ["net_dealer", "dealer_rank"],
+            "合計法人": ["net_inst", "inst_rank"],
+            "技術確認": ["rsi", "adx", "ma5_x_ma10", "bb_width"],
+        },
         "explore_hint": (
-            "重點在法人同步買超：三大法人合計買超（net_inst > 0），"
-            "外資持續買超幾天（foreign_rank > 0.7），投信也跟進（trust_rank > 0.6）。"
-            "試不同的買超門檻和持續天數，找出籌碼堆積後漲的條件。"
+            "三大法人同步買超：net_inst > 0，foreign_rank > 0.6，trust_rank > 0.6。"
+            "持續買超幾天比單日更強。"
+            "技術面：均線多頭排列（ma5_x_ma10），趨勢明確（adx > 25）。"
         ),
     },
     "breakout": {
         "name": "趨勢突破型",
         "description": "股價突破整理區間，配合量能放大和趨勢指標，形成新的上升趨勢",
-        "key_indicators": ["bb_width", "adx", "plus_di", "vol_ratio", "rsi", "ma5_x_ma10", "ma10_x_ma60"],
+        "indicator_categories": {
+            "突破強度": ["bb_width", "adx", "plus_di"],
+            "量能確認": ["vol_ratio", "vol_trend"],
+            "均線排列": ["ma5_x_ma10", "ma5_x_ma20", "ma10_x_ma60"],
+            "動能位置": ["rsi", "macd", "macdh", "atr_rank"],
+        },
         "explore_hint": (
-            "重點在突破的確認：布林通道擴張（bb_width > 0.5），趨勢明確（adx > 25），"
-            "多方力道 > 空方力道（plus_di > minus_di），量能放大（vol_ratio > 1.5）。"
-            "試不同的突破強度門檻，均線多頭排列也是重要信號。"
+            "突破訊號：bb_width > 0.5（通道擴張），adx > 25（趨勢明確），plus_di > minus_di。"
+            "量能確認：vol_ratio > 1.5（量增）。"
+            "均線：ma5_x_ma10（黃金交叉），ma10_x_ma60（中期多頭）。"
         ),
     },
     "pattern": {
         "name": "型態突破型",
         "description": "ABCD N字型或三角收斂型態確認後，利用型態特徵預測後續走勢",
-        "key_indicators": ["f_n_confirmed", "f_n_structure_score", "f_n_ab_gain", "f_n_d_breakout_strength", "f_n_volume_confirm"],
+        "indicator_categories": {
+            "ABCD確認": ["f_n_confirmed", "f_n_structure_score"],
+            "ABCD強度": ["f_n_ab_gain", "f_n_d_breakout_strength", "f_n_volume_confirm"],
+            "三角收斂": ["is_human_triangle", "human_only", "triangle_score"],
+            "量能技術": ["vol_ratio", "rsi", "adx"],
+        },
         "explore_hint": (
-            "重點在型態的品質：ABCD型態確認（f_n_confirmed > 0.15），"
-            "結構分數高（f_n_structure_score > 0.3），D點突破強（f_n_d_breakout_strength > 0.5）。"
-            "也可以呼叫 analyze_pattern_signal(pattern='abcd') 和 analyze_pattern_signal(pattern='triangle') "
-            "先了解基礎勝率，再用條件細化。"
+            "ABCD型態：f_n_confirmed > 0.15，f_n_structure_score > 0.3，f_n_d_breakout_strength > 0.5。"
+            "三角收斂（fuzzy偵測，比strict更準）："
+            "  - (human_only) 表示 fuzzy 三角形成立（True/False 指標）"
+            "  - (is_human_triangle) 表示 refined + fuzzy 合併"
+            "  - (triangle_score > 0.65) 表示高品質三角形"
+            "組合範例：(human_only) & (vol_ratio > 1.5) & (adx > 20)。"
+            "組合範例：(human_only) & (f_n_d_breakout_strength > 0.4) & (net_foreign > 0)。"
+            "也可先呼叫 analyze_pattern_signal(pattern='triangle') 了解三角形基礎勝率。"
         ),
     },
     "momentum": {
         "name": "動能延續型",
         "description": "近期已有漲勢，動能指標顯示強勢，預測動能繼續延伸",
-        "key_indicators": ["rsi", "macd", "macdh", "adx", "plus_di", "vol_trend", "obv_ma", "atr_rank"],
+        "indicator_categories": {
+            "動能強度": ["rsi", "macd", "macdh"],
+            "趨勢確認": ["adx", "plus_di", "minus_di"],
+            "量能趨勢": ["vol_trend", "vol_ratio", "obv_ma"],
+            "波動位置": ["bb_width", "atr_rank"],
+        },
         "explore_hint": (
-            "重點在動能的強度和持續性：RSI 偏強但未超買（rsi > 55 且 rsi < 80），"
-            "MACD 柱正值放大（macdh > 0），量能趨勢向上（vol_trend > 1），"
-            "ADX 趨勢明確（adx > 25）。避免追高，找動能剛起步的條件。"
+            "動能剛起步：rsi > 55 且 < 80（強勢但未超買），macdh > 0（多頭柱）。"
+            "趨勢確認：adx > 25，plus_di > minus_di。"
+            "量能支撐：vol_trend > 1（量能趨勢向上）。"
         ),
     },
+}
+
+# ── 指標說明對照表 ────────────────────────────────────────────────
+INDICATOR_DESCRIPTIONS: dict[str, str] = {
+    # 技術指標
+    "rsi":           "RSI 相對強弱指數（>50 偏多，>70 超買）",
+    "macd":          "MACD 快慢線差值（正值偏多）",
+    "macdh":         "MACD 柱狀圖（正值=多頭柱，負值=空頭柱）",
+    "adx":           "ADX 趨勢強度（>25 有明確趨勢，>40 強趨勢）",
+    "plus_di":       "+DI 多方方向指標（>minus_di 代表多頭主導）",
+    "minus_di":      "-DI 空方方向指標",
+    "bb_width":      "布林通道寬度（>0.5 通道擴張，突破前兆）",
+    "bb_upper":      "布林通道上軌",
+    "bb_lower":      "布林通道下軌",
+    "bb_mid":        "布林通道中線（20日均線）",
+    "atr":           "ATR 真實波幅（波動度絕對值）",
+    "atr_rank":      "ATR 歷史百分位（>0.7 波動處於歷史高位）",
+    # 均線
+    "ma5":           "5日均線",
+    "ma10":          "10日均線",
+    "ma20":          "20日均線",
+    "ma60":          "60日均線",
+    "ma120":         "120日均線",
+    "ma5_x_ma10":    "5日上穿10日均線（黃金交叉信號）",
+    "ma5_x_ma20":    "5日上穿20日均線",
+    "ma10_x_ma60":   "10日上穿60日均線（中期多頭確認）",
+    # 量能
+    "vol_ratio":     "量比（當日量/20日均量，>2 爆量）",
+    "vol_trend":     "量能趨勢（20日均量/60日均量，>1 量能放大）",
+    "obv":           "OBV 能量潮（累計成交量方向）",
+    "obv_ma":        "OBV 20日均線",
+    # 法人籌碼
+    "net_foreign":   "外資買賣超張數（>0 外資買超）",
+    "net_trust":     "投信買賣超張數（>0 投信買超）",
+    "net_dealer":    "自營商買賣超張數（>0 自營買超）",
+    "net_inst":      "三大法人合計買賣超（>0 法人合計買超）",
+    "foreign_rank":  "外資買超歷史百分位（>0.7 外資強力買入）",
+    "trust_rank":    "投信買超歷史百分位（>0.7 投信強力買入）",
+    "dealer_rank":   "自營商買超歷史百分位",
+    "inst_rank":     "三大法人合計歷史百分位（>0.7 法人整體強買）",
+    # 融資融券
+    "margin_bal":    "融資餘額（融資張數）",
+    "short_bal":     "融券餘額（空頭張數，>0 有融券部位）",
+    "margin_chg":    "融資變化率（pct_change）",
+    "short_chg":     "融券變化率（<0 融券減少，回補中）",
+    "short_ratio":   "融券/融資比率（>0.3 融券壓力大）",
+    "short_ratio_rank": "融券比率歷史百分位（>0.9 處於歷史極高位）",
+    "margin_chg_rank":  "融資變化率歷史百分位",
+    # ABCD 型態
+    "f_n_confirmed":          "ABCD N字型態確認（>0 表示型態成立）",
+    "f_n_structure_score":    "ABCD 結構品質分數（0~1，>0.6 高品質）",
+    "f_n_bc_retracement":     "BC 段回撤比例（黃金比例 0.382~0.618 最佳）",
+    "f_n_ab_gain":            "AB 段漲幅（>0.1 代表第一波有力）",
+    "f_n_d_breakout_strength":"D 點突破強度（>0.5 突破有力）",
+    "f_n_volume_confirm":     "D 點量能確認（>0.5 突破時有量）",
+    # 三角收斂
+    "is_human_triangle":  "是否為 human 三角收斂型態（refined+fuzzy 合併）",
+    "human_only":         "是否為 fuzzy 三角形（比 strict 更能抓模糊收斂）",
+    "is_refined_triangle":"是否為嚴格三角收斂型態",
+    "triangle_score":     "三角收斂品質分數（0~1，>0.65 高品質）",
 }
 
 
@@ -165,6 +263,27 @@ TOOLS = [
                     "hold_days": {"type": "integer", "description": "持有天數，預設 10"},
                     "profit_target": {"type": "number", "description": "目標報酬，預設 0.15"},
                     "top_n": {"type": "integer", "description": "回傳前幾名，預設 20"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_history",
+            "description": (
+                "查詢本次 session 已測試過的條件記錄（從本機讀取，不耗 token）。"
+                "可按指標名稱篩選、按最低命中率篩選、只看通過的條件。"
+                "用途：避免重複測試、了解目前最高 hit_rate、確認哪些指標已試過。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "indicator": {"type": "string", "description": "篩選包含此指標名稱的條件（可選）"},
+                    "min_hit_rate": {"type": "number", "description": "只回傳 hit_rate 大於此值的條件（可選，預設 0）"},
+                    "passed_only": {"type": "boolean", "description": "只回傳通過門檻（hit_rate>=0.35）的條件，預設 false"},
+                    "top_n": {"type": "integer", "description": "回傳筆數上限，預設 20"},
                 },
                 "required": [],
             },
@@ -248,6 +367,38 @@ def _build_indicators(stocks: list, start: str, end: str):
                 ind[feat] = df_abcd.pivot(index="date", columns="stock_id", values=feat).reindex(close.index)
     except Exception:
         pass
+
+    if _current_hypothesis == "pattern":
+        try:
+            from j1stools.pattern_triangle import add_triangle_compare_columns
+            _tri_cache_paths = [
+                os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache_2020_2025.pkl"),
+                os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache.pkl"),
+            ]
+            df_tri = None
+            for cp in _tri_cache_paths:
+                cp = os.path.normpath(cp)
+                if os.path.exists(cp):
+                    print(f"  [三角偵測] 讀取快取：{os.path.basename(cp)}")
+                    df_tri = pd.read_pickle(cp)
+                    df_tri["date"] = pd.to_datetime(df_tri["date"])
+                    df_tri = add_triangle_compare_columns(df_tri)
+                    break
+            if df_tri is None:
+                print("  [三角偵測] 無快取，重新偵測（較慢）...")
+                from j1stools.pattern_triangle import detect_human_triangle
+                df_tri = detect_human_triangle(df_p.copy())
+                df_tri = add_triangle_compare_columns(df_tri)
+            for feat in ["is_human_triangle", "human_only", "is_refined_triangle", "triangle_score"]:
+                if feat in df_tri.columns:
+                    piv_tri = (
+                        df_tri[df_tri["stock_id"].isin(stocks)]
+                        .pivot(index="date", columns="stock_id", values=feat)
+                        .reindex(close.index)
+                    )
+                    ind[feat] = piv_tri
+        except Exception as e:
+            print(f"  [三角偵測] 失敗：{e}")
 
     try:
         df_ib  = parquet_db.query_ib(stocks, start, end)
@@ -374,13 +525,23 @@ def _normalize_condition(cond: str) -> str:
 from j1stools import parquet_db as _pdb
 
 WATCH_STOCKS  = _pdb.activate_stocks()
-TRAIN_START   = "2015-01-01"
-TRAIN_END     = "2023-12-31"
 PREDICT_START = "2024-01-01"
+TRAIN_END     = "2023-12-31"
+TRAIN_YEARS   = 8                                          # 可改：測試用 1，正式用 8
+TRAIN_START   = f"{int(PREDICT_START[:4]) - TRAIN_YEARS}-01-01"  # 2024-5 = 2019
 SESSION_END   = datetime.now().strftime("%Y-%m-%d")
 BASE_RESULTS  = os.path.join(os.path.dirname(__file__), "results")
 
 _current_hypothesis: str = "breakout"
+_INDICATOR_CACHE: dict = {}  # (start, end) -> (ind, close)，session 內只載一次
+
+
+def _get_indicators(start: str, end: str):
+    key = (start, end)
+    if key not in _INDICATOR_CACHE:
+        print(f"  [載入指標] {start} ~ {end}（首次，之後從快取）")
+        _INDICATOR_CACHE[key] = _build_indicators(WATCH_STOCKS, start, end)
+    return _INDICATOR_CACHE[key]
 
 
 def _results_dir(hypothesis: str) -> str:
@@ -435,7 +596,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
         profit_target = inputs.get("profit_target", 0.15)
         top_n         = inputs.get("top_n", 20)
         try:
-            ind, close = _build_indicators(WATCH_STOCKS, TRAIN_START, TRAIN_END)
+            ind, close = _get_indicators(TRAIN_START, TRAIN_END)
         except Exception as e:
             return {"error": f"資料載入失敗：{e}"}
         future_high  = pd.concat([close.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).max()
@@ -461,13 +622,42 @@ def execute_tool(name: str, inputs: dict) -> dict:
             json.dump({"date": datetime.now().strftime("%Y-%m-%d %H:%M"), "correlations": corr_list}, _f, ensure_ascii=False, indent=2)
         return {"hold_days": hold_days, "profit_target": profit_target, "top_correlations": corr_list[:top_n]}
 
+    if name == "check_history":
+        indicator   = inputs.get("indicator", "")
+        min_hit     = inputs.get("min_hit_rate", 0)
+        passed_only = inputs.get("passed_only", False)
+        top_n       = inputs.get("top_n", 20)
+        entries     = _load_signal_log(hypothesis, max_entries=9999)
+        if passed_only:
+            entries = [e for e in entries if e.get("hit_rate", 0) >= 0.35]
+        if min_hit > 0:
+            entries = [e for e in entries if e.get("hit_rate", 0) >= min_hit]
+        if indicator:
+            entries = [e for e in entries if indicator in e.get("condition", "")]
+        entries.sort(key=lambda x: -x.get("hit_rate", 0))
+        total_tested = len(_load_signal_log(hypothesis, max_entries=9999))
+        passed_count = len([e for e in _load_signal_log(hypothesis, max_entries=9999) if e.get("hit_rate", 0) >= 0.35])
+        return {
+            "total_tested": total_tested,
+            "passed_035": passed_count,
+            "filtered_count": len(entries),
+            "conditions": [
+                {
+                    "condition": e.get("condition", ""),
+                    "hit_rate": e.get("hit_rate"),
+                    "sample_count": e.get("sample_count"),
+                }
+                for e in entries[:top_n]
+            ],
+        }
+
     if name == "analyze_signal":
         hold_days     = inputs.get("hold_days", 10)
         condition     = _normalize_condition(inputs["condition"])
         label_type    = inputs.get("label_type", "hit")
         profit_target = inputs.get("profit_target", 0.15)
         try:
-            ind, close = _build_indicators(WATCH_STOCKS, TRAIN_START, TRAIN_END)
+            ind, close = _get_indicators(TRAIN_START, TRAIN_END)
         except Exception as e:
             return {"error": f"資料載入失敗：{e}"}
         try:
@@ -527,9 +717,24 @@ def execute_tool(name: str, inputs: dict) -> dict:
                 return {"error": f"ABCD 偵測失敗：{e}"}
         elif pattern == "triangle":
             try:
-                from j1stools.pattern_triangle import find_human_triangle
-                df_tri = find_human_triangle(df_p.copy())
-                for _, row in df_tri.iterrows():
+                from j1stools.pattern_triangle import add_triangle_compare_columns
+                _tri_cache_paths = [
+                    os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache_2020_2025.pkl"),
+                    os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache.pkl"),
+                ]
+                df_tri = None
+                for cp in _tri_cache_paths:
+                    cp = os.path.normpath(cp)
+                    if os.path.exists(cp):
+                        df_tri = pd.read_pickle(cp)
+                        df_tri["date"] = pd.to_datetime(df_tri["date"])
+                        df_tri = add_triangle_compare_columns(df_tri)
+                        break
+                if df_tri is None:
+                    from j1stools.pattern_triangle import find_human_triangle
+                    df_tri = find_human_triangle(df_p.copy())
+                df_tri_sig = df_tri[df_tri["human_only"].fillna(False)]
+                for _, row in df_tri_sig.iterrows():
                     d, s = row["date"], row["stock_id"]
                     if d in signal_mask.index and s in signal_mask.columns:
                         signal_mask.at[d, s] = True
@@ -561,8 +766,11 @@ def execute_tool(name: str, inputs: dict) -> dict:
         tp_stop   = inputs.get("tp_stop", 0.15)
         start     = inputs.get("start", PREDICT_START)
         end       = inputs.get("end", SESSION_END)
+        # 往前多載 120 天讓指標有 warmup，避免 MA60/RSI 等計算錯誤觸發假信號
+        warmup_start = (pd.Timestamp(start) - pd.DateOffset(days=120)).strftime("%Y-%m-%d")
+        signal_start  = pd.Timestamp(start)
         try:
-            ind, close = _build_indicators(WATCH_STOCKS, start, end)
+            ind, close = _build_indicators(WATCH_STOCKS, warmup_start, end)
         except Exception as e:
             return {"error": f"資料載入失敗：{e}"}
         try:
@@ -571,7 +779,11 @@ def execute_tool(name: str, inputs: dict) -> dict:
             return {"error": f"條件解析失敗：{e}"}
         if not isinstance(entries, pd.DataFrame):
             return {"error": "條件必須回傳 DataFrame"}
-        entries     = entries.reindex(index=close.index, columns=close.columns).fillna(False).astype(bool)
+        entries = entries.reindex(index=close.index, columns=close.columns).fillna(False).astype(bool)
+        # warmup 期間不允許開倉
+        entries.loc[entries.index < signal_start] = False
+        close   = close.loc[close.index >= signal_start]
+        entries = entries.loc[entries.index >= signal_start]
         exits       = pd.Series(False, index=close.index)
         df_proba    = pd.DataFrame(1.0, index=close.index, columns=close.columns)
         stock_group = {s: "default" for s in close.columns}
@@ -618,16 +830,35 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
 # ── 系統 Prompt（根據假設動態生成）────────────────────────────────
 def _build_system_prompt(hypothesis: str) -> str:
-    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
-    key_ind = "、".join(cfg["key_indicators"])
-    return f"""你是台灣股票量化研究助理，這次的任務是為「{cfg['name']}」建立專屬選股模型。
+    cfg        = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
+    categories = cfg.get("indicator_categories", {})
+
+    # 把分類格式化成 prompt 區塊
+    cat_lines = []
+    for cat_name, indicators in categories.items():
+        cat_lines.append(f"  【{cat_name}】{', '.join(indicators)}")
+    cat_block = "\n".join(cat_lines)
+    n_cats = len(categories)
+
+    return f"""你是台灣股票量化研究助理，這次的任務是為「{cfg['name']}」建立專屬選股模型的「特徵候選集」。
+
+━━ 你的角色 ━━
+你不是在找「最強的預測條件」，而是在做「特徵工程」。
+每個通過篩選的條件，最後會變成模型的一個 binary 特徵（今天符合 = 1，不符合 = 0）。
+模型用這些特徵的組合來辨識「{cfg['name']}」的機會。
 
 ━━ 本次假設 ━━
 {cfg['description']}
 
-━━ 重點指標 ━━
-{key_ind}
-（其他指標也可以用，但以上是最可能有效的）
+━━ 指標分類（共 {n_cats} 類，每類各找 2~3 個通過條件）━━
+{cat_block}
+
+工作規則：
+1. 依序從每個類別選 2~3 個指標，組合成條件
+2. 呼叫 analyze_signal(label_type="hit", hold_days=10, profit_target=0.15)
+3. 篩選標準：hit_rate >= 0.35 且 sample_count >= 100
+4. 某個類別找到 2~3 個通過條件後，立刻換下一個類別
+5. 所有類別都探索完後才可以停止
 
 ━━ 探索提示 ━━
 {cfg['explore_hint']}
@@ -635,7 +866,7 @@ def _build_system_prompt(hypothesis: str) -> str:
 ━━ 可用指標（完整清單）━━
 報價: close,high,low,open,volume
 均線: ma5,ma10,ma20,ma60,ma120；交叉: ma5_x_ma10,ma5_x_ma20,ma10_x_ma60
-動能: rsi,macd,macdh,bb_upper,bb_lower,bb_mid,bb_width
+動能: rsi,macd,macdh,bb_width,bb_upper,bb_lower,bb_mid
 趨勢: adx(>25有趨勢),plus_di,minus_di
 波動: atr,atr_rank(0~1百分位)
 量能: vol_ratio(今量/20均),vol_trend,obv,obv_ma
@@ -643,19 +874,12 @@ ABCD: f_n_confirmed,f_n_structure_score,f_n_ab_gain,f_n_d_breakout_strength,f_n_
 IB: net_foreign,net_trust,net_dealer,net_inst,foreign_rank,trust_rank,dealer_rank,inst_rank
 Margin: margin_bal,short_bal,margin_chg,short_chg,short_ratio,margin_chg_rank,short_ratio_rank
 
-━━ 工作流程 ━━
-1. 直接從假設出發組合條件，呼叫 analyze_signal(label_type="hit",hold_days=10,profit_target=0.15)
-2. 篩選標準：hit_rate >= 0.35 且 sample_count >= 100
-3. 不通過 → 調整門檻或換組合，不重複已試過的
-4. 找到越多通過條件越好
-
 ━━ 關鍵技巧 ━━
-- sample_count > 5000 時 hit_rate 通常低，加嚴門檻縮小樣本
-- 越嚴格的條件（500~3000 筆）hit_rate 反而更高
-- 統計資料期間：2015-01-01 到 2023-12-31（訓練期）
-- 不需要先呼叫 scan_correlations，除非你想了解指標相關性
+- sample_count > 5000 時 hit_rate 通常低，加嚴門檻縮小樣本（500~3000 最佳）
+- 統計資料期間：{TRAIN_START} ~ {TRAIN_END}（近 5 年）
+- 不需要先呼叫 scan_correlations
 
-回測與模型訓練由外部程式處理，你只負責找條件。
+回測與模型訓練由外部程式處理，你只負責蒐集特徵候選條件。
 請用繁體中文回覆。"""
 
 
@@ -727,26 +951,45 @@ def _build_history_prompt(entries: list[dict]) -> str:
 
 
 # ── Agent 主循環 ─────────────────────────────────────────────────
-def run_agent(hypothesis: str = "breakout") -> str:
+def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: str = "") -> str:
+    """
+    max_calls: 最多幾次 tool 呼叫就停（0 = 不限，用於測試）
+    model_override: 強制使用指定模型（用於測試切換免費模型）
+    """
     global _current_hypothesis, _model_idx
     _current_hypothesis = hypothesis
     _model_idx = 0
 
-    cfg     = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
-    entries = _load_signal_log(hypothesis)
-    history = _build_history_prompt(entries)
-    task    = (
-        f"為「{cfg['name']}」假設找出有效的選股條件。\n"
-        f"目標：hit_rate >= 0.35 且 sample_count >= 100（2015-2023資料）。\n"
-        f"{history}"
+    if model_override:
+        for i, (m, _) in enumerate(MODELS):
+            if model_override in m:
+                _model_idx = i
+                break
+
+    # 新 session 開始前備份舊 signal_log，避免新舊條件混入
+    sig_path = _signal_log_path(hypothesis)
+    if os.path.exists(sig_path):
+        bak_path = sig_path + ".bak"
+        import shutil
+        shutil.copy2(sig_path, bak_path)
+        os.remove(sig_path)
+        print(f"  [session] 舊 signal_log 已備份為 .bak，重新開始記錄")
+
+    cfg  = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
+    task = (
+        f"為「{cfg['name']}」假設蒐集特徵候選條件（用於建立選股模型）。\n"
+        f"目標：hit_rate >= 0.35 且 sample_count >= 100（{TRAIN_START}~{TRAIN_END}）。\n"
+        f"{'（測試模式：快速探索幾個維度即可）' if max_calls else ''}\n"
+        f"提示：可先呼叫 check_history() 查看已測試記錄，避免重複。"
     )
 
     messages      = [{"role": "system", "content": _build_system_prompt(hypothesis)},
                      {"role": "user",   "content": task}]
     final_text    = ""
     _rate_limit_count = 0
+    _call_count   = 0
 
-    print(f"\n[{cfg['name']}] 開始探索...\n{'─' * 60}")
+    print(f"\n[{cfg['name']}] 開始探索... {'（測試：最多 ' + str(max_calls) + ' 次工具呼叫）' if max_calls else ''}\n{'─' * 60}")
 
     while True:
         try:
@@ -771,6 +1014,39 @@ def run_agent(hypothesis: str = "breakout") -> str:
                     if not _next_model():
                         break
                     continue
+            # llama 的舊格式 tool call：<function=name,{args}> 或 tool name 混入 args
+            if "tool_use_failed" in err or "tool call validation failed" in err:
+                import re as _re
+                # 嘗試從錯誤訊息解析出 tool name 和 args
+                m = _re.search(r"attempted to call tool '([^,{]+)[,{]([^']*)'", err)
+                if not m:
+                    m = _re.search(r"<function=([^,>]+)[,>](\{[^<]*\})?", err)
+                if m:
+                    _fn  = m.group(1).strip()
+                    _raw = m.group(2) or "{}"
+                    try:
+                        _args = json.loads(_raw if _raw.startswith("{") else "{}")
+                    except Exception:
+                        _args = {}
+                    print(f"\n[llama修復] 解析舊格式 tool call：{_fn}({_args})")
+                    _result = execute_tool(_fn, _args)
+                    _compressed = _compress_result(_fn, _result)
+                    print(f"  {_compressed}")
+                    # 補一個假的 assistant + tool 訊息讓對話繼續
+                    import uuid as _uuid
+                    _fake_id = f"fix_{_uuid.uuid4().hex[:8]}"
+                    messages.append({"role": "assistant", "content": None, "tool_calls": [
+                        {"id": _fake_id, "type": "function", "function": {"name": _fn, "arguments": json.dumps(_args)}}
+                    ]})
+                    messages.append({"role": "tool", "tool_call_id": _fake_id, "content": _compressed})
+                    _call_count += 1
+                    if max_calls and _call_count >= max_calls:
+                        print(f"\n[測試] 已達 {max_calls} 次工具呼叫上限，停止")
+                        return final_text
+                    continue
+                if not _next_model():
+                    break
+                continue
             raise
 
         msg = response.choices[0].message
@@ -779,6 +1055,13 @@ def run_agent(hypothesis: str = "breakout") -> str:
         if not msg.tool_calls:
             final_text = msg.content or ""
             print(f"\n{'=' * 60}\nAgent 報告：\n{final_text}")
+            # 存 Agent 最終報告供報表使用
+            try:
+                agent_report_path = os.path.join(_results_dir(hypothesis), "agent_report.txt")
+                with open(agent_report_path, "w", encoding="utf-8") as _f:
+                    _f.write(final_text)
+            except Exception:
+                pass
             break
 
         for tc in msg.tool_calls:
@@ -789,6 +1072,10 @@ def run_agent(hypothesis: str = "breakout") -> str:
             compressed = _compress_result(fn_name, result)
             print(f"  {compressed}")
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": compressed})
+            _call_count += 1
+            if max_calls and _call_count >= max_calls:
+                print(f"\n[測試] 已達 {max_calls} 次工具呼叫上限，停止")
+                return final_text
 
     return final_text
 
@@ -841,11 +1128,19 @@ def validate_and_train(hypothesis: str = "breakout"):
             new_pass.append(e)
 
     if not new_pass:
-        print(f"[{hypothesis}] 所有 {len(passing)} 個條件已回測，跳過")
-        return
+        print(f"[{hypothesis}] 所有 {len(passing)} 個條件已回測，跳過回測，直接進入 RFC 訓練")
 
     print(f"\n[{hypothesis}] 回測 {len(new_pass)} 個新條件（預測期：{PREDICT_START}~{SESSION_END}）...")
     backtest_log = _backtest_log_path(hypothesis)
+
+    # 預先載入預測期指標（計算 hit_rate_predict 用）
+    try:
+        ind_pred, close_pred = _get_indicators(PREDICT_START, SESSION_END)
+        future_high_pred = pd.concat(
+            [close_pred.shift(-i) for i in range(1, 11)], axis=0
+        ).groupby(level=0).max()
+    except Exception:
+        ind_pred, close_pred, future_high_pred = None, None, None
 
     for entry in new_pass:
         cond = entry["condition"]
@@ -858,14 +1153,27 @@ def validate_and_train(hypothesis: str = "breakout"):
             "start":     PREDICT_START,
             "end":       SESSION_END,
         })
-        print(f"  {json.dumps({k: v for k, v in bt.items() if k != 'chart'}, ensure_ascii=False)}")
+        # 計算預測期 hit_rate（同訓練期邏輯，純統計無停損）
+        hit_rate_predict = None
+        if ind_pred is not None:
+            try:
+                sig  = eval(cond, {"__builtins__": {}}, ind_pred)
+                mask = sig.fillna(False).astype(bool)
+                vals = ((future_high_pred / close_pred - 1) >= 0.15)[mask].values.flatten()
+                vals = vals[~pd.isnull(vals)]
+                if len(vals) >= 10:
+                    hit_rate_predict = round(float(np.mean(vals.astype(float))), 4)
+            except Exception:
+                pass
+        print(f"  hit_predict={hit_rate_predict} {json.dumps({k: v for k, v in bt.items() if k != 'chart'}, ensure_ascii=False)}")
         with open(backtest_log, "a", encoding="utf-8") as f:
             f.write(json.dumps({
-                "condition":    cond,
-                "hit_rate":     entry.get("hit_rate"),
-                "sample_count": entry.get("sample_count"),
-                "backtest":     bt,
-                "date":         datetime.now().strftime("%Y-%m-%d"),
+                "condition":       cond,
+                "hit_rate":        entry.get("hit_rate"),
+                "hit_rate_predict": hit_rate_predict,
+                "sample_count":    entry.get("sample_count"),
+                "backtest":        bt,
+                "date":            datetime.now().strftime("%Y-%m-%d"),
             }, ensure_ascii=False) + "\n")
 
     # RFC 快速驗證
@@ -877,7 +1185,8 @@ def validate_and_train(hypothesis: str = "breakout"):
     try:
         n_stocks = 200
         stocks   = _random.sample(WATCH_STOCKS, min(n_stocks, len(WATCH_STOCKS)))
-        feat_df  = _build_rfc_features(stocks, TRAIN_START, TRAIN_END)
+        # 載完整資料（train+predict），才能做 train/test split
+        feat_df  = _build_rfc_features(stocks, TRAIN_START, SESSION_END)
 
         close_wide  = feat_df.pivot(index="date", columns="stock_id", values="close")
         future_max  = pd.concat([close_wide.shift(-i) for i in range(1, 11)], axis=0).groupby(level=0).max()
@@ -886,8 +1195,8 @@ def validate_and_train(hypothesis: str = "breakout"):
         target_long.columns = ["date", "stock_id", "target"]
         feat_df = feat_df.merge(target_long, on=["date", "stock_id"], how="left")
 
-        # 把通過條件加成 binary 特徵
-        ind, _ = _build_indicators(stocks, TRAIN_START, TRAIN_END)
+        # 把通過條件加成 binary 特徵（ind 需要完整期間才能 eval）
+        ind, _ = _build_indicators(stocks, TRAIN_START, SESSION_END)
         added  = []
         for i, e in enumerate(sorted(passing, key=lambda x: x["hit_rate"], reverse=True)[:20]):
             col = f"f_signal_{i}"
@@ -921,7 +1230,7 @@ def validate_and_train(hypothesis: str = "breakout"):
                 rfc.fit(train[feat_cols], train["target"])
                 proba = rfc.predict_proba(test[feat_cols])[:, 1]
                 thresholds = {}
-                for th in [0.5, 0.6, 0.7]:
+                for th in [0.5, 0.6, 0.7, 0.8, 0.9]:
                     mask = proba >= th
                     n    = int(mask.sum())
                     thresholds[f"proba>={th}"] = (
@@ -980,17 +1289,18 @@ def _generate_report(hypothesis: str):
                 if "error" in bt or bt.get("total_trades", 0) < 10:
                     continue
                 rows.append({
-                    "condition":    e["condition"],
-                    "hit_rate":     e.get("hit_rate", 0),
-                    "sample_count": e.get("sample_count", 0),
-                    "trades":       bt.get("total_trades"),
-                    "total_return": bt.get("total_return", 0),
-                    "sharpe":       bt.get("sharpe", 0),
-                    "max_drawdown": bt.get("max_drawdown", 0),
-                    "win_rate":     bt.get("win_rate", 0),
-                    "avg_win":      bt.get("avg_win", 0),
-                    "avg_loss":     bt.get("avg_loss", 0),
-                    "chart":        bt.get("chart"),
+                    "condition":        e["condition"],
+                    "hit_rate":         e.get("hit_rate", 0),
+                    "hit_rate_predict": e.get("hit_rate_predict"),
+                    "sample_count":     e.get("sample_count", 0),
+                    "trades":           bt.get("total_trades"),
+                    "total_return":     bt.get("total_return", 0),
+                    "sharpe":           bt.get("sharpe", 0),
+                    "max_drawdown":     bt.get("max_drawdown", 0),
+                    "win_rate":         bt.get("win_rate", 0),
+                    "avg_win":          bt.get("avg_win", 0),
+                    "avg_loss":         bt.get("avg_loss", 0),
+                    "chart":            bt.get("chart"),
                 })
             except Exception:
                 continue
@@ -1012,16 +1322,23 @@ def _generate_report(hypothesis: str):
     for i, r in enumerate(rows):
         chart_link = f'<a href="{r["chart"]}" target="_blank">📊</a>' if r.get("chart") else ""
         dd_color   = "#e74c3c" if r["max_drawdown"] < -0.15 else "#e67e22" if r["max_drawdown"] < -0.10 else "#2ecc71"
+        hr_pred    = r.get("hit_rate_predict")
+        hr_pred_str = f"{hr_pred:.1%}" if hr_pred is not None else "—"
+        # 若訓練命中率大幅高於驗證命中率，標紅警示
+        hr_pred_color = ""
+        if hr_pred is not None and r["hit_rate"] - hr_pred > 0.10:
+            hr_pred_color = 'style="color:#e74c3c"'
         rows_html += (
             f'<tr>'
             f'<td style="text-align:center">{i+1}</td>'
             f'<td style="font-family:monospace;font-size:12px;white-space:nowrap">{r["condition"]}</td>'
             f'<td style="text-align:center;color:{_sc(r["sharpe"])};font-weight:bold">{r["sharpe"]:.2f}</td>'
             f'<td style="text-align:center">{r["win_rate"]:.1%}</td>'
-            f'<td style="text-align:center">{r["total_return"]:+.2f}</td>'
+            f'<td style="text-align:center">{r["total_return"]:+.2%}</td>'
             f'<td style="text-align:center;color:{dd_color}">{r["max_drawdown"]:.1%}</td>'
             f'<td style="text-align:center">{r["trades"]}</td>'
             f'<td style="text-align:center">{r["hit_rate"]:.1%}</td>'
+            f'<td style="text-align:center" {hr_pred_color}>{hr_pred_str}</td>'
             f'<td style="text-align:center">{r["sample_count"]}</td>'
             f'<td style="text-align:center">{chart_link}</td>'
             f'</tr>'
@@ -1043,15 +1360,99 @@ def _generate_report(hypothesis: str):
                 continue
             th_rows = ""
             for th, v in m.get("thresholds", {}).items():
+                n = v.get("n", 0)
                 if "hit_rate" in v:
-                    th_rows += f'<tr><td>{th}</td><td>{v["n"]}</td><td>{v["hit_rate"]:.1%}</td></tr>'
+                    hr = v["hit_rate"]
+                    hr_color = "#2ecc71" if hr >= 0.5 else "#f39c12" if hr >= 0.35 else "#e74c3c"
+                    th_rows += (
+                        f'<tr>'
+                        f'<td style="text-align:center">{th}</td>'
+                        f'<td style="text-align:center">{n}</td>'
+                        f'<td style="text-align:center;color:{hr_color};font-weight:bold">{hr:.1%}</td>'
+                        f'</tr>'
+                    )
+                else:
+                    th_rows += (
+                        f'<tr>'
+                        f'<td style="text-align:center">{th}</td>'
+                        f'<td style="text-align:center;color:#555">{n}</td>'
+                        f'<td style="text-align:center;color:#555">樣本不足</td>'
+                        f'</tr>'
+                    )
             feat_str = ", ".join(f['feature'] for f in m.get("top_features", [])[:5])
             rfc_html += (
                 f'<h4>{m.get("name","")}</h4>'
-                f'<table border="1" cellpadding="4"><tr><th>門檻</th><th>樣本數</th><th>命中率</th></tr>'
+                f'<table border="1" cellpadding="4" style="width:300px">'
+                f'<tr><th>門檻</th><th>樣本數</th><th>命中率</th></tr>'
                 f'{th_rows}</table>'
                 f'<p>重要特徵：{feat_str}</p>'
             )
+
+    # ── 指標使用統計（from signal_log，含未通過的）────────────────
+    import re as _re
+    all_entries  = _load_signal_log(hypothesis, max_entries=9999)
+    ind_counter: dict = {}
+    for e in all_entries:
+        cond = e.get("condition", "")
+        for t in _re.findall(r"([a-z_]+)\s*[><!=]", cond):
+            ind_counter[t] = ind_counter.get(t, 0) + 1
+        for t in _re.findall(r"\(\s*([a-z_]+)\s*\)", cond):
+            ind_counter[t] = ind_counter.get(t, 0) + 1
+    ind_sorted   = sorted(ind_counter.items(), key=lambda x: -x[1])
+    max_ind_cnt  = ind_sorted[0][1] if ind_sorted else 1
+    total_tested = len(all_entries)
+    passed_count = len([e for e in all_entries if e.get("hit_rate", 0) >= 0.35])
+
+    ind_rows_html = ""
+    key_inds = set(cfg.get("key_indicators", []))
+    for ind_name, cnt in ind_sorted:
+        pct      = cnt / max_ind_cnt * 100
+        is_key   = ind_name in key_inds
+        color    = "#4fc3f7" if is_key else "#aaa"
+        badge    = ' <span style="font-size:10px;color:#f39c12">★重點</span>' if is_key else ""
+        desc     = INDICATOR_DESCRIPTIONS.get(ind_name, "")
+        desc_html = f'<span style="color:#666;font-size:12px;margin-left:8px">{desc}</span>' if desc else ""
+        ind_rows_html += (
+            f'<tr>'
+            f'<td style="font-family:monospace;color:{color}">{ind_name}{badge}{desc_html}</td>'
+            f'<td style="text-align:center">{cnt}</td>'
+            f'<td><div style="background:#3498db;height:12px;width:{pct:.0f}%;border-radius:3px;min-width:4px"></div></td>'
+            f'</tr>'
+        )
+
+    # ── 類別覆蓋摘要（通過條件中各類別出現幾次）──────────────────
+    categories     = cfg.get("indicator_categories", {})
+    passing_entries = [e for e in all_entries if e.get("hit_rate", 0) >= 0.35]
+    cat_coverage: dict = {cat: 0 for cat in categories}
+    for e in passing_entries:
+        cond = e.get("condition", "")
+        for cat, inds in categories.items():
+            if any(ind in cond for ind in inds):
+                cat_coverage[cat] += 1
+    dim_rows_html = ""
+    target_per_cat = 2
+    for cat, cnt in cat_coverage.items():
+        inds_str   = ", ".join(categories[cat])
+        status     = "✅" if cnt >= target_per_cat else "⚠️" if cnt >= 1 else "⬜"
+        bar_color  = "#2ecc71" if cnt >= target_per_cat else "#f39c12" if cnt >= 1 else "#555"
+        bar_w      = min(cnt * 25, 100)
+        dim_rows_html += (
+            f'<tr>'
+            f'<td style="font-weight:bold">{status} {cat}</td>'
+            f'<td style="font-family:monospace;font-size:11px;color:#888">{inds_str}</td>'
+            f'<td style="text-align:center">{cnt} 個</td>'
+            f'<td><div style="background:{bar_color};height:12px;width:{bar_w}%;border-radius:3px;min-width:4px"></div></td>'
+            f'</tr>'
+        )
+
+    # ── Agent 最終報告文字 ─────────────────────────────────────────
+    agent_report_html = ""
+    agent_report_path = os.path.join(results_d, "agent_report.txt")
+    if os.path.exists(agent_report_path):
+        with open(agent_report_path, encoding="utf-8") as f:
+            agent_text = f.read().strip()
+        if agent_text:
+            agent_report_html = f'<pre style="white-space:pre-wrap;background:#0d1b2a;padding:16px;border-radius:8px;font-size:13px;line-height:1.6">{agent_text}</pre>'
 
     html = f"""<!DOCTYPE html>
 <html lang="zh-TW">
@@ -1064,26 +1465,51 @@ def _generate_report(hypothesis: str):
   th{{background:#0d47a1;color:#fff;padding:8px;text-align:center}}
   td{{border:1px solid #333;padding:6px}}
   tr:nth-child(even){{background:#16213e}}
-  .badge{{display:inline-block;padding:4px 10px;border-radius:12px;font-size:13px;font-weight:bold}}
 </style>
 </head>
 <body>
 <h1>🎯 {hyp_name} — 專屬模型報表</h1>
 <p>假設：{cfg.get('description','')}</p>
 <p>統計期：{TRAIN_START} ~ {TRAIN_END}　回測期：{PREDICT_START} ~ {SESSION_END}</p>
-<p>共 {len(rows)} 個有效條件（by Sharpe 排序）</p>
+<p>Agent 共測試 <b>{total_tested}</b> 個條件，通過 <b>{passed_count}</b> 個（{passed_count/max(total_tested,1):.1%}），回測有效 <b>{len(rows)}</b> 個</p>
 
-<h2>回測結果</h2>
+<h2>類別覆蓋摘要</h2>
+<p style="color:#aaa;font-size:13px">✅ = 達標（≥2個通過條件）　⚠️ = 部分（1個）　⬜ = 未覆蓋</p>
+<table style="width:80%">
+<tr><th>類別</th><th>指標</th><th>通過條件數</th><th>覆蓋度</th></tr>
+{dim_rows_html}
+</table>
+
+<h2>指標使用統計（Agent 探索的指標）</h2>
+<p style="color:#aaa;font-size:13px">★重點 = 本假設的重點指標；統計含未通過的 {total_tested} 個測試條件</p>
+<table style="width:60%">
+<tr><th>指標</th><th>使用次數</th><th>頻率</th></tr>
+{ind_rows_html}
+</table>
+
+<h2>回測結果（2024-2026 out-of-sample）</h2>
+<p style="color:#aaa;font-size:13px">
+  <b>獲利率</b>＝回測中出場報酬 &gt; 0 的比例（含停損限制）
+  <b>命中率</b>＝訓練期條件成立後 10 天最高點漲 15% 的比例（純統計，無停損）
+</p>
 <table>
 <tr>
-  <th>#</th><th>條件</th><th>Sharpe</th><th>勝率</th>
-  <th>總報酬</th><th>最大回撤</th><th>交易次數</th><th>統計勝率</th><th>樣本數</th><th>圖</th>
+  <th>#</th><th>條件</th><th>Sharpe</th>
+  <th title="回測出場報酬>0的比例（含停損）">獲利率<br><small>回測</small></th>
+  <th title="總累積報酬">總報酬</th>
+  <th>最大回撤</th><th>交易次數</th>
+  <th title="訓練期：條件成立後10天最高點漲15%的比例（純統計，無停損）">命中率<br><small>訓練期</small></th>
+  <th title="驗證期：同樣統計方式（紅色=比訓練期低10%以上，可能過擬合）">命中率<br><small>驗證期</small></th>
+  <th title="訓練期樣本數">樣本數</th><th>圖</th>
 </tr>
 {rows_html}
 </table>
 
 <h2>RFC 快速驗證</h2>
 {rfc_html if rfc_html else '<p>尚未訓練</p>'}
+
+<h2>Agent 探索報告</h2>
+{agent_report_html if agent_report_html else '<p style="color:#666">無文字報告</p>'}
 
 <p style="color:#666;font-size:12px">產生時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
 </body></html>"""
