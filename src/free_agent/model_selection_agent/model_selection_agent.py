@@ -28,7 +28,7 @@ from openai import OpenAI
 
 load_dotenv()
 
-_groq_client   = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
+_groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 _ollama_client = OpenAI(api_key="ollama", base_url="http://localhost:11434/v1")
 _deepseek_client = OpenAI(
     api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
@@ -40,10 +40,10 @@ _gemini_client = OpenAI(
 )
 
 MODELS = [
-    ("deepseek-v4-flash", _deepseek_client),                                    # 主力
-    (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),       # 備用1：免費（每天20次）
+    ("deepseek-v4-flash", _deepseek_client),  # 主力
+    (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),  # 備用1：免費（每天20次）
     # ("llama-3.3-70b-versatile", _groq_client),                                # 備用2：tool_use 完全不穩，停用
-    ("qwen2.5:14b", _ollama_client),                                            # 備用3：本機
+    ("qwen2.5:14b", _ollama_client),  # 備用3：本機
 ]
 _model_idx = 0
 
@@ -76,7 +76,13 @@ HYPOTHESIS_CONFIGS: dict[str, dict] = {
             "融券端": ["short_bal", "short_chg", "short_ratio", "short_ratio_rank"],
             "法人端": ["net_foreign", "net_trust", "net_dealer", "foreign_rank", "trust_rank", "inst_rank"],
             "量能端": ["vol_ratio", "vol_trend", "obv_ma"],
-            "型態確認": ["f_n_confirmed", "f_n_structure_score", "f_n_ab_gain", "f_n_d_breakout_strength", "f_n_volume_confirm"],
+            "型態確認": [
+                "f_n_confirmed",
+                "f_n_structure_score",
+                "f_n_ab_gain",
+                "f_n_d_breakout_strength",
+                "f_n_volume_confirm",
+            ],
             "技術確認": ["rsi", "adx", "bb_width", "atr_rank"],
         },
         "explore_hint": (
@@ -158,61 +164,61 @@ HYPOTHESIS_CONFIGS: dict[str, dict] = {
 # ── 指標說明對照表 ────────────────────────────────────────────────
 INDICATOR_DESCRIPTIONS: dict[str, str] = {
     # 技術指標
-    "rsi":           "RSI 相對強弱指數（>50 偏多，>70 超買）",
-    "macd":          "MACD 快慢線差值（正值偏多）",
-    "macdh":         "MACD 柱狀圖（正值=多頭柱，負值=空頭柱）",
-    "adx":           "ADX 趨勢強度（>25 有明確趨勢，>40 強趨勢）",
-    "plus_di":       "+DI 多方方向指標（>minus_di 代表多頭主導）",
-    "minus_di":      "-DI 空方方向指標",
-    "bb_width":      "布林通道寬度（>0.5 通道擴張，突破前兆）",
-    "bb_upper":      "布林通道上軌",
-    "bb_lower":      "布林通道下軌",
-    "bb_mid":        "布林通道中線（20日均線）",
-    "atr":           "ATR 真實波幅（波動度絕對值）",
-    "atr_rank":      "ATR 歷史百分位（>0.7 波動處於歷史高位）",
+    "rsi": "RSI 相對強弱指數（>50 偏多，>70 超買）",
+    "macd": "MACD 快慢線差值（正值偏多）",
+    "macdh": "MACD 柱狀圖（正值=多頭柱，負值=空頭柱）",
+    "adx": "ADX 趨勢強度（>25 有明確趨勢，>40 強趨勢）",
+    "plus_di": "+DI 多方方向指標（>minus_di 代表多頭主導）",
+    "minus_di": "-DI 空方方向指標",
+    "bb_width": "布林通道寬度（>0.5 通道擴張，突破前兆）",
+    "bb_upper": "布林通道上軌",
+    "bb_lower": "布林通道下軌",
+    "bb_mid": "布林通道中線（20日均線）",
+    "atr": "ATR 真實波幅（波動度絕對值）",
+    "atr_rank": "ATR 歷史百分位（>0.7 波動處於歷史高位）",
     # 均線
-    "ma5":           "5日均線",
-    "ma10":          "10日均線",
-    "ma20":          "20日均線",
-    "ma60":          "60日均線",
-    "ma120":         "120日均線",
-    "ma5_x_ma10":    "5日上穿10日均線（黃金交叉信號）",
-    "ma5_x_ma20":    "5日上穿20日均線",
-    "ma10_x_ma60":   "10日上穿60日均線（中期多頭確認）",
+    "ma5": "5日均線",
+    "ma10": "10日均線",
+    "ma20": "20日均線",
+    "ma60": "60日均線",
+    "ma120": "120日均線",
+    "ma5_x_ma10": "5日上穿10日均線（黃金交叉信號）",
+    "ma5_x_ma20": "5日上穿20日均線",
+    "ma10_x_ma60": "10日上穿60日均線（中期多頭確認）",
     # 量能
-    "vol_ratio":     "量比（當日量/20日均量，>2 爆量）",
-    "vol_trend":     "量能趨勢（20日均量/60日均量，>1 量能放大）",
-    "obv":           "OBV 能量潮（累計成交量方向）",
-    "obv_ma":        "OBV 20日均線",
+    "vol_ratio": "量比（當日量/20日均量，>2 爆量）",
+    "vol_trend": "量能趨勢（20日均量/60日均量，>1 量能放大）",
+    "obv": "OBV 能量潮（累計成交量方向）",
+    "obv_ma": "OBV 20日均線",
     # 法人籌碼
-    "net_foreign":   "外資買賣超張數（>0 外資買超）",
-    "net_trust":     "投信買賣超張數（>0 投信買超）",
-    "net_dealer":    "自營商買賣超張數（>0 自營買超）",
-    "net_inst":      "三大法人合計買賣超（>0 法人合計買超）",
-    "foreign_rank":  "外資買超歷史百分位（>0.7 外資強力買入）",
-    "trust_rank":    "投信買超歷史百分位（>0.7 投信強力買入）",
-    "dealer_rank":   "自營商買超歷史百分位",
-    "inst_rank":     "三大法人合計歷史百分位（>0.7 法人整體強買）",
+    "net_foreign": "外資買賣超張數（>0 外資買超）",
+    "net_trust": "投信買賣超張數（>0 投信買超）",
+    "net_dealer": "自營商買賣超張數（>0 自營買超）",
+    "net_inst": "三大法人合計買賣超（>0 法人合計買超）",
+    "foreign_rank": "外資買超歷史百分位（>0.7 外資強力買入）",
+    "trust_rank": "投信買超歷史百分位（>0.7 投信強力買入）",
+    "dealer_rank": "自營商買超歷史百分位",
+    "inst_rank": "三大法人合計歷史百分位（>0.7 法人整體強買）",
     # 融資融券
-    "margin_bal":    "融資餘額（融資張數）",
-    "short_bal":     "融券餘額（空頭張數，>0 有融券部位）",
-    "margin_chg":    "融資變化率（pct_change）",
-    "short_chg":     "融券變化率（<0 融券減少，回補中）",
-    "short_ratio":   "融券/融資比率（>0.3 融券壓力大）",
+    "margin_bal": "融資餘額（融資張數）",
+    "short_bal": "融券餘額（空頭張數，>0 有融券部位）",
+    "margin_chg": "融資變化率（pct_change）",
+    "short_chg": "融券變化率（<0 融券減少，回補中）",
+    "short_ratio": "融券/融資比率（>0.3 融券壓力大）",
     "short_ratio_rank": "融券比率歷史百分位（>0.9 處於歷史極高位）",
-    "margin_chg_rank":  "融資變化率歷史百分位",
+    "margin_chg_rank": "融資變化率歷史百分位",
     # ABCD 型態
-    "f_n_confirmed":          "ABCD N字型態確認（>0 表示型態成立）",
-    "f_n_structure_score":    "ABCD 結構品質分數（0~1，>0.6 高品質）",
-    "f_n_bc_retracement":     "BC 段回撤比例（黃金比例 0.382~0.618 最佳）",
-    "f_n_ab_gain":            "AB 段漲幅（>0.1 代表第一波有力）",
-    "f_n_d_breakout_strength":"D 點突破強度（>0.5 突破有力）",
-    "f_n_volume_confirm":     "D 點量能確認（>0.5 突破時有量）",
+    "f_n_confirmed": "ABCD N字型態確認（>0 表示型態成立）",
+    "f_n_structure_score": "ABCD 結構品質分數（0~1，>0.6 高品質）",
+    "f_n_bc_retracement": "BC 段回撤比例（黃金比例 0.382~0.618 最佳）",
+    "f_n_ab_gain": "AB 段漲幅（>0.1 代表第一波有力）",
+    "f_n_d_breakout_strength": "D 點突破強度（>0.5 突破有力）",
+    "f_n_volume_confirm": "D 點量能確認（>0.5 突破時有量）",
     # 三角收斂
-    "is_human_triangle":  "是否為 human 三角收斂型態（refined+fuzzy 合併）",
-    "human_only":         "是否為 fuzzy 三角形（比 strict 更能抓模糊收斂）",
-    "is_refined_triangle":"是否為嚴格三角收斂型態",
-    "triangle_score":     "三角收斂品質分數（0~1，>0.65 高品質）",
+    "is_human_triangle": "是否為 human 三角收斂型態（refined+fuzzy 合併）",
+    "human_only": "是否為 fuzzy 三角形（比 strict 更能抓模糊收斂）",
+    "is_refined_triangle": "是否為嚴格三角收斂型態",
+    "triangle_score": "三角收斂品質分數（0~1，>0.65 高品質）",
 }
 
 
@@ -282,7 +288,10 @@ TOOLS = [
                 "properties": {
                     "indicator": {"type": "string", "description": "篩選包含此指標名稱的條件（可選）"},
                     "min_hit_rate": {"type": "number", "description": "只回傳 hit_rate 大於此值的條件（可選，預設 0）"},
-                    "passed_only": {"type": "boolean", "description": "只回傳通過門檻（hit_rate>=0.35）的條件，預設 false"},
+                    "passed_only": {
+                        "type": "boolean",
+                        "description": "只回傳通過門檻（hit_rate>=0.35）的條件，預設 false",
+                    },
                     "top_n": {"type": "integer", "description": "回傳筆數上限，預設 20"},
                 },
                 "required": [],
@@ -305,9 +314,9 @@ def _build_indicators(stocks: list, start: str, end: str):
 
     piv = lambda col: df_p.pivot(index="date", columns="stock_id", values=col).sort_index()
     close = piv("close")
-    high  = piv("high")
-    low   = piv("low")
-    vol   = piv("volume")
+    high = piv("high")
+    low = piv("low")
+    vol = piv("volume")
 
     ind: dict = {"close": close, "high": high, "low": low, "open": piv("open"), "volume": vol}
 
@@ -319,50 +328,57 @@ def _build_indicators(stocks: list, start: str, end: str):
         ind[name] = (f > s) & (f.shift(1) <= s.shift(1))
 
     delta = close.diff()
-    gain  = delta.clip(lower=0).rolling(14).mean()
-    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
     ind["rsi"] = 100 - 100 / (1 + gain / loss)
 
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
-    ind["macd"]   = ema12 - ema26
+    ind["macd"] = ema12 - ema26
     ind["signal"] = ind["macd"].ewm(span=9, adjust=False).mean()
-    ind["macdh"]  = ind["macd"] - ind["signal"]
+    ind["macdh"] = ind["macd"] - ind["signal"]
 
-    ind["bb_mid"]   = close.rolling(20).mean()
-    bb_std          = close.rolling(20).std()
+    ind["bb_mid"] = close.rolling(20).mean()
+    bb_std = close.rolling(20).std()
     ind["bb_upper"] = ind["bb_mid"] + 2 * bb_std
     ind["bb_lower"] = ind["bb_mid"] - 2 * bb_std
     ind["bb_width"] = (ind["bb_upper"] - ind["bb_lower"]) / ind["bb_mid"]
 
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()]).groupby(level=0).max()
     atr14 = tr.rolling(14).mean()
-    ind["atr"]      = atr14
+    ind["atr"] = atr14
     ind["atr_rank"] = _rolling_rank(atr14)
 
     high_diff = high.diff()
-    low_diff  = -low.diff()
-    plus_dm   = high_diff.where((high_diff > low_diff) & (high_diff > 0), 0.0)
-    minus_dm  = low_diff.where((low_diff > high_diff) & (low_diff > 0), 0.0)
-    plus_di   = 100 * plus_dm.rolling(14).mean() / (atr14 + 1e-9)
-    minus_di  = 100 * minus_dm.rolling(14).mean() / (atr14 + 1e-9)
-    dx        = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9)
-    ind["adx"]      = dx.rolling(14).mean()
-    ind["plus_di"]  = plus_di
+    low_diff = -low.diff()
+    plus_dm = high_diff.where((high_diff > low_diff) & (high_diff > 0), 0.0)
+    minus_dm = low_diff.where((low_diff > high_diff) & (low_diff > 0), 0.0)
+    plus_di = 100 * plus_dm.rolling(14).mean() / (atr14 + 1e-9)
+    minus_di = 100 * minus_dm.rolling(14).mean() / (atr14 + 1e-9)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9)
+    ind["adx"] = dx.rolling(14).mean()
+    ind["plus_di"] = plus_di
     ind["minus_di"] = minus_di
 
-    vol_ma20       = vol.rolling(20).mean()
+    vol_ma20 = vol.rolling(20).mean()
     ind["vol_ratio"] = vol / (vol_ma20 + 1e-9)
     ind["vol_trend"] = vol_ma20 / vol.rolling(60).mean()
-    direction        = close.diff().apply(lambda x: x.map(lambda v: 1 if v > 0 else (-1 if v < 0 else 0)))
-    ind["obv"]       = (vol * direction).cumsum()
-    ind["obv_ma"]    = ind["obv"].rolling(20).mean()
+    direction = close.diff().apply(lambda x: x.map(lambda v: 1 if v > 0 else (-1 if v < 0 else 0)))
+    ind["obv"] = (vol * direction).cumsum()
+    ind["obv_ma"] = ind["obv"].rolling(20).mean()
 
     try:
         from j1stools.abcd_feature import detect_n_shape_features
+
         df_abcd = detect_n_shape_features(df_p.copy())
-        for feat in ["f_n_confirmed", "f_n_structure_score", "f_n_bc_retracement",
-                     "f_n_ab_gain", "f_n_d_breakout_strength", "f_n_volume_confirm"]:
+        for feat in [
+            "f_n_confirmed",
+            "f_n_structure_score",
+            "f_n_bc_retracement",
+            "f_n_ab_gain",
+            "f_n_d_breakout_strength",
+            "f_n_volume_confirm",
+        ]:
             if feat in df_abcd.columns:
                 ind[feat] = df_abcd.pivot(index="date", columns="stock_id", values=feat).reindex(close.index)
     except Exception:
@@ -371,6 +387,7 @@ def _build_indicators(stocks: list, start: str, end: str):
     if _current_hypothesis == "pattern":
         try:
             from j1stools.pattern_triangle import add_triangle_compare_columns
+
             _tri_cache_paths = [
                 os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache_2020_2025.pkl"),
                 os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache.pkl"),
@@ -387,6 +404,7 @@ def _build_indicators(stocks: list, start: str, end: str):
             if df_tri is None:
                 print("  [三角偵測] 無快取，重新偵測（較慢）...")
                 from j1stools.pattern_triangle import detect_human_triangle
+
                 df_tri = detect_human_triangle(df_p.copy())
                 df_tri = add_triangle_compare_columns(df_tri)
             for feat in ["is_human_triangle", "human_only", "is_refined_triangle", "triangle_score"]:
@@ -401,21 +419,26 @@ def _build_indicators(stocks: list, start: str, end: str):
             print(f"  [三角偵測] 失敗：{e}")
 
     try:
-        df_ib  = parquet_db.query_ib(stocks, start, end)
+        df_ib = parquet_db.query_ib(stocks, start, end)
         df_ib["date"] = pd.to_datetime(df_ib["date"])
-        df_ib["net"]  = df_ib["buy"] - df_ib["sell"]
+        df_ib["net"] = df_ib["buy"] - df_ib["sell"]
         nets = []
         for src, col, rank_col in [
             ("Foreign_Investor", "net_foreign", "foreign_rank"),
-            ("Investment_Trust", "net_trust",   "trust_rank"),
-            ("Dealer_self",      "net_dealer",  "dealer_rank"),
+            ("Investment_Trust", "net_trust", "trust_rank"),
+            ("Dealer_self", "net_dealer", "dealer_rank"),
         ]:
-            sub = df_ib[df_ib["name"] == src].pivot(index="date", columns="stock_id", values="net").reindex(close.index).fillna(0)
-            ind[col]      = sub
+            sub = (
+                df_ib[df_ib["name"] == src]
+                .pivot(index="date", columns="stock_id", values="net")
+                .reindex(close.index)
+                .fillna(0)
+            )
+            ind[col] = sub
             ind[rank_col] = _rolling_rank(sub)
             nets.append(sub)
         inst = sum(nets)
-        ind["net_inst"]  = inst
+        ind["net_inst"] = inst
         ind["inst_rank"] = _rolling_rank(inst)
     except Exception:
         pass
@@ -423,16 +446,18 @@ def _build_indicators(stocks: list, start: str, end: str):
     try:
         df_m = parquet_db.query_margin(stocks, start, end)
         df_m["date"] = pd.to_datetime(df_m["date"])
+
         def _mpiv(col):
             return df_m.pivot(index="date", columns="stock_id", values=col).reindex(close.index).ffill()
+
         margin = _mpiv("margin_purchase_today_balance")
-        short  = _mpiv("short_sale_today_balance")
-        ind["margin_bal"]       = margin
-        ind["short_bal"]        = short
-        ind["margin_chg"]       = margin.pct_change().clip(-1, 1)
-        ind["short_chg"]        = short.pct_change().clip(-1, 1)
-        ind["short_ratio"]      = short / (margin + 1e-9)
-        ind["margin_chg_rank"]  = _rolling_rank(ind["margin_chg"])
+        short = _mpiv("short_sale_today_balance")
+        ind["margin_bal"] = margin
+        ind["short_bal"] = short
+        ind["margin_chg"] = margin.pct_change().clip(-1, 1)
+        ind["short_chg"] = short.pct_change().clip(-1, 1)
+        ind["short_ratio"] = short / (margin + 1e-9)
+        ind["margin_chg_rank"] = _rolling_rank(ind["margin_chg"])
         ind["short_ratio_rank"] = _rolling_rank(ind["short_ratio"])
     except Exception:
         pass
@@ -456,22 +481,22 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
             ma = c.rolling(n).mean()
             g[f"f_dist_ma{n}"] = (c - ma) / (ma + 1e-9)
         delta = c.diff()
-        gain  = delta.clip(lower=0).rolling(14).mean()
-        loss  = (-delta.clip(upper=0)).rolling(14).mean()
-        g["f_rsi"]      = 100 - 100 / (1 + gain / loss)
-        ema12           = c.ewm(span=12, adjust=False).mean()
-        ema26           = c.ewm(span=26, adjust=False).mean()
-        macd            = ema12 - ema26
-        g["f_macdh"]    = macd - macd.ewm(span=9, adjust=False).mean()
-        bb_mid          = c.rolling(20).mean()
-        bb_std          = c.rolling(20).std()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        g["f_rsi"] = 100 - 100 / (1 + gain / loss)
+        ema12 = c.ewm(span=12, adjust=False).mean()
+        ema26 = c.ewm(span=26, adjust=False).mean()
+        macd = ema12 - ema26
+        g["f_macdh"] = macd - macd.ewm(span=9, adjust=False).mean()
+        bb_mid = c.rolling(20).mean()
+        bb_std = c.rolling(20).std()
         g["f_bb_width"] = (2 * 2 * bb_std) / (bb_mid + 1e-9)
-        g["f_bb_pos"]   = (c - bb_mid) / (bb_std + 1e-9)
-        tr              = pd.concat([h - l, (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
-        atr             = tr.rolling(14).mean()
+        g["f_bb_pos"] = (c - bb_mid) / (bb_std + 1e-9)
+        tr = pd.concat([h - l, (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
+        atr = tr.rolling(14).mean()
         g["f_atr_norm"] = atr / (c + 1e-9)
-        g["f_vol_ratio"]= v / (v.rolling(20).mean() + 1e-9)
-        g["stock_id"]   = sid
+        g["f_vol_ratio"] = v / (v.rolling(20).mean() + 1e-9)
+        g["stock_id"] = sid
         rows.append(g.reset_index())
 
     feat_df = pd.concat(rows, ignore_index=True)
@@ -479,26 +504,28 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
     try:
         df_ib = parquet_db.query_ib(stocks, start, end)
         df_ib["date"] = pd.to_datetime(df_ib["date"])
-        df_ib["net"]  = df_ib["buy"] - df_ib["sell"]
+        df_ib["net"] = df_ib["buy"] - df_ib["sell"]
         for src, col in [("Foreign_Investor", "f_foreign_rank"), ("Investment_Trust", "f_trust_rank")]:
             sub = (
                 df_ib[df_ib["name"] == src]
                 .pivot(index="date", columns="stock_id", values="net")
-                .rolling(60, min_periods=10).rank(pct=True)
-                .stack().reset_index()
+                .rolling(60, min_periods=10)
+                .rank(pct=True)
+                .stack()
+                .reset_index()
             )
             sub.columns = ["date", "stock_id", col]
             feat_df = feat_df.merge(sub, on=["date", "stock_id"], how="left")
     except Exception:
         feat_df["f_foreign_rank"] = np.nan
-        feat_df["f_trust_rank"]   = np.nan
+        feat_df["f_trust_rank"] = np.nan
 
     try:
         df_m = parquet_db.query_margin(stocks, start, end)
         df_m["date"] = pd.to_datetime(df_m["date"])
         margin = df_m.pivot(index="date", columns="stock_id", values="margin_purchase_today_balance")
-        short  = df_m.pivot(index="date", columns="stock_id", values="short_sale_today_balance")
-        ratio  = short / (margin + 1e-9)
+        short = df_m.pivot(index="date", columns="stock_id", values="short_sale_today_balance")
+        ratio = short / (margin + 1e-9)
         ratio_rank = ratio.rolling(60, min_periods=10).rank(pct=True).stack().reset_index()
         ratio_rank.columns = ["date", "stock_id", "f_short_ratio_rank"]
         feat_df = feat_df.merge(ratio_rank, on=["date", "stock_id"], how="left")
@@ -510,6 +537,7 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
 
 def _normalize_condition(cond: str) -> str:
     import re
+
     tokens = re.split(r"(\s*[&|]\s*)", cond.strip())
     result = []
     for tok in tokens:
@@ -524,13 +552,13 @@ def _normalize_condition(cond: str) -> str:
 # ── 全域設定 ─────────────────────────────────────────────────────
 from j1stools import parquet_db as _pdb
 
-WATCH_STOCKS  = _pdb.activate_stocks()
+WATCH_STOCKS = _pdb.activate_stocks()
 PREDICT_START = "2024-01-01"
-TRAIN_END     = "2023-12-31"
-TRAIN_YEARS   = 8                                          # 可改：測試用 1，正式用 8
-TRAIN_START   = f"{int(PREDICT_START[:4]) - TRAIN_YEARS}-01-01"  # 2024-5 = 2019
-SESSION_END   = datetime.now().strftime("%Y-%m-%d")
-BASE_RESULTS  = os.path.join(os.path.dirname(__file__), "results")
+TRAIN_END = "2023-12-31"
+TRAIN_YEARS = 8  # 可改：測試用 1，正式用 8
+TRAIN_START = f"{int(PREDICT_START[:4]) - TRAIN_YEARS}-01-01"  # 2024-5 = 2019
+SESSION_END = datetime.now().strftime("%Y-%m-%d")
+BASE_RESULTS = os.path.join(os.path.dirname(__file__), "results")
 
 _current_hypothesis: str = "breakout"
 _INDICATOR_CACHE: dict = {}  # (start, end) -> (ind, close)，session 內只載一次
@@ -592,24 +620,42 @@ def execute_tool(name: str, inputs: dict) -> dict:
         pass
 
     if name == "scan_correlations":
-        hold_days     = inputs.get("hold_days", 10)
+        hold_days = inputs.get("hold_days", 10)
         profit_target = inputs.get("profit_target", 0.15)
-        top_n         = inputs.get("top_n", 20)
+        top_n = inputs.get("top_n", 20)
         try:
             ind, close = _get_indicators(TRAIN_START, TRAIN_END)
         except Exception as e:
             return {"error": f"資料載入失敗：{e}"}
-        future_high  = pd.concat([close.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).max()
-        target       = ((future_high / close - 1) >= profit_target).astype(float)
-        target_flat  = target.values.flatten().astype(float)
-        skip = {"close","high","low","open","volume","atr","bb_upper","bb_lower","bb_mid",
-                "macd","signal","net_foreign","net_trust","net_dealer","net_inst","margin_bal","short_bal","obv"}
+        future_high = pd.concat([close.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).max()
+        target = ((future_high / close - 1) >= profit_target).astype(float)
+        target_flat = target.values.flatten().astype(float)
+        skip = {
+            "close",
+            "high",
+            "low",
+            "open",
+            "volume",
+            "atr",
+            "bb_upper",
+            "bb_lower",
+            "bb_mid",
+            "macd",
+            "signal",
+            "net_foreign",
+            "net_trust",
+            "net_dealer",
+            "net_inst",
+            "margin_bal",
+            "short_bal",
+            "obv",
+        }
         corr_list = []
         for feat_name, df in ind.items():
             if feat_name in skip or not isinstance(df, pd.DataFrame):
                 continue
             df_aligned = df.reindex(index=close.index, columns=close.columns)
-            x    = df_aligned.values.flatten().astype(float)
+            x = df_aligned.values.flatten().astype(float)
             mask = ~(np.isnan(x) | np.isnan(target_flat))
             if mask.sum() < 500:
                 continue
@@ -619,42 +665,65 @@ def execute_tool(name: str, inputs: dict) -> dict:
         corr_list.sort(key=lambda r: abs(r["correlation"]), reverse=True)
         corr_path = os.path.join(_results_dir(hypothesis), "scan_correlations.json")
         with open(corr_path, "w", encoding="utf-8") as _f:
-            json.dump({"date": datetime.now().strftime("%Y-%m-%d %H:%M"), "correlations": corr_list}, _f, ensure_ascii=False, indent=2)
+            json.dump(
+                {"date": datetime.now().strftime("%Y-%m-%d %H:%M"), "correlations": corr_list},
+                _f,
+                ensure_ascii=False,
+                indent=2,
+            )
         return {"hold_days": hold_days, "profit_target": profit_target, "top_correlations": corr_list[:top_n]}
 
     if name == "check_history":
-        indicator   = inputs.get("indicator", "")
-        min_hit     = inputs.get("min_hit_rate", 0)
-        passed_only = inputs.get("passed_only", False)
-        top_n       = inputs.get("top_n", 20)
-        entries     = _load_signal_log(hypothesis, max_entries=9999)
-        if passed_only:
-            entries = [e for e in entries if e.get("hit_rate", 0) >= 0.35]
-        if min_hit > 0:
-            entries = [e for e in entries if e.get("hit_rate", 0) >= min_hit]
-        if indicator:
-            entries = [e for e in entries if indicator in e.get("condition", "")]
-        entries.sort(key=lambda x: -x.get("hit_rate", 0))
-        total_tested = len(_load_signal_log(hypothesis, max_entries=9999))
-        passed_count = len([e for e in _load_signal_log(hypothesis, max_entries=9999) if e.get("hit_rate", 0) >= 0.35])
+        import re as _re
+
+        top_n = inputs.get("top_n", 10)
+        ind_limit = 3  # 每個指標最多出現幾次才算飽和
+        cat_target = 2  # 每個類別至少需要幾個通過條件
+        all_entries = _load_signal_log(hypothesis, max_entries=9999)
+        passed = [e for e in all_entries if e.get("hit_rate", 0) >= 0.35]
+        cfg_h = HYPOTHESIS_CONFIGS.get(hypothesis, {})
+        categories = cfg_h.get("indicator_categories", {})
+
+        # 統計所有條件（通過+失敗）中每個指標出現次數
+        ind_usage: dict = {}
+        for e in all_entries:
+            cond = e.get("condition", "")
+            for t in _re.findall(r"([a-z_]+)\s*[><!=]", cond):
+                ind_usage[t] = ind_usage.get(t, 0) + 1
+            for t in _re.findall(r"\(\s*([a-z_]+)\s*\)", cond):
+                ind_usage[t] = ind_usage.get(t, 0) + 1
+
+        saturated = [k for k, v in ind_usage.items() if v >= ind_limit]
+
+        # 類別覆蓋狀況
+        cat_status: dict = {}
+        for cat, inds in categories.items():
+            cnt = sum(1 for e in passed if any(ind in e.get("condition", "") for ind in inds))
+            if cnt >= cat_target:
+                cat_status[cat] = f"✅ 足夠（{cnt}個）"
+            elif cnt >= 1:
+                cat_status[cat] = f"⚠️ 不足（{cnt}個，需{cat_target}個）"
+            else:
+                cat_status[cat] = f"⬜ 未覆蓋"
+
+        focus = [cat for cat, s in cat_status.items() if not s.startswith("✅")]
+
         return {
-            "total_tested": total_tested,
-            "passed_035": passed_count,
-            "filtered_count": len(entries),
-            "conditions": [
-                {
-                    "condition": e.get("condition", ""),
-                    "hit_rate": e.get("hit_rate"),
-                    "sample_count": e.get("sample_count"),
-                }
-                for e in entries[:top_n]
+            "total_tested": len(all_entries),
+            "passed_035": len(passed),
+            "saturated_indicators": saturated,  # 已飽和，避免再用
+            "category_coverage": cat_status,  # 各類別覆蓋狀況
+            "focus_needed": focus,  # 還需要補的類別
+            "passed_conditions": [
+                {"condition": e.get("condition", ""), "hit_rate": e.get("hit_rate")}
+                for e in sorted(passed, key=lambda x: -x.get("hit_rate", 0))[:top_n]
             ],
         }
 
     if name == "analyze_signal":
-        hold_days     = inputs.get("hold_days", 10)
-        condition     = _normalize_condition(inputs["condition"])
-        label_type    = inputs.get("label_type", "hit")
+        hold_days = inputs.get("hold_days", 10)
+        condition = _normalize_condition(inputs["condition"])
+        label_type = inputs.get("label_type", "hit")
         profit_target = inputs.get("profit_target", 0.15)
         try:
             ind, close = _get_indicators(TRAIN_START, TRAIN_END)
@@ -681,43 +750,63 @@ def execute_tool(name: str, inputs: dict) -> dict:
             return {"error": f"樣本太少（{n} 筆）"}
         if label_type == "hit":
             hit_rate = float(np.mean(values.astype(float)))
-            out = {"condition": condition, "label_type": label_type, "hold_days": hold_days,
-                   "sample_count": n, "hit_rate": round(hit_rate, 4), "profit_target": profit_target}
+            out = {
+                "condition": condition,
+                "label_type": label_type,
+                "hold_days": hold_days,
+                "sample_count": n,
+                "hit_rate": round(hit_rate, 4),
+                "profit_target": profit_target,
+            }
             _append_signal_log({**out, "date": datetime.now().strftime("%Y-%m-%d")}, hypothesis)
             return out
         values = values.astype(float)
-        out = {"condition": condition, "label_type": label_type, "hold_days": hold_days, "sample_count": n,
-               "avg_return": round(float(np.mean(values)), 4), "win_rate": round(float((values > 0).mean()), 4),
-               "std": round(float(np.std(values)), 4)}
+        out = {
+            "condition": condition,
+            "label_type": label_type,
+            "hold_days": hold_days,
+            "sample_count": n,
+            "avg_return": round(float(np.mean(values)), 4),
+            "win_rate": round(float((values > 0).mean()), 4),
+            "std": round(float(np.std(values)), 4),
+        }
         _append_signal_log({**out, "date": datetime.now().strftime("%Y-%m-%d")}, hypothesis)
         return out
 
     if name == "analyze_pattern_signal":
         import random as _random
-        pattern    = inputs.get("pattern", "abcd")
-        hold_days  = inputs.get("hold_days", 10)
+
+        pattern = inputs.get("pattern", "abcd")
+        hold_days = inputs.get("hold_days", 10)
         label_type = inputs.get("label_type", "hit")
         profit_target = inputs.get("profit_target", 0.15)
         from j1stools import parquet_db
+
         stocks_sample = WATCH_STOCKS if pattern == "abcd" else _random.sample(WATCH_STOCKS, min(100, len(WATCH_STOCKS)))
         try:
             df_p = parquet_db.query_price(stocks_sample, TRAIN_START, TRAIN_END)
             df_p["date"] = pd.to_datetime(df_p["date"])
         except Exception as e:
             return {"error": f"資料載入失敗：{e}"}
-        close_wide  = df_p.pivot(index="date", columns="stock_id", values="close").sort_index()
+        close_wide = df_p.pivot(index="date", columns="stock_id", values="close").sort_index()
         signal_mask = pd.DataFrame(False, index=close_wide.index, columns=close_wide.columns)
         if pattern == "abcd":
             try:
                 from j1stools.abcd_feature import detect_n_shape_features
-                df_abcd   = detect_n_shape_features(df_p.copy())
-                confirmed = df_abcd.pivot(index="date", columns="stock_id", values="f_n_confirmed").reindex(close_wide.index).fillna(0)
+
+                df_abcd = detect_n_shape_features(df_p.copy())
+                confirmed = (
+                    df_abcd.pivot(index="date", columns="stock_id", values="f_n_confirmed")
+                    .reindex(close_wide.index)
+                    .fillna(0)
+                )
                 signal_mask = confirmed.astype(bool)
             except Exception as e:
                 return {"error": f"ABCD 偵測失敗：{e}"}
         elif pattern == "triangle":
             try:
                 from j1stools.pattern_triangle import add_triangle_compare_columns
+
                 _tri_cache_paths = [
                     os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache_2020_2025.pkl"),
                     os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache.pkl"),
@@ -732,6 +821,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
                         break
                 if df_tri is None:
                     from j1stools.pattern_triangle import find_human_triangle
+
                     df_tri = find_human_triangle(df_p.copy())
                 df_tri_sig = df_tri[df_tri["human_only"].fillna(False)]
                 for _, row in df_tri_sig.iterrows():
@@ -751,24 +841,33 @@ def execute_tool(name: str, inputs: dict) -> dict:
         if n < 20:
             return {"error": f"樣本太少（{n} 筆）"}
         if label_type == "hit":
-            return {"pattern": pattern, "hold_days": hold_days, "sample_count": n,
-                    "hit_rate": round(float(np.mean(values.astype(float))), 4)}
+            return {
+                "pattern": pattern,
+                "hold_days": hold_days,
+                "sample_count": n,
+                "hit_rate": round(float(np.mean(values.astype(float))), 4),
+            }
         values = values.astype(float)
-        return {"pattern": pattern, "hold_days": hold_days, "sample_count": n,
-                "avg_return": round(float(np.mean(values)), 4),
-                "win_rate": round(float((values > 0).mean()), 4)}
+        return {
+            "pattern": pattern,
+            "hold_days": hold_days,
+            "sample_count": n,
+            "avg_return": round(float(np.mean(values)), 4),
+            "win_rate": round(float((values > 0).mean()), 4),
+        }
 
     if name == "run_backtest":
         from j1stools.backtest_engine import backtest_engine
+
         condition = _normalize_condition(inputs["condition"])
         hold_days = inputs.get("hold_days", 10)
-        sl_stop   = inputs.get("sl_stop", 0.08)
-        tp_stop   = inputs.get("tp_stop", 0.15)
-        start     = inputs.get("start", PREDICT_START)
-        end       = inputs.get("end", SESSION_END)
+        sl_stop = inputs.get("sl_stop", 0.08)
+        tp_stop = inputs.get("tp_stop", 0.15)
+        start = inputs.get("start", PREDICT_START)
+        end = inputs.get("end", SESSION_END)
         # 往前多載 120 天讓指標有 warmup，避免 MA60/RSI 等計算錯誤觸發假信號
         warmup_start = (pd.Timestamp(start) - pd.DateOffset(days=120)).strftime("%Y-%m-%d")
-        signal_start  = pd.Timestamp(start)
+        signal_start = pd.Timestamp(start)
         try:
             ind, close = _build_indicators(WATCH_STOCKS, warmup_start, end)
         except Exception as e:
@@ -782,55 +881,83 @@ def execute_tool(name: str, inputs: dict) -> dict:
         entries = entries.reindex(index=close.index, columns=close.columns).fillna(False).astype(bool)
         # warmup 期間不允許開倉
         entries.loc[entries.index < signal_start] = False
-        close   = close.loc[close.index >= signal_start]
+        close = close.loc[close.index >= signal_start]
         entries = entries.loc[entries.index >= signal_start]
-        exits       = pd.Series(False, index=close.index)
-        df_proba    = pd.DataFrame(1.0, index=close.index, columns=close.columns)
+        exits = pd.Series(False, index=close.index)
+        df_proba = pd.DataFrame(1.0, index=close.index, columns=close.columns)
         stock_group = {s: "default" for s in close.columns}
         try:
             portfolio_value, trades_df, _ = backtest_engine(
-                close=close, entries=entries, exits=exits, df_proba=df_proba,
-                stock_group=stock_group, hold_days=hold_days, sl_stop=sl_stop, tp_stop=tp_stop,
-                use_fixed_sl=True, use_fixed_tp=True, use_sl_trail=False, use_hold_days=True,
+                close=close,
+                entries=entries,
+                exits=exits,
+                df_proba=df_proba,
+                stock_group=stock_group,
+                hold_days=hold_days,
+                sl_stop=sl_stop,
+                tp_stop=tp_stop,
+                use_fixed_sl=True,
+                use_fixed_tp=True,
+                use_sl_trail=False,
+                use_hold_days=True,
             )
         except Exception as e:
             return {"error": f"回測失敗：{e}"}
         if len(trades_df) < 5:
             return {"error": f"交易筆數不足（{len(trades_df)} 筆）"}
-        pv           = portfolio_value.dropna()
-        rets         = pv.pct_change(fill_method=None).dropna()
+        pv = portfolio_value.dropna()
+        rets = pv.pct_change(fill_method=None).dropna()
         total_return = round(float(pv.iloc[-1] / pv.iloc[0] - 1), 4) if len(pv) > 1 else None
-        sharpe       = round(float(rets.mean() / rets.std() * (252**0.5)) if rets.std() > 0 else 0, 2)
-        max_dd       = round(float(((pv / pv.cummax()) - 1).min()), 4)
-        rp           = trades_df.get("return_pct", pd.Series(dtype=float))
-        win_rate     = round(float((rp > 0).mean()), 4) if len(rp) else None
-        avg_return   = round(float(rp.mean()), 4) if len(rp) else None
-        avg_win      = round(float(rp[rp > 0].mean()), 4) if (rp > 0).any() else 0
-        avg_loss     = round(float(rp[rp < 0].mean()), 4) if (rp < 0).any() else 0
-        chart_path   = None
+        sharpe = round(float(rets.mean() / rets.std() * (252**0.5)) if rets.std() > 0 else 0, 2)
+        max_dd = round(float(((pv / pv.cummax()) - 1).min()), 4)
+        rp = trades_df.get("return_pct", pd.Series(dtype=float))
+        win_rate = round(float((rp > 0).mean()), 4) if len(rp) else None
+        avg_return = round(float(rp.mean()), 4) if len(rp) else None
+        avg_win = round(float(rp[rp > 0].mean()), 4) if (rp > 0).any() else 0
+        avg_loss = round(float(rp[rp < 0].mean()), 4) if (rp < 0).any() else 0
+        chart_path = None
         try:
             from j1stools.j1s_chart import plot_performance
             import plotly.graph_objects as go, json as _json
-            pv_clean   = portfolio_value.replace([np.inf, -np.inf], np.nan).dropna()
-            fig_json   = plot_performance(pv_clean, trades_df, is_web=True)
-            fig        = go.Figure(_json.loads(fig_json))
-            results_d  = _results_dir(hypothesis)
-            slug       = condition[:60].replace(" ", "").replace("(","").replace(")","").replace(">","gt").replace("<","lt").replace("&","_")
+
+            pv_clean = portfolio_value.replace([np.inf, -np.inf], np.nan).dropna()
+            fig_json = plot_performance(pv_clean, trades_df, is_web=True)
+            fig = go.Figure(_json.loads(fig_json))
+            results_d = _results_dir(hypothesis)
+            slug = (
+                condition[:60]
+                .replace(" ", "")
+                .replace("(", "")
+                .replace(")", "")
+                .replace(">", "gt")
+                .replace("<", "lt")
+                .replace("&", "_")
+            )
             chart_path = os.path.join(results_d, f"chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{slug}.html")
             fig.write_html(chart_path)
         except Exception:
             pass
-        return {"condition": condition, "period": f"{start}~{end}", "hold_days": hold_days,
-                "total_trades": len(trades_df), "total_return": total_return, "sharpe": sharpe,
-                "max_drawdown": max_dd, "win_rate": win_rate, "avg_return": avg_return,
-                "avg_win": avg_win, "avg_loss": avg_loss, "chart": chart_path}
+        return {
+            "condition": condition,
+            "period": f"{start}~{end}",
+            "hold_days": hold_days,
+            "total_trades": len(trades_df),
+            "total_return": total_return,
+            "sharpe": sharpe,
+            "max_drawdown": max_dd,
+            "win_rate": win_rate,
+            "avg_return": avg_return,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "chart": chart_path,
+        }
 
     return {"error": f"未知工具：{name}"}
 
 
 # ── 系統 Prompt（根據假設動態生成）────────────────────────────────
 def _build_system_prompt(hypothesis: str) -> str:
-    cfg        = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
+    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
     categories = cfg.get("indicator_categories", {})
 
     # 把分類格式化成 prompt 區塊
@@ -854,11 +981,16 @@ def _build_system_prompt(hypothesis: str) -> str:
 {cat_block}
 
 工作規則：
-1. 依序從每個類別選 2~3 個指標，組合成條件
-2. 呼叫 analyze_signal(label_type="hit", hold_days=10, profit_target=0.15)
-3. 篩選標準：hit_rate >= 0.35 且 sample_count >= 100
-4. 某個類別找到 2~3 個通過條件後，立刻換下一個類別
-5. 所有類別都探索完後才可以停止
+1. **第一步必須呼叫 check_history()**，查看：
+   - focus_needed（哪些類別還需要補）→ 優先探索這些
+   - saturated_indicators（哪些指標已飽和）→ 這些不要再用
+   - passed_conditions（已通過的條件）→ 這些已覆蓋，去別的地方
+2. 優先從 focus_needed 的類別中選指標組合條件
+3. 避免使用 saturated_indicators 裡的指標（已出現 3 次以上）
+4. 呼叫 analyze_signal(label_type="hit", hold_days=10, profit_target=0.15)
+5. 篩選標準：hit_rate >= 0.35 且 sample_count >= 100
+6. 某個類別找到 2 個通過條件後，立刻換下一個類別
+7. 所有類別的 category_coverage 都是 ✅ 後才可以停止
 
 ━━ 探索提示 ━━
 {cfg['explore_hint']}
@@ -894,9 +1026,11 @@ def _compress_result(fn_name: str, result: dict) -> str:
             return f"hit={result['hit_rate']} n={result.get('sample_count')} {flag} ...{cond}"
         return f"avg={result.get('avg_return')} win={result.get('win_rate')} n={result.get('sample_count')} ...{cond}"
     if fn_name == "run_backtest":
-        return (f"return={result.get('total_return')} sharpe={result.get('sharpe')} "
-                f"mdd={result.get('max_drawdown')} win={result.get('win_rate')} "
-                f"trades={result.get('total_trades')} period={result.get('period')}")
+        return (
+            f"return={result.get('total_return')} sharpe={result.get('sharpe')} "
+            f"mdd={result.get('max_drawdown')} win={result.get('win_rate')} "
+            f"trades={result.get('total_trades')} period={result.get('period')}"
+        )
     if fn_name == "scan_correlations":
         top = result.get("top_correlations", [])[:8]
         return "top: " + " ".join(f"{r['feature']}({r['correlation']})" for r in top)
@@ -910,13 +1044,13 @@ def _compress_result(fn_name: str, result: dict) -> str:
 def _trim_messages(messages: list, keep_last: int = 20) -> list:
     if len(messages) <= 2:
         return messages
-    fixed   = messages[:2]
-    rest    = messages[2:]
+    fixed = messages[:2]
+    rest = messages[2:]
     if len(rest) <= keep_last:
         return messages
     trimmed = rest[-keep_last:]
     while trimmed:
-        msg  = trimmed[0]
+        msg = trimmed[0]
         role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
         if role == "tool":
             trimmed = trimmed[1:]
@@ -934,7 +1068,7 @@ def _build_history_prompt(entries: list[dict]) -> str:
         return ""
     passed = [e for e in entries if e.get("hit_rate", 0) >= 0.35]
     failed = [e for e in entries if e.get("hit_rate", 0) < 0.35 and "condition" in e]
-    lines  = ["\n━━ 歷史紀錄（避免重複，探索新方向）━━"]
+    lines = ["\n━━ 歷史紀錄（避免重複，探索新方向）━━"]
     if passed:
         lines.append(f"\n✅ 通過({len(passed)}筆)：")
         for e in passed[-5:]:
@@ -971,11 +1105,12 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
     if os.path.exists(sig_path):
         bak_path = sig_path + ".bak"
         import shutil
+
         shutil.copy2(sig_path, bak_path)
         os.remove(sig_path)
         print(f"  [session] 舊 signal_log 已備份為 .bak，重新開始記錄")
 
-    cfg  = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
+    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
     task = (
         f"為「{cfg['name']}」假設蒐集特徵候選條件（用於建立選股模型）。\n"
         f"目標：hit_rate >= 0.35 且 sample_count >= 100（{TRAIN_START}~{TRAIN_END}）。\n"
@@ -983,21 +1118,21 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
         f"提示：可先呼叫 check_history() 查看已測試記錄，避免重複。"
     )
 
-    messages      = [{"role": "system", "content": _build_system_prompt(hypothesis)},
-                     {"role": "user",   "content": task}]
-    final_text    = ""
+    messages = [{"role": "system", "content": _build_system_prompt(hypothesis)}, {"role": "user", "content": task}]
+    final_text = ""
     _rate_limit_count = 0
-    _call_count   = 0
-    _tool_usage: dict = {}   # tool 名稱 → 呼叫次數
+    _call_count = 0
+    _tool_usage: dict = {}  # tool 名稱 → 呼叫次數
 
     def _get_tools_with_usage() -> list:
         import copy as _copy
-        sig_entries  = _load_signal_log(hypothesis, max_entries=9999)
-        n_tested     = len(sig_entries)
-        n_passed     = len([e for e in sig_entries if e.get("hit_rate", 0) >= 0.35])
+
+        sig_entries = _load_signal_log(hypothesis, max_entries=9999)
+        n_tested = len(sig_entries)
+        n_passed = len([e for e in sig_entries if e.get("hit_rate", 0) >= 0.35])
         result = _copy.deepcopy(TOOLS)
         for tool in result:
-            name  = tool["function"]["name"]
+            name = tool["function"]["name"]
             count = _tool_usage.get(name, 0)
             notes = []
             if count > 0:
@@ -1010,7 +1145,9 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
                 tool["function"]["description"] += f"（{'；'.join(notes)}）"
         return result
 
-    print(f"\n[{cfg['name']}] 開始探索... {'（測試：最多 ' + str(max_calls) + ' 次工具呼叫）' if max_calls else ''}\n{'─' * 60}")
+    print(
+        f"\n[{cfg['name']}] 開始探索... {'（測試：最多 ' + str(max_calls) + ' 次工具呼叫）' if max_calls else ''}\n{'─' * 60}"
+    )
 
     while True:
         try:
@@ -1038,12 +1175,13 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
             # llama 的舊格式 tool call：<function=name,{args}> 或 tool name 混入 args
             if "tool_use_failed" in err or "tool call validation failed" in err:
                 import re as _re
+
                 # 嘗試從錯誤訊息解析出 tool name 和 args
                 m = _re.search(r"attempted to call tool '([^,{]+)[,{]([^']*)'", err)
                 if not m:
                     m = _re.search(r"<function=([^,>]+)[,>](\{[^<]*\})?", err)
                 if m:
-                    _fn  = m.group(1).strip()
+                    _fn = m.group(1).strip()
                     _raw = m.group(2) or "{}"
                     try:
                         _args = json.loads(_raw if _raw.startswith("{") else "{}")
@@ -1055,10 +1193,21 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
                     print(f"  {_compressed}")
                     # 補一個假的 assistant + tool 訊息讓對話繼續
                     import uuid as _uuid
+
                     _fake_id = f"fix_{_uuid.uuid4().hex[:8]}"
-                    messages.append({"role": "assistant", "content": None, "tool_calls": [
-                        {"id": _fake_id, "type": "function", "function": {"name": _fn, "arguments": json.dumps(_args)}}
-                    ]})
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": _fake_id,
+                                    "type": "function",
+                                    "function": {"name": _fn, "arguments": json.dumps(_args)},
+                                }
+                            ],
+                        }
+                    )
                     messages.append({"role": "tool", "tool_call_id": _fake_id, "content": _compressed})
                     _call_count += 1
                     if max_calls and _call_count >= max_calls:
@@ -1072,6 +1221,27 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
 
         msg = response.choices[0].message
         messages.append(msg)
+
+        # 存 agent 思考過程（assistant 訊息）
+        if msg.content:
+            try:
+                _think_path = os.path.join(_results_dir(hypothesis), "thinking_log.jsonl")
+                with open(_think_path, "a", encoding="utf-8") as _tf:
+                    _tf.write(
+                        json.dumps(
+                            {
+                                "call": _call_count,
+                                "model": _current_model(),
+                                "thinking": msg.content,
+                                "tool_calls": [tc.function.name for tc in msg.tool_calls] if msg.tool_calls else [],
+                                "time": datetime.now().strftime("%H:%M:%S"),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
 
         if not msg.tool_calls:
             final_text = msg.content or ""
@@ -1089,7 +1259,7 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
             fn_name = tc.function.name
             fn_args = json.loads(tc.function.arguments)
             print(f"→ {fn_name}({json.dumps(fn_args, ensure_ascii=False)})")
-            result     = execute_tool(fn_name, fn_args)
+            result = execute_tool(fn_name, fn_args)
             compressed = _compress_result(fn_name, result)
             print(f"  {compressed}")
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": compressed})
@@ -1133,15 +1303,14 @@ def validate_and_train(hypothesis: str = "breakout"):
     _current_hypothesis = hypothesis
 
     passing = [
-        e for e in _load_signal_log(hypothesis)
-        if e.get("hit_rate", 0) >= 0.35 and e.get("sample_count", 0) >= 100
+        e for e in _load_signal_log(hypothesis) if e.get("hit_rate", 0) >= 0.35 and e.get("sample_count", 0) >= 100
     ]
     if not passing:
         print(f"[{hypothesis}] 沒有通過的條件，跳過驗證")
         return
 
-    done     = _load_backtested(hypothesis)
-    seen     = set()
+    done = _load_backtested(hypothesis)
+    seen = set()
     new_pass = []
     for e in passing:
         key = _canonical_condition(e.get("condition", ""))
@@ -1158,28 +1327,29 @@ def validate_and_train(hypothesis: str = "breakout"):
     # 預先載入預測期指標（計算 hit_rate_predict 用）
     try:
         ind_pred, close_pred = _get_indicators(PREDICT_START, SESSION_END)
-        future_high_pred = pd.concat(
-            [close_pred.shift(-i) for i in range(1, 11)], axis=0
-        ).groupby(level=0).max()
+        future_high_pred = pd.concat([close_pred.shift(-i) for i in range(1, 11)], axis=0).groupby(level=0).max()
     except Exception:
         ind_pred, close_pred, future_high_pred = None, None, None
 
     for entry in new_pass:
         cond = entry["condition"]
         print(f"\n→ 回測：{cond}")
-        bt = execute_tool("run_backtest", {
-            "condition": cond,
-            "hold_days": 10,
-            "sl_stop":   0.08,
-            "tp_stop":   0.15,
-            "start":     PREDICT_START,
-            "end":       SESSION_END,
-        })
+        bt = execute_tool(
+            "run_backtest",
+            {
+                "condition": cond,
+                "hold_days": 10,
+                "sl_stop": 0.08,
+                "tp_stop": 0.15,
+                "start": PREDICT_START,
+                "end": SESSION_END,
+            },
+        )
         # 計算預測期 hit_rate（同訓練期邏輯，純統計無停損）
         hit_rate_predict = None
         if ind_pred is not None:
             try:
-                sig  = eval(cond, {"__builtins__": {}}, ind_pred)
+                sig = eval(cond, {"__builtins__": {}}, ind_pred)
                 mask = sig.fillna(False).astype(bool)
                 vals = ((future_high_pred / close_pred - 1) >= 0.15)[mask].values.flatten()
                 vals = vals[~pd.isnull(vals)]
@@ -1187,16 +1357,24 @@ def validate_and_train(hypothesis: str = "breakout"):
                     hit_rate_predict = round(float(np.mean(vals.astype(float))), 4)
             except Exception:
                 pass
-        print(f"  hit_predict={hit_rate_predict} {json.dumps({k: v for k, v in bt.items() if k != 'chart'}, ensure_ascii=False)}")
+        print(
+            f"  hit_predict={hit_rate_predict} {json.dumps({k: v for k, v in bt.items() if k != 'chart'}, ensure_ascii=False)}"
+        )
         with open(backtest_log, "a", encoding="utf-8") as f:
-            f.write(json.dumps({
-                "condition":       cond,
-                "hit_rate":        entry.get("hit_rate"),
-                "hit_rate_predict": hit_rate_predict,
-                "sample_count":    entry.get("sample_count"),
-                "backtest":        bt,
-                "date":            datetime.now().strftime("%Y-%m-%d"),
-            }, ensure_ascii=False) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "condition": cond,
+                        "hit_rate": entry.get("hit_rate"),
+                        "hit_rate_predict": hit_rate_predict,
+                        "sample_count": entry.get("sample_count"),
+                        "backtest": bt,
+                        "date": datetime.now().strftime("%Y-%m-%d"),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
 
     # RFC 快速驗證
     print(f"\n[{hypothesis}] 訓練 RFC（快速驗證用）...")
@@ -1206,12 +1384,12 @@ def validate_and_train(hypothesis: str = "breakout"):
 
     try:
         n_stocks = 200
-        stocks   = _random.sample(WATCH_STOCKS, min(n_stocks, len(WATCH_STOCKS)))
+        stocks = _random.sample(WATCH_STOCKS, min(n_stocks, len(WATCH_STOCKS)))
         # 載完整資料（train+predict），才能做 train/test split
-        feat_df  = _build_rfc_features(stocks, TRAIN_START, SESSION_END)
+        feat_df = _build_rfc_features(stocks, TRAIN_START, SESSION_END)
 
-        close_wide  = feat_df.pivot(index="date", columns="stock_id", values="close")
-        future_max  = pd.concat([close_wide.shift(-i) for i in range(1, 11)], axis=0).groupby(level=0).max()
+        close_wide = feat_df.pivot(index="date", columns="stock_id", values="close")
+        future_max = pd.concat([close_wide.shift(-i) for i in range(1, 11)], axis=0).groupby(level=0).max()
         target_wide = ((future_max / close_wide - 1) >= 0.15).astype(int)
         target_long = target_wide.stack().reset_index()
         target_long.columns = ["date", "stock_id", "target"]
@@ -1219,11 +1397,11 @@ def validate_and_train(hypothesis: str = "breakout"):
 
         # 把通過條件加成 binary 特徵（ind 需要完整期間才能 eval）
         ind, _ = _build_indicators(stocks, TRAIN_START, SESSION_END)
-        added  = []
+        added = []
         for i, e in enumerate(sorted(passing, key=lambda x: x["hit_rate"], reverse=True)[:20]):
             col = f"f_signal_{i}"
             try:
-                sig     = eval(e["condition"], {"__builtins__": {}}, ind)
+                sig = eval(e["condition"], {"__builtins__": {}}, ind)
                 sig_long = sig.astype(float).stack().reset_index()
                 sig_long.columns = ["date", "stock_id", col]
                 feat_df = feat_df.merge(sig_long, on=["date", "stock_id"], how="left")
@@ -1233,18 +1411,18 @@ def validate_and_train(hypothesis: str = "breakout"):
                 pass
 
         tech_cols = [c for c in feat_df.columns if c.startswith("f_") and c not in added]
-        all_cols  = tech_cols + added
-        feat_df   = feat_df.dropna(subset=tech_cols + ["target"])
+        all_cols = tech_cols + added
+        feat_df = feat_df.dropna(subset=tech_cols + ["target"])
 
         # 固定切點：2024-01-01
         cutoff = pd.Timestamp(PREDICT_START)
-        train  = feat_df[feat_df["date"] < cutoff]
-        test   = feat_df[feat_df["date"] >= cutoff]
+        train = feat_df[feat_df["date"] < cutoff]
+        test = feat_df[feat_df["date"] >= cutoff]
 
         if len(train) < 200 or len(test) < 50:
             print(f"  資料不足：train={len(train)}, test={len(test)}")
         else:
-            actual    = test["target"].values
+            actual = test["target"].values
             base_rate = round(float(actual.mean()), 4)
 
             def _eval_rfc(feat_cols, model_name):
@@ -1254,31 +1432,32 @@ def validate_and_train(hypothesis: str = "breakout"):
                 thresholds = {}
                 for th in [0.5, 0.6, 0.7, 0.8, 0.9]:
                     mask = proba >= th
-                    n    = int(mask.sum())
+                    n = int(mask.sum())
                     thresholds[f"proba>={th}"] = (
-                        {"n": n, "hit_rate": round(float(actual[mask].mean()), 4)} if n >= 10
+                        {"n": n, "hit_rate": round(float(actual[mask].mean()), 4)}
+                        if n >= 10
                         else {"n": n, "note": "樣本不足"}
                     )
                 importance = sorted(zip(feat_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
-                top_feats  = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:10]]
+                top_feats = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:10]]
                 model_path = os.path.join(_results_dir(hypothesis), f"rfc_{model_name}.joblib")
                 joblib.dump(rfc, model_path)
                 print(f"  [{model_name}] base={base_rate} {thresholds}")
                 return {"thresholds": thresholds, "top_features": top_feats, "model_path": model_path}
 
             rfc_a = _eval_rfc(tech_cols, "tech_only")
-            rfc_b = _eval_rfc(all_cols,  "tech_signal")
+            rfc_b = _eval_rfc(all_cols, "tech_signal")
 
             rfc_result = {
-                "hypothesis":    hypothesis,
-                "base_rate":     base_rate,
-                "train_size":    len(train),
-                "test_size":     len(test),
-                "train_period":  f"{TRAIN_START} ~ {TRAIN_END}",
-                "test_period":   f"{PREDICT_START} ~ {SESSION_END}",
-                "model_a":       {"name": "技術指標",                    **rfc_a},
-                "model_b":       {"name": f"技術指標+top{len(added)}信號", **rfc_b},
-                "date":          datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "hypothesis": hypothesis,
+                "base_rate": base_rate,
+                "train_size": len(train),
+                "test_size": len(test),
+                "train_period": f"{TRAIN_START} ~ {TRAIN_END}",
+                "test_period": f"{PREDICT_START} ~ {SESSION_END}",
+                "model_a": {"name": "技術指標", **rfc_a},
+                "model_b": {"name": f"技術指標+top{len(added)}信號", **rfc_b},
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
             rfc_path = os.path.join(_results_dir(hypothesis), "rfc_result.json")
             with open(rfc_path, "w", encoding="utf-8") as f:
@@ -1293,10 +1472,10 @@ def validate_and_train(hypothesis: str = "breakout"):
 
 # ── 報表 ─────────────────────────────────────────────────────────
 def _generate_report(hypothesis: str):
-    results_d    = _results_dir(hypothesis)
+    results_d = _results_dir(hypothesis)
     backtest_log = _backtest_log_path(hypothesis)
-    cfg          = HYPOTHESIS_CONFIGS.get(hypothesis, {})
-    hyp_name     = cfg.get("name", hypothesis)
+    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, {})
+    hyp_name = cfg.get("name", hypothesis)
 
     if not os.path.exists(backtest_log):
         print(f"[報表] 無回測資料")
@@ -1306,24 +1485,26 @@ def _generate_report(hypothesis: str):
     with open(backtest_log, encoding="utf-8") as f:
         for line in f:
             try:
-                e  = json.loads(line)
+                e = json.loads(line)
                 bt = e.get("backtest", {})
                 if "error" in bt or bt.get("total_trades", 0) < 10:
                     continue
-                rows.append({
-                    "condition":        e["condition"],
-                    "hit_rate":         e.get("hit_rate", 0),
-                    "hit_rate_predict": e.get("hit_rate_predict"),
-                    "sample_count":     e.get("sample_count", 0),
-                    "trades":           bt.get("total_trades"),
-                    "total_return":     bt.get("total_return", 0),
-                    "sharpe":           bt.get("sharpe", 0),
-                    "max_drawdown":     bt.get("max_drawdown", 0),
-                    "win_rate":         bt.get("win_rate", 0),
-                    "avg_win":          bt.get("avg_win", 0),
-                    "avg_loss":         bt.get("avg_loss", 0),
-                    "chart":            bt.get("chart"),
-                })
+                rows.append(
+                    {
+                        "condition": e["condition"],
+                        "hit_rate": e.get("hit_rate", 0),
+                        "hit_rate_predict": e.get("hit_rate_predict"),
+                        "sample_count": e.get("sample_count", 0),
+                        "trades": bt.get("total_trades"),
+                        "total_return": bt.get("total_return", 0),
+                        "sharpe": bt.get("sharpe", 0),
+                        "max_drawdown": bt.get("max_drawdown", 0),
+                        "win_rate": bt.get("win_rate", 0),
+                        "avg_win": bt.get("avg_win", 0),
+                        "avg_loss": bt.get("avg_loss", 0),
+                        "chart": bt.get("chart"),
+                    }
+                )
             except Exception:
                 continue
 
@@ -1334,24 +1515,28 @@ def _generate_report(hypothesis: str):
     rows.sort(key=lambda x: x["sharpe"], reverse=True)
 
     def _sc(s):
-        if s >= 2.0: return "#1a7a3a"
-        if s >= 1.5: return "#2ecc71"
-        if s >= 1.0: return "#f39c12"
-        if s >= 0:   return "#e67e22"
+        if s >= 2.0:
+            return "#1a7a3a"
+        if s >= 1.5:
+            return "#2ecc71"
+        if s >= 1.0:
+            return "#f39c12"
+        if s >= 0:
+            return "#e67e22"
         return "#e74c3c"
 
     rows_html = ""
     for i, r in enumerate(rows):
         chart_link = f'<a href="{r["chart"]}" target="_blank">📊</a>' if r.get("chart") else ""
-        dd_color   = "#e74c3c" if r["max_drawdown"] < -0.15 else "#e67e22" if r["max_drawdown"] < -0.10 else "#2ecc71"
-        hr_pred    = r.get("hit_rate_predict")
+        dd_color = "#e74c3c" if r["max_drawdown"] < -0.15 else "#e67e22" if r["max_drawdown"] < -0.10 else "#2ecc71"
+        hr_pred = r.get("hit_rate_predict")
         hr_pred_str = f"{hr_pred:.1%}" if hr_pred is not None else "—"
         # 若訓練命中率大幅高於驗證命中率，標紅警示
         hr_pred_color = ""
         if hr_pred is not None and r["hit_rate"] - hr_pred > 0.10:
             hr_pred_color = 'style="color:#e74c3c"'
         rows_html += (
-            f'<tr>'
+            f"<tr>"
             f'<td style="text-align:center">{i+1}</td>'
             f'<td style="font-family:monospace;font-size:12px;white-space:nowrap">{r["condition"]}</td>'
             f'<td style="text-align:center;color:{_sc(r["sharpe"])};font-weight:bold">{r["sharpe"]:.2f}</td>'
@@ -1363,7 +1548,7 @@ def _generate_report(hypothesis: str):
             f'<td style="text-align:center" {hr_pred_color}>{hr_pred_str}</td>'
             f'<td style="text-align:center">{r["sample_count"]}</td>'
             f'<td style="text-align:center">{chart_link}</td>'
-            f'</tr>'
+            f"</tr>"
         )
 
     # RFC 區塊
@@ -1373,9 +1558,9 @@ def _generate_report(hypothesis: str):
         with open(rfc_path, encoding="utf-8") as f:
             rfc = json.load(f)
         train_p = rfc.get("train_period", "")
-        test_p  = rfc.get("test_period", "")
-        base    = rfc.get("base_rate", "?")
-        rfc_html = f'<p>訓練期：{train_p}　驗證期：{test_p}　基礎命中率：{base:.1%}</p>'
+        test_p = rfc.get("test_period", "")
+        base = rfc.get("base_rate", "?")
+        rfc_html = f"<p>訓練期：{train_p}　驗證期：{test_p}　基礎命中率：{base:.1%}</p>"
         for model_key in ["model_a", "model_b"]:
             m = rfc.get(model_key, {})
             if not m:
@@ -1387,32 +1572,33 @@ def _generate_report(hypothesis: str):
                     hr = v["hit_rate"]
                     hr_color = "#2ecc71" if hr >= 0.5 else "#f39c12" if hr >= 0.35 else "#e74c3c"
                     th_rows += (
-                        f'<tr>'
+                        f"<tr>"
                         f'<td style="text-align:center">{th}</td>'
                         f'<td style="text-align:center">{n}</td>'
                         f'<td style="text-align:center;color:{hr_color};font-weight:bold">{hr:.1%}</td>'
-                        f'</tr>'
+                        f"</tr>"
                     )
                 else:
                     th_rows += (
-                        f'<tr>'
+                        f"<tr>"
                         f'<td style="text-align:center">{th}</td>'
                         f'<td style="text-align:center;color:#555">{n}</td>'
                         f'<td style="text-align:center;color:#555">樣本不足</td>'
-                        f'</tr>'
+                        f"</tr>"
                     )
-            feat_str = ", ".join(f['feature'] for f in m.get("top_features", [])[:5])
+            feat_str = ", ".join(f["feature"] for f in m.get("top_features", [])[:5])
             rfc_html += (
                 f'<h4>{m.get("name","")}</h4>'
                 f'<table border="1" cellpadding="4" style="width:300px">'
-                f'<tr><th>門檻</th><th>樣本數</th><th>命中率</th></tr>'
-                f'{th_rows}</table>'
-                f'<p>重要特徵：{feat_str}</p>'
+                f"<tr><th>門檻</th><th>樣本數</th><th>命中率</th></tr>"
+                f"{th_rows}</table>"
+                f"<p>重要特徵：{feat_str}</p>"
             )
 
     # ── 指標使用統計（from signal_log，含未通過的）────────────────
     import re as _re
-    all_entries  = _load_signal_log(hypothesis, max_entries=9999)
+
+    all_entries = _load_signal_log(hypothesis, max_entries=9999)
     ind_counter: dict = {}
     for e in all_entries:
         cond = e.get("condition", "")
@@ -1420,30 +1606,30 @@ def _generate_report(hypothesis: str):
             ind_counter[t] = ind_counter.get(t, 0) + 1
         for t in _re.findall(r"\(\s*([a-z_]+)\s*\)", cond):
             ind_counter[t] = ind_counter.get(t, 0) + 1
-    ind_sorted   = sorted(ind_counter.items(), key=lambda x: -x[1])
-    max_ind_cnt  = ind_sorted[0][1] if ind_sorted else 1
+    ind_sorted = sorted(ind_counter.items(), key=lambda x: -x[1])
+    max_ind_cnt = ind_sorted[0][1] if ind_sorted else 1
     total_tested = len(all_entries)
     passed_count = len([e for e in all_entries if e.get("hit_rate", 0) >= 0.35])
 
     ind_rows_html = ""
     key_inds = set(cfg.get("key_indicators", []))
     for ind_name, cnt in ind_sorted:
-        pct      = cnt / max_ind_cnt * 100
-        is_key   = ind_name in key_inds
-        color    = "#4fc3f7" if is_key else "#aaa"
-        badge    = ' <span style="font-size:10px;color:#f39c12">★重點</span>' if is_key else ""
-        desc     = INDICATOR_DESCRIPTIONS.get(ind_name, "")
+        pct = cnt / max_ind_cnt * 100
+        is_key = ind_name in key_inds
+        color = "#4fc3f7" if is_key else "#aaa"
+        badge = ' <span style="font-size:10px;color:#f39c12">★重點</span>' if is_key else ""
+        desc = INDICATOR_DESCRIPTIONS.get(ind_name, "")
         desc_html = f'<span style="color:#666;font-size:12px;margin-left:8px">{desc}</span>' if desc else ""
         ind_rows_html += (
-            f'<tr>'
+            f"<tr>"
             f'<td style="font-family:monospace;color:{color}">{ind_name}{badge}{desc_html}</td>'
             f'<td style="text-align:center">{cnt}</td>'
             f'<td><div style="background:#3498db;height:12px;width:{pct:.0f}%;border-radius:3px;min-width:4px"></div></td>'
-            f'</tr>'
+            f"</tr>"
         )
 
     # ── 類別覆蓋摘要（通過條件中各類別出現幾次）──────────────────
-    categories     = cfg.get("indicator_categories", {})
+    categories = cfg.get("indicator_categories", {})
     passing_entries = [e for e in all_entries if e.get("hit_rate", 0) >= 0.35]
     cat_coverage: dict = {cat: 0 for cat in categories}
     for e in passing_entries:
@@ -1454,17 +1640,17 @@ def _generate_report(hypothesis: str):
     dim_rows_html = ""
     target_per_cat = 2
     for cat, cnt in cat_coverage.items():
-        inds_str   = ", ".join(categories[cat])
-        status     = "✅" if cnt >= target_per_cat else "⚠️" if cnt >= 1 else "⬜"
-        bar_color  = "#2ecc71" if cnt >= target_per_cat else "#f39c12" if cnt >= 1 else "#555"
-        bar_w      = min(cnt * 25, 100)
+        inds_str = ", ".join(categories[cat])
+        status = "✅" if cnt >= target_per_cat else "⚠️" if cnt >= 1 else "⬜"
+        bar_color = "#2ecc71" if cnt >= target_per_cat else "#f39c12" if cnt >= 1 else "#555"
+        bar_w = min(cnt * 25, 100)
         dim_rows_html += (
-            f'<tr>'
+            f"<tr>"
             f'<td style="font-weight:bold">{status} {cat}</td>'
             f'<td style="font-family:monospace;font-size:11px;color:#888">{inds_str}</td>'
             f'<td style="text-align:center">{cnt} 個</td>'
             f'<td><div style="background:{bar_color};height:12px;width:{bar_w}%;border-radius:3px;min-width:4px"></div></td>'
-            f'</tr>'
+            f"</tr>"
         )
 
     # ── Agent 最終報告文字 ─────────────────────────────────────────
@@ -1554,5 +1740,6 @@ def run_session(hypothesis: str = "breakout"):
 
 if __name__ == "__main__":
     import sys
+
     hyp = sys.argv[1] if len(sys.argv) > 1 else "breakout"
     run_session(hyp)
