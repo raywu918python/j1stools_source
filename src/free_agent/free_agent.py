@@ -22,64 +22,64 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 from groq import Groq
+from openai import OpenAI
 
 load_dotenv()
 
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+_groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
+_gemini_client = OpenAI(
+    api_key=os.environ.get("GEMINI_API_KEY", ""),
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+)
+_ollama_client = OpenAI(
+    api_key="ollama",
+    base_url="http://localhost:11434/v1",
+)
 
-# 額度用完自動輪換，順序：最強 → 備用 → 量大
+# 額度用完自動輪換，順序：本機 → 最強雲端 → 備用
+# 格式：(model_name, client)
 MODELS = [
-    "llama-3.3-70b-versatile",  # 1,000 次/天，tool calling 最穩
-    "llama-3.1-8b-instant",     # 14,400 次/天
+    ("qwen2.5:14b", _ollama_client),            # 本機，無限制，主力
+    ("llama-3.3-70b-versatile", _groq_client),  # 1,000 RPD，雲端備用
+    ("llama-3.1-8b-instant", _groq_client),     # 14,400 RPD，最後備用
+    # ("gemini-2.0-flash", _gemini_client),      # OpenAI 相容端點限制太嚴，暫停
 ]
 _model_idx = 0
 
 
 def _current_model() -> str:
-    return MODELS[_model_idx]
+    return MODELS[_model_idx][0]
+
+
+def _current_client():
+    return MODELS[_model_idx][1]
 
 
 def _next_model() -> bool:
     global _model_idx
     if _model_idx < len(MODELS) - 1:
         _model_idx += 1
-        print(f"\n[模型輪換] 切換至 {MODELS[_model_idx]}")
+        print(f"\n[模型輪換] 切換至 {MODELS[_model_idx][0]}")
         return True
     print("\n[模型輪換] 所有模型額度已用完，今天停止")
     return False
 
 
 # ── 工具定義（OpenAI 格式）─────────────────────────────────
-# 指標清單已在 SYSTEM_PROMPT 說明，description 只留用途
+# Llama 只負責探索統計，run_backtest/quick_rfc 由 validate_and_train() 純 Python 執行
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "quick_rfc",
-            "description": "訓練 RandomForestClassifier，用 predict_proba 評估各信心度門檻的命中率，回傳 feature importance。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "hold_days":     {"type": "integer", "description": "持有天數，預設 10"},
-                    "profit_target": {"type": "number",  "description": "目標報酬，預設 0.15"},
-                    "n_stocks":      {"type": "integer", "description": "抽樣股票數，預設 200"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "analyze_signal",
-            "description": "測試條件字串，回傳 hit_rate/avg_return/win_rate/sample_count。條件格式見 SYSTEM_PROMPT。",
+            "description": "測試條件字串，回傳 hit_rate/sample_count。條件格式見 SYSTEM_PROMPT。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "condition":      {"type": "string",  "description": "條件字串，用 & | ~ "},
-                    "hold_days":      {"type": "integer", "description": "持有天數，預設 10"},
-                    "label_type":     {"type": "string",  "description": "hit/return/max_return/atr_move，預設 hit"},
-                    "profit_target":  {"type": "number",  "description": "hit 的目標報酬，預設 0.15"},
+                    "condition": {"type": "string", "description": "條件字串，用 & | ~，每個子句加括號"},
+                    "hold_days": {"type": "integer", "description": "持有天數，預設 10"},
+                    "label_type": {"type": "string", "description": "hit/return/max_return/atr_move，預設 hit"},
+                    "profit_target": {"type": "number", "description": "hit 的目標報酬，預設 0.15"},
                 },
                 "required": ["condition"],
             },
@@ -93,28 +93,11 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "hold_days":     {"type": "integer", "description": "持有天數，預設 10"},
-                    "profit_target": {"type": "number",  "description": "目標報酬，預設 0.15"},
-                    "top_n":         {"type": "integer", "description": "回傳前幾名，預設 20"},
+                    "hold_days": {"type": "integer", "description": "持有天數，預設 10"},
+                    "profit_target": {"type": "number", "description": "目標報酬，預設 0.15"},
+                    "top_n": {"type": "integer", "description": "回傳前幾名，預設 20"},
                 },
                 "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_backtest",
-            "description": "條件通過 analyze_signal 後執行回測，設停損停利，回傳 sharpe/win_rate/MDD/total_return。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "condition": {"type": "string",  "description": "進場條件字串"},
-                    "hold_days": {"type": "integer", "description": "最大持有天數，預設 10"},
-                    "sl_stop":   {"type": "number",  "description": "停損，預設 0.08"},
-                    "tp_stop":   {"type": "number",  "description": "停利，預設 0.15"},
-                },
-                "required": ["condition"],
             },
         },
     },
@@ -126,9 +109,9 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "pattern":    {"type": "string", "description": "abcd 或 triangle"},
-                    "hold_days":  {"type": "integer", "description": "持有天數，預設 5"},
-                    "label_type": {"type": "string",  "description": "return/max_return/atr_move，預設 return"},
+                    "pattern": {"type": "string", "description": "abcd 或 triangle"},
+                    "hold_days": {"type": "integer", "description": "持有天數，預設 5"},
+                    "label_type": {"type": "string", "description": "return/max_return/atr_move，預設 return"},
                 },
                 "required": ["pattern"],
             },
@@ -381,15 +364,16 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
 def _normalize_condition(cond: str) -> str:
     """把 a>1&b<2 補成 (a>1) & (b<2)，避免 pandas operator precedence 錯誤"""
     import re
-    tokens = re.split(r'(\s*[&|]\s*)', cond.strip())
+
+    tokens = re.split(r"(\s*[&|]\s*)", cond.strip())
     result = []
     for tok in tokens:
         s = tok.strip()
-        if s in ('&', '|'):
-            result.append(f' {s} ')
+        if s in ("&", "|"):
+            result.append(f" {s} ")
         elif s:
-            result.append(s if s.startswith('(') else f'({s})')
-    return ''.join(result)
+            result.append(s if s.startswith("(") else f"({s})")
+    return "".join(result)
 
 
 # ── 工具執行 ───────────────────────────────────────────────
@@ -462,9 +446,9 @@ def execute_tool(name: str, inputs: dict) -> dict:
         from sklearn.ensemble import RandomForestClassifier
         from j1stools import parquet_db
 
-        hold_days     = inputs.get("hold_days", 10)
+        hold_days = inputs.get("hold_days", 10)
         profit_target = inputs.get("profit_target", 0.15)
-        n_stocks      = inputs.get("n_stocks", 200)
+        n_stocks = inputs.get("n_stocks", 200)
 
         stocks = _random.sample(WATCH_STOCKS, min(n_stocks, len(WATCH_STOCKS)))
 
@@ -475,9 +459,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
         # target：N天最高點 >= profit_target → 1，否則 0
         close_wide = feat_df.pivot(index="date", columns="stock_id", values="close")
-        future_max  = pd.concat(
-            [close_wide.shift(-i) for i in range(1, hold_days + 1)], axis=0
-        ).groupby(level=0).max()
+        future_max = pd.concat([close_wide.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).max()
         target_wide = ((future_max / close_wide - 1) >= profit_target).astype(int)
         target_long = target_wide.stack().reset_index()
         target_long.columns = ["date", "stock_id", "target"]
@@ -508,17 +490,17 @@ def execute_tool(name: str, inputs: dict) -> dict:
         feat_df = feat_df.dropna(subset=[c for c in f_cols if c not in added_signal_feats] + ["target"])
 
         # 時間切分：前 80% 訓練，後 20% 測試
-        dates  = sorted(feat_df["date"].unique())
+        dates = sorted(feat_df["date"].unique())
         cutoff = dates[int(len(dates) * 0.8)]
-        train  = feat_df[feat_df["date"] < cutoff]
-        test   = feat_df[feat_df["date"] >= cutoff]
+        train = feat_df[feat_df["date"] < cutoff]
+        test = feat_df[feat_df["date"] >= cutoff]
 
         if len(train) < 200 or len(test) < 100:
             return {"error": f"資料不足：train={len(train)}, test={len(test)}"}
 
         rfc = RandomForestClassifier(n_estimators=100, max_depth=6, n_jobs=-1, random_state=42)
         rfc.fit(train[f_cols], train["target"])
-        proba  = rfc.predict_proba(test[f_cols])[:, 1]
+        proba = rfc.predict_proba(test[f_cols])[:, 1]
         actual = test["target"].values
 
         # 基準率：不用模型，直接看有多少筆命中
@@ -528,7 +510,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
         results = {}
         for th in [0.5, 0.6, 0.7, 0.8]:
             mask = proba >= th
-            n    = int(mask.sum())
+            n = int(mask.sum())
             if n < 10:
                 results[f"proba>={th}"] = {"n": n, "note": "樣本不足"}
                 continue
@@ -536,23 +518,24 @@ def execute_tool(name: str, inputs: dict) -> dict:
             results[f"proba>={th}"] = {"n": n, "hit_rate": round(hit, 4)}
 
         # feature importance 排名
-        importance   = sorted(zip(f_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
+        importance = sorted(zip(f_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
         top_features = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:10]]
 
         import joblib
+
         model_path = os.path.join(os.path.dirname(__file__), "quick_rfc.joblib")
         joblib.dump(rfc, model_path)
 
         return {
-            "hold_days":          hold_days,
-            "profit_target":      profit_target,
-            "train_size":         len(train),
-            "test_size":          len(test),
-            "base_rate":          base_rate,
-            "thresholds":         results,
-            "top_features":       top_features,
+            "hold_days": hold_days,
+            "profit_target": profit_target,
+            "train_size": len(train),
+            "test_size": len(test),
+            "base_rate": base_rate,
+            "thresholds": results,
+            "top_features": top_features,
             "signal_feats_added": len(added_signal_feats),
-            "model_saved":        model_path,
+            "model_saved": model_path,
         }
 
     if name == "run_backtest":
@@ -560,8 +543,8 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
         condition = _normalize_condition(inputs["condition"])
         hold_days = inputs.get("hold_days", 10)
-        sl_stop   = inputs.get("sl_stop", 0.08)
-        tp_stop   = inputs.get("tp_stop", 0.15)
+        sl_stop = inputs.get("sl_stop", 0.08)
+        tp_stop = inputs.get("tp_stop", 0.15)
 
         try:
             ind, close = _build_indicators(WATCH_STOCKS, SESSION_START, SESSION_END)
@@ -576,18 +559,25 @@ def execute_tool(name: str, inputs: dict) -> dict:
         if not isinstance(entries, pd.DataFrame):
             return {"error": "條件必須回傳 DataFrame"}
 
-        entries     = entries.reindex(index=close.index, columns=close.columns).fillna(False).astype(bool)
-        exits       = pd.Series(False, index=close.index)
-        df_proba    = pd.DataFrame(1.0,   index=close.index, columns=close.columns)
+        entries = entries.reindex(index=close.index, columns=close.columns).fillna(False).astype(bool)
+        exits = pd.Series(False, index=close.index)
+        df_proba = pd.DataFrame(1.0, index=close.index, columns=close.columns)
         stock_group = {s: "default" for s in close.columns}
 
         try:
             portfolio_value, trades_df, _ = backtest_engine(
-                close=close, entries=entries, exits=exits,
-                df_proba=df_proba, stock_group=stock_group,
-                hold_days=hold_days, sl_stop=sl_stop, tp_stop=tp_stop,
-                use_fixed_sl=True, use_fixed_tp=True,
-                use_sl_trail=False, use_hold_days=True,
+                close=close,
+                entries=entries,
+                exits=exits,
+                df_proba=df_proba,
+                stock_group=stock_group,
+                hold_days=hold_days,
+                sl_stop=sl_stop,
+                tp_stop=tp_stop,
+                use_fixed_sl=True,
+                use_fixed_tp=True,
+                use_sl_trail=False,
+                use_hold_days=True,
             )
         except Exception as e:
             return {"error": f"回測失敗：{e}"}
@@ -595,19 +585,19 @@ def execute_tool(name: str, inputs: dict) -> dict:
         if len(trades_df) < 5:
             return {"error": f"交易筆數不足（{len(trades_df)} 筆）"}
 
-        pv           = portfolio_value.dropna()
-        rets         = pv.pct_change(fill_method=None).dropna()
+        pv = portfolio_value.dropna()
+        rets = pv.pct_change(fill_method=None).dropna()
         total_return = round(float(pv.iloc[-1] / pv.iloc[0] - 1), 4) if len(pv) > 1 else None
-        sharpe       = round(float(rets.mean() / rets.std() * (252 ** 0.5)) if rets.std() > 0 else 0, 2)
-        max_dd       = round(float(((pv / pv.cummax()) - 1).min()), 4)
+        sharpe = round(float(rets.mean() / rets.std() * (252**0.5)) if rets.std() > 0 else 0, 2)
+        max_dd = round(float(((pv / pv.cummax()) - 1).min()), 4)
 
         # trades_df 欄位：return_pct（百分比），pnl（絕對值）
         if "return_pct" in trades_df.columns:
-            rp         = trades_df["return_pct"]
-            win_rate   = round(float((rp > 0).mean()), 4)
+            rp = trades_df["return_pct"]
+            win_rate = round(float((rp > 0).mean()), 4)
             avg_return = round(float(rp.mean()), 4)
-            avg_win    = round(float(rp[rp > 0].mean()), 4) if (rp > 0).any() else 0
-            avg_loss   = round(float(rp[rp < 0].mean()), 4) if (rp < 0).any() else 0
+            avg_win = round(float(rp[rp > 0].mean()), 4) if (rp > 0).any() else 0
+            avg_loss = round(float(rp[rp < 0].mean()), 4) if (rp < 0).any() else 0
         else:
             win_rate = avg_return = avg_win = avg_loss = None
 
@@ -616,10 +606,19 @@ def execute_tool(name: str, inputs: dict) -> dict:
         try:
             from j1stools.j1s_chart import plot_performance
             import plotly.graph_objects as go, json as _json
-            fig_json  = plot_performance(portfolio_value, trades_df, is_web=True)
-            fig       = go.Figure(_json.loads(fig_json))
+
+            fig_json = plot_performance(portfolio_value, trades_df, is_web=True)
+            fig = go.Figure(_json.loads(fig_json))
             os.makedirs(RESULTS_DIR, exist_ok=True)
-            slug      = condition[:60].replace(" ", "").replace("(", "").replace(")", "").replace(">", "gt").replace("<", "lt").replace("&", "_")
+            slug = (
+                condition[:60]
+                .replace(" ", "")
+                .replace("(", "")
+                .replace(")", "")
+                .replace(">", "gt")
+                .replace("<", "lt")
+                .replace("&", "_")
+            )
             chart_path = os.path.join(RESULTS_DIR, f"chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{slug}.html")
             fig.write_html(chart_path)
             print(f"  圖表已存：{chart_path}")
@@ -627,19 +626,19 @@ def execute_tool(name: str, inputs: dict) -> dict:
             print(f"  圖表存檔失敗：{ce}")
 
         return {
-            "condition":     condition,
-            "hold_days":     hold_days,
-            "sl_stop":       sl_stop,
-            "tp_stop":       tp_stop,
-            "total_trades":  len(trades_df),
-            "total_return":  total_return,
-            "sharpe":        sharpe,
-            "max_drawdown":  max_dd,
-            "win_rate":      win_rate,
-            "avg_return":    avg_return,
-            "avg_win":       avg_win,
-            "avg_loss":      avg_loss,
-            "chart":         chart_path,
+            "condition": condition,
+            "hold_days": hold_days,
+            "sl_stop": sl_stop,
+            "tp_stop": tp_stop,
+            "total_trades": len(trades_df),
+            "total_return": total_return,
+            "sharpe": sharpe,
+            "max_drawdown": max_dd,
+            "win_rate": win_rate,
+            "avg_return": avg_return,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "chart": chart_path,
         }
 
     if name == "analyze_signal":
@@ -838,51 +837,27 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
 
 # ── Agent 主循環 ───────────────────────────────────────────
-SYSTEM_PROMPT = """你是台灣股票量化研究助理，目標：找出 10 天內最高點能超過 +15% 的有效指標組合。
+SYSTEM_PROMPT = """你是台灣股票量化研究助理，專門探索「10天最高點超過+15%」的有效指標組合。
 
-━━ 可用指標（analyze_signal 的 condition 字串）━━
-【報價】close, high, low, open, volume
-【均線】ma5, ma10, ma20, ma60, ma120；交叉: ma5_x_ma10, ma5_x_ma20, ma10_x_ma60
-【動能】rsi, macd, signal, macdh, bb_upper, bb_lower, bb_mid, bb_width
-【趨勢】adx(>25趨勢,>40強), plus_di, minus_di
-【波動】atr, atr_rank(波動百分位 0~1)
-【量能】vol_ratio(今量/20日均), vol_trend(量能趨勢), obv, obv_ma
-【ABCD】f_n_confirmed(1=N字成立), f_n_structure_score, f_n_bc_retracement, f_n_ab_gain, f_n_d_breakout_strength, f_n_volume_confirm
-【IB】net_foreign, net_trust, net_dealer, net_inst; foreign_rank, trust_rank, dealer_rank, inst_rank
-【Margin】margin_bal, short_bal, margin_chg, short_chg, short_ratio; margin_chg_rank, short_ratio_rank
+━━ 可用指標（condition 用 & | ~，每個子句加括號）━━
+報價: close,high,low,open,volume
+均線: ma5,ma10,ma20,ma60,ma120；交叉: ma5_x_ma10,ma5_x_ma20,ma10_x_ma60
+動能: rsi,macd,macdh,bb_upper,bb_lower,bb_mid,bb_width
+趨勢: adx(>25有趨勢),plus_di,minus_di
+波動: atr,atr_rank(0~1百分位)
+量能: vol_ratio(今量/20均),vol_trend,obv,obv_ma
+ABCD: f_n_confirmed,f_n_structure_score,f_n_ab_gain,f_n_d_breakout_strength,f_n_volume_confirm
+IB: net_foreign,net_trust,net_dealer,net_inst,foreign_rank,trust_rank,dealer_rank,inst_rank
+Margin: margin_bal,short_bal,margin_chg,short_chg,short_ratio,margin_chg_rank,short_ratio_rank
 
-label_type 選擇：
-  return      — 持有 N 天固定報酬
-  max_return  — N 天內最高點報酬
-  atr_move    — N 天內是否漲超過 1 ATR（命中率）
-  hit         — N 天內最高點 >= profit_target 的命中率 ← 主要用這個
+━━ 工作流程 ━━
+1. 先呼叫 scan_correlations(hold_days=10,profit_target=0.15)，記住 top 相關指標
+2. 用高相關指標組合條件，呼叫 analyze_signal(label_type="hit",hold_days=10,profit_target=0.15)
+3. 篩選標準：hit_rate>=0.35 且 sample_count>=30
+4. 不通過→換方向，不重複已試過的組合
+5. 找到越多通過條件越好，盡量多試
 
-━━ 工作流程（三步驟）━━
-
-【步驟一：相關性掃描】
-1. 第一步固定呼叫 scan_correlations(hold_days=10, profit_target=0.15)
-2. 記住 top 10 相關性指標，之後的 analyze_signal 條件以這些指標為主軸
-
-【步驟二：統計篩選（1年資料）】
-3. 根據相關性排名，組合 6~8 個條件，用高相關性指標為核心，再加其他過濾
-4. 每個條件用 analyze_signal(label_type="hit", hold_days=10, profit_target=0.15)
-5. 篩選標準：hit_rate >= 0.35 且 sample_count >= 30
-6. 不通過 → 參考相關性結果修改（最多調整 3 次）
-
-【步驟三：回測驗證（含停損停利）】
-7. 每個通過的條件執行 run_backtest(condition=..., hold_days=10, sl_stop=0.08, tp_stop=0.15)
-8. 評估標準：win_rate > 0.5 且 sharpe > 0.5 且 avg_loss > -0.09（停損有效）
-9. 通過回測的條件才算真正有效
-
-【步驟四：RFC 模型（全期 2015-2026）】
-10. 回測通過後，執行 quick_rfc(hold_days=10, profit_target=0.15)
-11. 看 top_features 和 thresholds，對比 base_rate
-
-━━ 報告格式 ━━
-通過條件：條件字串 + hit_rate + sample_count + 分析說明
-RFC 結果：各門檻 hit_rate vs base_rate，結論
-建議：下一步特徵設計方向
-
+回測與模型訓練由外部程式處理，你只負責找條件。
 請用繁體中文回覆。"""
 
 
@@ -908,11 +883,8 @@ def _compress_result(fn_name: str, result: dict) -> str:
 
     if fn_name == "quick_rfc":
         base = result.get("base_rate")
-        ths  = result.get("thresholds", {})
-        th_str = " | ".join(
-            f"{k}: n={v['n']} hit={v.get('hit_rate','?')}"
-            for k, v in ths.items() if "hit_rate" in v
-        )
+        ths = result.get("thresholds", {})
+        th_str = " | ".join(f"{k}: n={v['n']} hit={v.get('hit_rate','?')}" for k, v in ths.items() if "hit_rate" in v)
         feats = [f["feature"] for f in result.get("top_features", [])[:3]]
         return f"base={base} | {th_str} | top:{','.join(feats)} signal_added={result.get('signal_feats_added')}"
 
@@ -935,14 +907,19 @@ def _trim_messages(messages: list, keep_last: int = 20) -> list:
     確保不從 tool 訊息開頭切入（避免 API 格式錯誤）。"""
     if len(messages) <= 2:
         return messages
-    fixed = messages[:2]   # [system, user+history]
-    rest  = messages[2:]   # 工具呼叫來回
+    fixed = messages[:2]  # [system, user+history]
+    rest = messages[2:]  # 工具呼叫來回
     if len(rest) <= keep_last:
         return messages
     trimmed = rest[-keep_last:]
     # 若切到一半的 tool 訊息，往後移到第一個 assistant
-    while trimmed and trimmed[0].get("role") == "tool":
-        trimmed = trimmed[1:]
+    while trimmed:
+        msg = trimmed[0]
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        if role == "tool":
+            trimmed = trimmed[1:]
+        else:
+            break
     print(f"  [trim] 保留最近 {len(trimmed)} 條（共 {len(rest)} 條）")
     return fixed + trimmed
 
@@ -958,7 +935,10 @@ def run_agent(task: str) -> str:
 
     while True:
         try:
-            response = client.chat.completions.create(
+            # Gemini 免費版 15 RPM，每次請求前等 5 秒
+            if "gemini" in _current_model():
+                time.sleep(5)
+            response = _current_client().chat.completions.create(
                 model=_current_model(),
                 messages=_trim_messages(messages, keep_last=20),
                 tools=TOOLS,
@@ -966,6 +946,7 @@ def run_agent(task: str) -> str:
             )
         except Exception as e:
             err = str(e)
+            print(f"\n[API錯誤] {_current_model()}: {err[:200]}")
             # 速率限制或額度耗盡
             if "429" in err or "rate_limit" in err.lower() or "quota" in err.lower() or "exceeded" in err.lower():
                 if _rate_limit_count < 1:
@@ -1002,11 +983,13 @@ def run_agent(task: str) -> str:
             result = execute_tool(fn_name, fn_args)
             print(f"  {json.dumps(result, ensure_ascii=False)}")
             compressed = _compress_result(fn_name, result)
-            messages.append({
-                "role":         "tool",
-                "tool_call_id": tc.id,
-                "content":      compressed,
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": compressed,
+                }
+            )
 
     return final_text
 
@@ -1075,6 +1058,85 @@ def _build_history_prompt(entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
+BACKTEST_LOG = os.path.join(RESULTS_DIR, "backtest_log.jsonl")
+
+
+def _canonical_condition(cond: str) -> str:
+    """排序 & 分隔的子句，讓順序不同的同義條件視為同一個"""
+    parts = [p.strip() for p in cond.split("&")]
+    return " & ".join(sorted(parts))
+
+
+def _load_backtested_conditions() -> set:
+    if not os.path.exists(BACKTEST_LOG):
+        return set()
+    done = set()
+    with open(BACKTEST_LOG, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                cond = json.loads(line.strip()).get("condition", "")
+                done.add(_canonical_condition(cond))
+            except Exception:
+                pass
+    return done
+
+
+def validate_and_train():
+    """純 Python，不用 LLM：對新通過條件跑回測 + RFC，存圖表"""
+    passing = [e for e in _load_signal_log() if e.get("hit_rate", 0) >= 0.35]
+    if not passing:
+        print("沒有通過的條件，跳過驗證")
+        return
+
+    done = _load_backtested_conditions()
+    seen_canonical = set()
+    new_passing = []
+    for e in passing:
+        key = _canonical_condition(e.get("condition", ""))
+        if key not in done and key not in seen_canonical:
+            seen_canonical.add(key)
+            new_passing.append(e)
+
+    if not new_passing:
+        print(f"[驗證] 所有 {len(passing)} 個通過條件已回測，跳過")
+        return
+
+    print(f"\n[驗證] 開始回測 {len(new_passing)} 個新條件...")
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    for entry in new_passing:
+        cond = entry["condition"]
+        print(f"\n→ 回測：{cond}")
+        bt = execute_tool(
+            "run_backtest",
+            {
+                "condition": cond,
+                "hold_days": 10,
+                "sl_stop": 0.08,
+                "tp_stop": 0.15,
+            },
+        )
+        print(f"  {json.dumps(bt, ensure_ascii=False)}")
+        with open(BACKTEST_LOG, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "condition": cond,
+                        "hit_rate": entry.get("hit_rate"),
+                        "sample_count": entry.get("sample_count"),
+                        "backtest": bt,
+                        "date": datetime.now().strftime("%Y-%m-%d"),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    print("\n[驗證] 訓練 RFC...")
+    rfc = execute_tool("quick_rfc", {"hold_days": 10, "profit_target": 0.15})
+    print(f"  {json.dumps(rfc, ensure_ascii=False)}")
+
+
 def daily_task():
     global SESSION_START, SESSION_END
 
@@ -1082,25 +1144,21 @@ def daily_task():
     SESSION_END = today.strftime("%Y-%m-%d")
     SESSION_START = (today - timedelta(days=365)).strftime("%Y-%m-%d")
 
-    # 讀取歷史 log，讓 agent 知道之前試了什麼
+    # Agent 探索新條件（只用 scan_correlations + analyze_signal）
     history = _load_signal_log()
     history_text = _build_history_prompt(history)
 
     task = (
-        f"今天是 {SESSION_END}。\n"
-        f"股票池：{len(WATCH_STOCKS)} 支台灣上市股\n"
-        f"統計期間（1年）：{SESSION_START} 到 {SESSION_END}\n"
-        "\n"
-        "目標：找出 10 天內最高點能超過 +15% 的指標組合。\n"
-        "請按照兩階段工作流程執行：\n"
-        "第一步：analyze_signal(label_type='hit', hold_days=10, profit_target=0.15) 統計篩選，\n"
-        "hit_rate >= 0.35 且 sample_count >= 30 的條件才通過。\n"
-        "第二步：通過的條件執行 run_backtest(sl_stop=0.08, tp_stop=0.15)，驗證停損後實際勝率。\n"
-        "第三步：回測通過後執行 quick_rfc(hold_days=10, profit_target=0.15) 訓練全期模型。\n"
-        "產出完整報告。" + history_text
+        f"今天是 {SESSION_END}，統計期間：{SESSION_START} 到 {SESSION_END}，股票池 {len(WATCH_STOCKS)} 支。\n"
+        "目標：找出更多 hit_rate >= 0.35 且 sample_count >= 30 的新條件。\n"
+        "第一步呼叫 scan_correlations，再用高相關指標組合 analyze_signal 測試。\n"
+        "回測與模型訓練由外部處理，你只需找到盡量多的通過條件。" + history_text
     )
 
     result = run_agent(task)
+
+    # Agent 結束後，再驗證本次新找到的條件
+    validate_and_train()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
     fname = os.path.join(RESULTS_DIR, f"signal_report_{today.strftime('%Y%m%d_%H%M')}.txt")
@@ -1113,15 +1171,15 @@ def daily_task():
 if __name__ == "__main__":
     import sys
 
-    if len(sys.argv) > 1 and sys.argv[1] in ("--once", "-o"):
-        daily_task()
-    else:
+    if len(sys.argv) > 1 and sys.argv[1] in ("--schedule", "-s"):
         RUN_TIME = "08:30"
         schedule.every().day.at(RUN_TIME).do(daily_task)
         print(f"Free Agent 已啟動，每天 {RUN_TIME} 自動探索指標組合")
         print(f"報告存至：{RESULTS_DIR}/")
-        print("加 --once 或 -o 參數立刻執行\n")
+        print("Ctrl+C 停止\n")
         daily_task()
         while True:
             schedule.run_pending()
             time.sleep(30)
+    else:
+        daily_task()
