@@ -35,14 +35,17 @@ _ollama_client = OpenAI(
     api_key="ollama",
     base_url="http://localhost:11434/v1",
 )
+_deepseek_client = OpenAI(
+    api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+    base_url="https://api.deepseek.com",
+)
 
-# 額度用完自動輪換，順序：本機 → 最強雲端 → 備用
-# 格式：(model_name, client)
+# 額度用完自動輪換，格式：(model_name, client)
 MODELS = [
-    ("qwen2.5:14b", _ollama_client),            # 本機，無限制，主力
-    ("llama-3.3-70b-versatile", _groq_client),  # 1,000 RPD，雲端備用
-    ("llama-3.1-8b-instant", _groq_client),     # 14,400 RPD，最後備用
-    # ("gemini-2.0-flash", _gemini_client),      # OpenAI 相容端點限制太嚴，暫停
+    ("deepseek-v4-flash", _deepseek_client),  # 主力：便宜、1M context、穩定
+    ("qwen2.5:14b", _ollama_client),  # 備用：本機無限制
+    ("llama-3.3-70b-versatile", _groq_client),
+    # ("llama-3.1-8b-instant", _groq_client),
 ]
 _model_idx = 0
 
@@ -857,6 +860,12 @@ Margin: margin_bal,short_bal,margin_chg,short_chg,short_ratio,margin_chg_rank,sh
 4. 不通過→換方向，不重複已試過的組合
 5. 找到越多通過條件越好，盡量多試
 
+━━ 關鍵技巧 ━━
+- sample_count 太大（>5000）通常 hit_rate 低，試更嚴格的門檻來縮小樣本
+- 例如：f_n_structure_score > 0.1 → 試 > 0.3、> 0.5、> 0.7
+- 越嚴格的條件（sample_count 500~3000）反而 hit_rate 更高
+- 相關係數只是起點，門檻要自己往上調整才能找到真正有效的條件
+
 回測與模型訓練由外部程式處理，你只負責找條件。
 請用繁體中文回覆。"""
 
@@ -1142,7 +1151,7 @@ def daily_task():
 
     today = datetime.now()
     SESSION_END = today.strftime("%Y-%m-%d")
-    SESSION_START = (today - timedelta(days=365)).strftime("%Y-%m-%d")
+    SESSION_START = (today - timedelta(days=1095)).strftime("%Y-%m-%d")
 
     # Agent 探索新條件（只用 scan_correlations + analyze_signal）
     history = _load_signal_log()

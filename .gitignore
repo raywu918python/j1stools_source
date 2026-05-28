@@ -23,3 +23,5 @@ src/db_models/__pycache__/peewee_models.cpython-313.pyc
 *.png
 *.pkl
 .env
+chart*.html
+signal*.txt
