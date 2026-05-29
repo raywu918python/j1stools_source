@@ -1065,29 +1065,7 @@ def _trim_messages(messages: list, keep_last: int = 20) -> list:
     return fixed + trimmed
 
 
-def _shorten_cond(cond: str, max_len: int = 70) -> str:
-    return cond if len(cond) <= max_len else "..." + cond[-max_len:]
 
-
-def _build_history_prompt(entries: list[dict]) -> str:
-    if not entries:
-        return ""
-    passed = [e for e in entries if e.get("hit_rate", 0) >= 0.35]
-    failed = [e for e in entries if e.get("hit_rate", 0) < 0.35 and "condition" in e]
-    lines = ["\n━━ 歷史紀錄（避免重複，探索新方向）━━"]
-    if passed:
-        lines.append(f"\n✅ 通過({len(passed)}筆)：")
-        for e in passed[-5:]:
-            lines.append(f"  hit={e['hit_rate']:.3f} n={e.get('sample_count','?')} {_shorten_cond(e['condition'])}")
-    if failed:
-        lines.append(f"\n❌ 未通過({len(failed)}筆，勿重複)：")
-        seen = set()
-        for e in failed[-15:]:
-            cond = e["condition"]
-            if cond not in seen:
-                seen.add(cond)
-                lines.append(f"  {_shorten_cond(cond, 50)}")
-    return "\n".join(lines)
 
 
 # ── Agent 主循環 ─────────────────────────────────────────────────
