@@ -42,7 +42,13 @@ _gemini_client = OpenAI(
 MODELS = [
     ("deepseek-v4-flash", _deepseek_client),  # 主力
     (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),  # 備用1：免費（每天20次）
-    # ("llama-3.3-70b-versatile", _groq_client),                                # 備用2：tool_use 完全不穩，停用
+    # ("llama-3.3-70b-versatile", _groq_client),
+    # 停用原因：
+    # 1. Groq 免費配額有限，初期測試正常但很快用完（429）
+    # 2. 加入 check_history 後 tool schema 變複雜，llama 開始生成錯誤格式：
+    #    把 tool name 和 arguments 混在一起（如 <function=name,{args}>），
+    #    Groq API 直接拒絕（tool_use_failed）。tool 越多越不穩定。
+    # 潛在解法：減少 tool 數量或改用 text 輸出再 regex 解析，但成本太高不值得。
     ("qwen2.5:14b", _ollama_client),  # 備用3：本機
 ]
 _model_idx = 0
