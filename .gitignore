@@ -25,3 +25,10 @@ src/db_models/__pycache__/peewee_models.cpython-313.pyc
 .env
 chart*.html
 signal*.txt
+*.joblib
+*.jsonl
+*.history
+*.db*
+*bak
+*.md
+*.html

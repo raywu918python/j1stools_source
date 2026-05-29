@@ -963,7 +963,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
 # ── 系統 Prompt（根據假設動態生成）────────────────────────────────
 def _build_system_prompt(hypothesis: str) -> str:
-    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
+    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, {})
     categories = cfg.get("indicator_categories", {})
 
     # 把分類格式化成 prompt 區塊
@@ -1094,7 +1094,7 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
         os.remove(sig_path)
         print(f"  [session] 舊 signal_log 已備份為 .bak，重新開始記錄")
 
-    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, HYPOTHESIS_CONFIGS["breakout"])
+    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, {})
     task = (
         f"為「{cfg['name']}」假設蒐集特徵候選條件（用於建立選股模型）。\n"
         f"目標：hit_rate >= 0.35 且 sample_count >= 100（{TRAIN_START}~{TRAIN_END}）。\n"
