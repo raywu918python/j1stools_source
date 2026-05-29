@@ -280,22 +280,6 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "scan_correlations",
-            "description": "掃描指標與目標的相關係數（可選用，不強制）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "hold_days": {"type": "integer", "description": "持有天數，預設 10"},
-                    "profit_target": {"type": "number", "description": "目標報酬，預設 0.15"},
-                    "top_n": {"type": "integer", "description": "回傳前幾名，預設 20"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "check_history",
             "description": (
                 "查詢本次 session 已測試過的條件記錄（從本機讀取，不耗 token）。"
@@ -1013,7 +997,6 @@ def _build_system_prompt(hypothesis: str) -> str:
 ━━ 關鍵技巧 ━━
 - sample_count > 5000 時 hit_rate 通常低，加嚴門檻縮小樣本（500~3000 最佳）
 - 統計資料期間：{TRAIN_START} ~ {TRAIN_END}
-- 不需要先呼叫 scan_correlations
 
 回測與模型訓練由外部程式處理，你只負責蒐集多樣化的特徵候選條件。
 請用繁體中文回覆。"""
@@ -1062,7 +1045,6 @@ def _build_system_prompt(hypothesis: str) -> str:
 ━━ 關鍵技巧 ━━
 - sample_count > 5000 時 hit_rate 通常低，加嚴門檻縮小樣本（500~3000 最佳）
 - 統計資料期間：{TRAIN_START} ~ {TRAIN_END}（近 5 年）
-- 不需要先呼叫 scan_correlations
 
 回測與模型訓練由外部程式處理，你只負責蒐集特徵候選條件。
 請用繁體中文回覆。"""
