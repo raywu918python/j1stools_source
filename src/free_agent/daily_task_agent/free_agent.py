@@ -488,8 +488,12 @@ def execute_tool(name: str, inputs: dict) -> dict:
         hold_days = inputs.get("hold_days", 10)
         profit_target = inputs.get("profit_target", 0.15)
         n_stocks = inputs.get("n_stocks", 200)
+        random_state = inputs.get("random_state", 42)
+        model_suffix = inputs.get("model_suffix", "")
+        model_label = inputs.get("model_label", "全歷史通過條件")
 
-        stocks = _random.sample(WATCH_STOCKS, min(n_stocks, len(WATCH_STOCKS)))
+        rng = _random.Random(random_state)
+        stocks = rng.sample(WATCH_STOCKS, min(n_stocks, len(WATCH_STOCKS)))
 
         try:
             feat_df = _build_rfc_features(stocks, "2015-01-01", SESSION_END)
@@ -505,10 +509,19 @@ def execute_tool(name: str, inputs: dict) -> dict:
         feat_df = feat_df.merge(target_long, on=["date", "stock_id"], how="left")
 
         # 把 agent 統計通過的條件加成 binary 特徵（按 hit_rate 排序取前20）
-        passing = sorted(
-            [e for e in _load_signal_log() if e.get("hit_rate", 0) >= 0.35 and "condition" in e],
-            key=lambda x: x["hit_rate"], reverse=True,
-        )
+        signal_entries = inputs.get("signal_entries")
+        raw_passing = signal_entries if signal_entries is not None else _load_signal_log()
+        passing = []
+        seen_conditions = set()
+        for entry in sorted(
+            [e for e in raw_passing if e.get("hit_rate", 0) >= 0.35 and "condition" in e],
+            key=lambda x: x["hit_rate"],
+            reverse=True,
+        ):
+            key = _canonical_condition(entry.get("condition", ""))
+            if key and key not in seen_conditions:
+                seen_conditions.add(key)
+                passing.append(entry)
         added_signal_feats = []
         if passing:
             try:
@@ -563,15 +576,19 @@ def execute_tool(name: str, inputs: dict) -> dict:
             joblib.dump(rfc, model_path)
             return thresholds, top_features
 
+        safe_suffix = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in str(model_suffix)).strip("_")
+        suffix = f"_{safe_suffix}" if safe_suffix else ""
+
         # 模型A：只用技術指標
-        model_a_path = os.path.join(os.path.dirname(__file__), "quick_rfc_tech.joblib")
+        model_a_path = os.path.join(os.path.dirname(__file__), f"quick_rfc_tech{suffix}.joblib")
         th_a, feat_a = _eval_rfc(tech_cols, model_a_path)
 
         # 模型B：技術指標 + top20 f_signal
-        model_b_path = os.path.join(os.path.dirname(__file__), "quick_rfc.joblib")
+        model_b_path = os.path.join(os.path.dirname(__file__), f"quick_rfc{suffix}.joblib")
         th_b, feat_b = _eval_rfc(all_cols, model_b_path)
 
         return {
+            "model_label": model_label,
             "hold_days": hold_days,
             "profit_target": profit_target,
             "train_size": len(train),
@@ -579,6 +596,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
             "base_rate": base_rate,
             "model_a": {"name": "技術指標", "thresholds": th_a, "top_features": feat_a, "model_saved": model_a_path},
             "model_b": {"name": f"技術指標 + top{len(added_signal_feats)} f_signal", "thresholds": th_b, "top_features": feat_b, "model_saved": model_b_path},
+            "signal_condition_count": len(passing),
             "signal_feats_added": len(added_signal_feats),
         }
 
@@ -1221,15 +1239,47 @@ def validate_and_train():
                 + "\n"
             )
 
-    print("\n[驗證] 訓練 RFC...")
-    rfc = execute_tool("quick_rfc", {"hold_days": 10, "profit_target": 0.15})
-    print(f"  {json.dumps(rfc, ensure_ascii=False)}")
+    print("\n[驗證] 訓練 RFC（全歷史通過條件）...")
+    rfc_all = execute_tool(
+        "quick_rfc",
+        {
+            "hold_days": 10,
+            "profit_target": 0.15,
+            "model_suffix": "all",
+            "model_label": "全歷史通過條件",
+        },
+    )
+    print(f"  {json.dumps(rfc_all, ensure_ascii=False)}")
+
+    print("\n[驗證] 訓練 RFC（本次新增條件）...")
+    rfc_latest = execute_tool(
+        "quick_rfc",
+        {
+            "hold_days": 10,
+            "profit_target": 0.15,
+            "signal_entries": new_passing,
+            "model_suffix": "latest",
+            "model_label": "本次新增條件",
+        },
+    )
+    print(f"  {json.dumps(rfc_latest, ensure_ascii=False)}")
 
     # 存 RFC 結果供報表使用
     rfc_log = os.path.join(RESULTS_DIR, "rfc_result.json")
     os.makedirs(RESULTS_DIR, exist_ok=True)
     with open(rfc_log, "w", encoding="utf-8") as f:
-        json.dump({**rfc, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}, f, ensure_ascii=False, indent=2)
+        json.dump(
+            {
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "runs": {
+                    "all": rfc_all,
+                    "latest": rfc_latest,
+                },
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
     _generate_report()
 
@@ -1302,17 +1352,32 @@ def _generate_report():
 
     rows.sort(key=lambda x: x["sharpe"], reverse=True)
 
-    # 指標使用頻率
-    all_ind: dict = {}
+    _ALL_AGENT_INDICATORS = [
+        "close", "high", "low", "open", "volume",
+        "ma5", "ma10", "ma20", "ma60", "ma120",
+        "ma5_x_ma10", "ma5_x_ma20", "ma10_x_ma60",
+        "rsi", "macd", "macdh", "bb_upper", "bb_lower", "bb_mid", "bb_width",
+        "adx", "plus_di", "minus_di",
+        "atr", "atr_rank",
+        "vol_ratio", "vol_trend", "obv", "obv_ma",
+        "f_n_confirmed", "f_n_structure_score", "f_n_ab_gain",
+        "f_n_d_breakout_strength", "f_n_volume_confirm",
+        "net_foreign", "net_trust", "net_dealer", "net_inst",
+        "foreign_rank", "trust_rank", "dealer_rank", "inst_rank",
+        "margin_bal", "short_bal", "margin_chg", "short_chg",
+        "short_ratio", "margin_chg_rank", "short_ratio_rank",
+    ]
+    _IND_ORDER = {name: i for i, name in enumerate(_ALL_AGENT_INDICATORS)}
+
+    # 指標使用頻率：先列出所有可用指標，沒被用到也顯示 0
+    all_ind: dict = {name: 0 for name in _ALL_AGENT_INDICATORS}
     for r in rows:
         cond = r["condition"]
-        # 有比較符號的指標：rsi > 0.5
-        for t in _re.findall(r"([a-z_]+)\s*[><!=]", cond):
-            all_ind[t] = all_ind.get(t, 0) + 1
-        # 純布林指標：(ma5_x_ma10)
-        for t in _re.findall(r"\(\s*([a-z_]+)\s*\)", cond):
-            all_ind[t] = all_ind.get(t, 0) + 1
-    all_ind_sorted = sorted(all_ind.items(), key=lambda x: -x[1])
+        tokens = set(_re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", cond))
+        for t in tokens:
+            if t in all_ind:
+                all_ind[t] += 1
+    all_ind_sorted = sorted(all_ind.items(), key=lambda x: (-x[1], _IND_ORDER.get(x[0], 9999)))
 
     sharpes = [r["sharpe"] for r in rows]
     wrs = [r["win_rate"] for r in rows]
@@ -1330,7 +1395,7 @@ def _generate_report():
         chart_link = f'<a href="{r["chart"]}" target="_blank">📊</a>' if r.get("chart") else ""
         dd_color = "#e74c3c" if r["max_drawdown"] < -0.15 else "#e67e22" if r["max_drawdown"] < -0.10 else "#2ecc71"
         cond = r["condition"]
-        n_ind = len(_re.findall(r"([a-z_]+)\s*[><!=]", cond))
+        n_ind = len(set(_re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", cond)) & set(_ALL_AGENT_INDICATORS))
         rows_html += (
             f'<tr>'
             f'<td style="text-align:center">{i+1}</td>'
@@ -1349,8 +1414,13 @@ def _generate_report():
 
     _IND_DESC = {
         "adx":                    "趨勢強度（>25 代表趨勢明確）",
+        "atr":                    "平均真實波幅（ATR）",
         "atr_rank":               "波動率排名（ATR 在歷史中的百分位）",
+        "bb_lower":               "布林通道下緣",
+        "bb_mid":                 "布林通道中線",
+        "bb_upper":               "布林通道上緣",
         "bb_width":               "布林通道寬度（越大代表波動越劇烈）",
+        "close":                  "收盤價",
         "dealer_rank":            "自營商買超排名",
         "f_n_ab_gain":            "ABCD型態 AB段漲幅",
         "f_n_confirmed":          "ABCD型態確認度",
@@ -1358,16 +1428,28 @@ def _generate_report():
         "f_n_structure_score":    "ABCD型態結構分數",
         "f_n_volume_confirm":     "ABCD型態成交量確認",
         "foreign_rank":           "外資買超排名",
+        "high":                   "最高價",
         "inst_rank":              "三大法人合計買超排名",
+        "low":                    "最低價",
+        "ma5":                    "5日均線",
+        "ma10":                   "10日均線",
+        "ma20":                   "20日均線",
+        "ma60":                   "60日均線",
+        "ma120":                  "120日均線",
+        "ma5_x_ma20":             "5日均線向上穿越20日均線",
+        "ma10_x_ma60":            "10日均線向上穿越60日均線",
         "macd":                   "MACD線（快線-慢線）",
         "macdh":                  "MACD柱（多頭時 > 0）",
+        "margin_bal":             "融資餘額",
         "margin_chg":             "融資增減量",
         "margin_chg_rank":        "融資增減排名（越高代表散戶加碼越積極）",
+        "minus_di":               "DMI負向指標（下跌力道）",
         "net_dealer":             "自營商買賣超（正值買超）",
         "net_foreign":            "外資買賣超（正值買超）",
         "net_inst":               "三大法人合計買賣超",
         "net_trust":              "投信買賣超（正值買超）",
         "obv":                    "能量潮（累計成交量）",
+        "open":                   "開盤價",
         "plus_di":                "DMI正向指標（上漲力道）",
         "rsi":                    "相對強弱指數（0~1，>0.5 偏強勢）",
         "short_bal":              "融券餘額（正值有融券）",
@@ -1375,6 +1457,7 @@ def _generate_report():
         "short_ratio":            "融券比率（融券/融資）",
         "short_ratio_rank":       "融券比率排名",
         "trust_rank":             "投信買超排名",
+        "volume":                 "成交量",
         "vol_ratio":              "今日成交量 / 近期均量",
         "vol_trend":              "成交量趨勢（正值量增）",
         "ma5_x_ma10":             "5日均線向上穿越10日均線（黃金交叉）",
@@ -1427,39 +1510,53 @@ def _generate_report():
   </div>"""
 
     # RFC 區塊 HTML
-    rfc_section = ""
-    if rfc_data and "error" not in rfc_data:
-        base_rate = rfc_data.get("base_rate", 0)
-        rfc_date  = rfc_data.get("date", "")
+    def _fmt_int(value) -> str:
+        try:
+            return f"{int(value):,}"
+        except Exception:
+            return str(value)
 
-        def _th_rows(thresholds):
-            html = ""
-            for th, v in thresholds.items():
-                if "note" in v:
-                    html += f'<tr><td>{th}</td><td style="color:#aaa">{v["n"]} 筆（樣本不足）</td><td>—</td></tr>'
-                else:
-                    hit = v["hit_rate"]
-                    color = "#1a7a3a" if hit >= 0.4 else "#f39c12" if hit >= 0.35 else "#e74c3c"
-                    html += f'<tr><td>{th}</td><td>{v["n"]} 筆</td><td style="color:{color};font-weight:bold">{hit:.1%}</td></tr>'
-            return html
+    def _th_rows(thresholds):
+        html = ""
+        for th, v in thresholds.items():
+            if "note" in v:
+                html += f'<tr><td>{th}</td><td style="color:#aaa">{v["n"]} 筆（樣本不足）</td><td>—</td></tr>'
+            else:
+                hit = v["hit_rate"]
+                color = "#1a7a3a" if hit >= 0.4 else "#f39c12" if hit >= 0.35 else "#e74c3c"
+                html += f'<tr><td>{th}</td><td>{v["n"]} 筆</td><td style="color:{color};font-weight:bold">{hit:.1%}</td></tr>'
+        return html
 
-        def _feat_bars(top_features, color):
-            max_imp = top_features[0]["importance"] if top_features else 1
-            html = ""
-            for f in top_features:
-                pct = f["importance"] / max_imp * 100
-                html += (
-                    f'<div style="margin:3px 0;display:flex;align-items:center;gap:6px">'
-                    f'<div style="width:140px;font-family:monospace;font-size:11px;text-align:right">{f["feature"]}</div>'
-                    f'<div style="background:{color};height:14px;width:{pct:.0f}%;border-radius:3px"></div>'
-                    f'<div style="font-size:11px;color:#666">{f["importance"]:.4f}</div>'
-                    f'</div>'
-                )
-            return html
+    def _feat_bars(top_features, color):
+        max_imp = top_features[0]["importance"] if top_features else 1
+        html = ""
+        for f in top_features:
+            pct = f["importance"] / max_imp * 100
+            html += (
+                f'<div style="margin:3px 0;display:flex;align-items:center;gap:6px">'
+                f'<div style="width:140px;font-family:monospace;font-size:11px;text-align:right">{f["feature"]}</div>'
+                f'<div style="background:{color};height:14px;width:{pct:.0f}%;border-radius:3px"></div>'
+                f'<div style="font-size:11px;color:#666">{f["importance"]:.4f}</div>'
+                f'</div>'
+            )
+        return html
+
+    def _render_rfc_section(data: dict, title: str, rfc_date: str = "") -> str:
+        if not data or "error" in data:
+            err = data.get("error", "無資料") if isinstance(data, dict) else "無資料"
+            return f"""
+  <div class="sec">
+    <h2>{title}</h2>
+    <p style="font-size:13px;color:#e74c3c;margin:0">{err}</p>
+  </div>"""
+
+        base_rate = data.get("base_rate", 0)
+        label = data.get("model_label", title)
+        signal_count = data.get("signal_condition_count", data.get("signal_feats_added", 0))
 
         # 相容舊格式（只有 thresholds/top_features）和新格式（model_a/model_b）
-        if "model_a" in rfc_data and "model_b" in rfc_data:
-            ma, mb = rfc_data["model_a"], rfc_data["model_b"]
+        if "model_a" in data and "model_b" in data:
+            ma, mb = data["model_a"], data["model_b"]
             col_a = _th_rows(ma.get("thresholds", {}))
             col_b = _th_rows(mb.get("thresholds", {}))
             bar_a = _feat_bars(ma.get("top_features", []), "#3498db")
@@ -1482,8 +1579,8 @@ def _generate_report():
       </div>
     </div>"""
         else:
-            thresholds  = rfc_data.get("thresholds", {})
-            top_features = rfc_data.get("top_features", [])
+            thresholds = data.get("thresholds", {})
+            top_features = data.get("top_features", [])
             model_tables = f"""
     <table style="width:auto;margin-top:12px">
       <thead><tr><th>門檻</th><th>篩出</th><th>命中率</th></tr></thead>
@@ -1492,17 +1589,31 @@ def _generate_report():
     <p style="font-size:12px;color:#555;margin:10px 0 6px">特徵重要性 Top 10</p>
     {_feat_bars(top_features, "#9b59b6")}"""
 
-        rfc_section = f"""
+        return f"""
   <div class="sec">
-    <h2>RFC 模型比較（訓練時間：{rfc_date}）</h2>
+    <h2>{title}{f"（訓練時間：{rfc_date}）" if rfc_date else ""}</h2>
     <p style="font-size:13px;color:#555;margin:0">
-      訓練集：{rfc_data.get('train_size','?'):,} 筆｜
-      測試集：{rfc_data.get('test_size','?'):,} 筆｜
-      自然命中率（不用模型）：<strong>{base_rate:.1%}</strong>｜
+      訊號範圍：<strong>{label}</strong>｜
+      候選條件：{signal_count} 筆｜
+      訓練集：{_fmt_int(data.get('train_size','?'))} 筆｜
+      測試集：{_fmt_int(data.get('test_size','?'))} 筆｜
+      自然命中率：<strong>{base_rate:.1%}</strong>｜
       命中 = 進場後10天內最高點 ≥ +15%
     </p>
     {model_tables}
   </div>"""
+
+    rfc_section = ""
+    if rfc_data:
+        rfc_date = rfc_data.get("date", "")
+        if "runs" in rfc_data:
+            runs = rfc_data.get("runs", {})
+            if "latest" in runs:
+                rfc_section += _render_rfc_section(runs["latest"], "RFC 模型比較｜本次新增條件", rfc_date)
+            if "all" in runs:
+                rfc_section += _render_rfc_section(runs["all"], "RFC 模型比較｜全歷史條件", rfc_date)
+        else:
+            rfc_section = _render_rfc_section(rfc_data, "RFC 模型比較", rfc_date)
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     html = f"""<!DOCTYPE html>
