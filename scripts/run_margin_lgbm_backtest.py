@@ -7,9 +7,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 # pull 必須在 import ma60_model_run 之前
 from j1stools import hf_sync
+
 hf_sync.pull(["db/price", "db/ib", "db/margin", "db/active_stocks", "db/feature_cols", "models"])
 
-from j1stools import ma60_model_run
+from release_model.ma60_lgbm import ma60_model_run
 
 MODEL_NAME = "lgbm_timeseries_ensemble"
 today = datetime.now(_TW).strftime("%Y-%m-%d")
