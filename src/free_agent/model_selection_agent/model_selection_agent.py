@@ -622,60 +622,6 @@ def execute_tool(name: str, inputs: dict) -> dict:
     except Exception:
         pass
 
-    if name == "scan_correlations":
-        hold_days = inputs.get("hold_days", 10)
-        profit_target = inputs.get("profit_target", 0.15)
-        top_n = inputs.get("top_n", 20)
-        try:
-            ind, close = _get_indicators(TRAIN_START, TRAIN_END)
-        except Exception as e:
-            return {"error": f"資料載入失敗：{e}"}
-        future_high = pd.concat([close.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).max()
-        target = ((future_high / close - 1) >= profit_target).astype(float)
-        target_flat = target.values.flatten().astype(float)
-        skip = {
-            "close",
-            "high",
-            "low",
-            "open",
-            "volume",
-            "atr",
-            "bb_upper",
-            "bb_lower",
-            "bb_mid",
-            "macd",
-            "signal",
-            "net_foreign",
-            "net_trust",
-            "net_dealer",
-            "net_inst",
-            "margin_bal",
-            "short_bal",
-            "obv",
-        }
-        corr_list = []
-        for feat_name, df in ind.items():
-            if feat_name in skip or not isinstance(df, pd.DataFrame):
-                continue
-            df_aligned = df.reindex(index=close.index, columns=close.columns)
-            x = df_aligned.values.flatten().astype(float)
-            mask = ~(np.isnan(x) | np.isnan(target_flat))
-            if mask.sum() < 500:
-                continue
-            corr = float(np.corrcoef(x[mask], target_flat[mask])[0, 1])
-            if not np.isnan(corr):
-                corr_list.append({"feature": feat_name, "correlation": round(corr, 4)})
-        corr_list.sort(key=lambda r: abs(r["correlation"]), reverse=True)
-        corr_path = os.path.join(_results_dir(hypothesis), "scan_correlations.json")
-        with open(corr_path, "w", encoding="utf-8") as _f:
-            json.dump(
-                {"date": datetime.now().strftime("%Y-%m-%d %H:%M"), "correlations": corr_list},
-                _f,
-                ensure_ascii=False,
-                indent=2,
-            )
-        return {"hold_days": hold_days, "profit_target": profit_target, "top_correlations": corr_list[:top_n]}
-
     if name == "check_history":
         import re as _re
 
