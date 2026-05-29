@@ -165,6 +165,19 @@ HYPOTHESIS_CONFIGS: dict[str, dict] = {
             "量能支撐：vol_trend > 1（量能趨勢向上）。"
         ),
     },
+    "free": {
+        "name": "自由探索型",
+        "description": "不預設市場假設，自由組合所有可用指標，純粹靠統計找有效特徵",
+        "indicator_categories": {},  # 無類別限制
+        "explore_hint": (
+            "可自由組合任何指標，不限制假設方向。"
+            "先呼叫 check_history() 看哪些指標已飽和，避免重複。"
+            "建議從不同維度各試幾個：技術面（rsi/adx/bb_width）、"
+            "籌碼面（net_foreign/short_ratio_rank）、量能面（vol_trend/vol_ratio）、"
+            "型態面（f_n_structure_score/f_n_d_breakout_strength）。"
+            "目標是找出多樣化的特徵組合，不是找同一類的變體。"
+        ),
+    },
 }
 
 # ── 指標說明對照表 ────────────────────────────────────────────────
@@ -962,14 +975,56 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
 
 # ── 系統 Prompt（根據假設動態生成）────────────────────────────────
+def _build_all_indicators_text() -> str:
+    lines = []
+    for ind, desc in INDICATOR_DESCRIPTIONS.items():
+        lines.append(f"  - {ind}: {desc}")
+    return "\n".join(lines)
+
+
+_ALL_INDICATORS_HEADER = """報價: close,high,low,open,volume
+均線: ma5,ma10,ma20,ma60,ma120；交叉: ma5_x_ma10,ma5_x_ma20,ma10_x_ma60"""
+
+
 def _build_system_prompt(hypothesis: str) -> str:
     cfg = HYPOTHESIS_CONFIGS.get(hypothesis, {})
     categories = cfg.get("indicator_categories", {})
+    is_free = hypothesis == "free"
 
-    # 把分類格式化成 prompt 區塊
+    if is_free:
+        return f"""你是台灣股票量化研究助理，任務是自由探索指標組合，建立多樣化的「特徵候選集」。
+
+━━ 你的角色 ━━
+不預設假設，純粹靠統計找有效特徵。每個通過的條件最後會成為模型的 binary 特徵。
+
+━━ 工作規則 ━━
+1. **第一步必須呼叫 check_history()**，查看 saturated_indicators（已飽和指標）→ 避免重複
+2. 每次選擇與上一個條件不同維度的指標組合
+3. 呼叫 analyze_signal(label_type="hit", hold_days=10, profit_target=0.15)
+4. 篩選標準：hit_rate >= 0.35 且 sample_count >= 100
+5. 每個指標最多出現 3 次（看 saturated_indicators），超過就換別的
+
+━━ 探索提示 ━━
+{cfg['explore_hint']}
+
+━━ 可用指標（全部都可以用）━━
+{_build_all_indicators_text()}
+
+━━ 關鍵技巧 ━━
+- sample_count > 5000 時 hit_rate 通常低，加嚴門檻縮小樣本（500~3000 最佳）
+- 統計資料期間：{TRAIN_START} ~ {TRAIN_END}
+- 不需要先呼叫 scan_correlations
+
+回測與模型訓練由外部程式處理，你只負責蒐集多樣化的特徵候選條件。
+請用繁體中文回覆。"""
+
+    # ── 假設型 prompt ──────────────────────────────────────────────
     cat_lines = []
     for cat_name, indicators in categories.items():
-        cat_lines.append(f"  【{cat_name}】{', '.join(indicators)}")
+        cat_lines.append(f"【{cat_name}】")
+        for ind in indicators:
+            desc = INDICATOR_DESCRIPTIONS.get(ind, "")
+            cat_lines.append(f"  - {ind}: {desc}" if desc else f"  - {ind}")
     cat_block = "\n".join(cat_lines)
     n_cats = len(categories)
 
@@ -1001,16 +1056,8 @@ def _build_system_prompt(hypothesis: str) -> str:
 ━━ 探索提示 ━━
 {cfg['explore_hint']}
 
-━━ 可用指標（完整清單）━━
-報價: close,high,low,open,volume
-均線: ma5,ma10,ma20,ma60,ma120；交叉: ma5_x_ma10,ma5_x_ma20,ma10_x_ma60
-動能: rsi,macd,macdh,bb_width,bb_upper,bb_lower,bb_mid
-趨勢: adx(>25有趨勢),plus_di,minus_di
-波動: atr,atr_rank(0~1百分位)
-量能: vol_ratio(今量/20均),vol_trend,obv,obv_ma
-ABCD: f_n_confirmed,f_n_structure_score,f_n_ab_gain,f_n_d_breakout_strength,f_n_volume_confirm
-IB: net_foreign,net_trust,net_dealer,net_inst,foreign_rank,trust_rank,dealer_rank,inst_rank
-Margin: margin_bal,short_bal,margin_chg,short_chg,short_ratio,margin_chg_rank,short_ratio_rank
+━━ 指標語法參考（只使用本假設分類內的指標）━━
+{_build_all_indicators_text()}
 
 ━━ 關鍵技巧 ━━
 - sample_count > 5000 時 hit_rate 通常低，加嚴門檻縮小樣本（500~3000 最佳）
@@ -1063,9 +1110,6 @@ def _trim_messages(messages: list, keep_last: int = 20) -> list:
         else:
             break
     return fixed + trimmed
-
-
-
 
 
 # ── Agent 主循環 ─────────────────────────────────────────────────
@@ -1153,54 +1197,12 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
                     continue
                 else:
                     _rate_limit_count = 0
+                    if model_override:
+                        print(f"[停止] 指定模型 {_current_model()} 失敗，不自動切換")
+                        break
                     if not _next_model():
                         break
                     continue
-            # llama 的舊格式 tool call：<function=name,{args}> 或 tool name 混入 args
-            if "tool_use_failed" in err or "tool call validation failed" in err:
-                import re as _re
-
-                # 嘗試從錯誤訊息解析出 tool name 和 args
-                m = _re.search(r"attempted to call tool '([^,{]+)[,{]([^']*)'", err)
-                if not m:
-                    m = _re.search(r"<function=([^,>]+)[,>](\{[^<]*\})?", err)
-                if m:
-                    _fn = m.group(1).strip()
-                    _raw = m.group(2) or "{}"
-                    try:
-                        _args = json.loads(_raw if _raw.startswith("{") else "{}")
-                    except Exception:
-                        _args = {}
-                    print(f"\n[llama修復] 解析舊格式 tool call：{_fn}({_args})")
-                    _result = execute_tool(_fn, _args)
-                    _compressed = _compress_result(_fn, _result)
-                    print(f"  {_compressed}")
-                    # 補一個假的 assistant + tool 訊息讓對話繼續
-                    import uuid as _uuid
-
-                    _fake_id = f"fix_{_uuid.uuid4().hex[:8]}"
-                    messages.append(
-                        {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": _fake_id,
-                                    "type": "function",
-                                    "function": {"name": _fn, "arguments": json.dumps(_args)},
-                                }
-                            ],
-                        }
-                    )
-                    messages.append({"role": "tool", "tool_call_id": _fake_id, "content": _compressed})
-                    _call_count += 1
-                    if max_calls and _call_count >= max_calls:
-                        print(f"\n[測試] 已達 {max_calls} 次工具呼叫上限，停止")
-                        return final_text
-                    continue
-                if not _next_model():
-                    break
-                continue
             raise
 
         msg = response.choices[0].message
@@ -1713,17 +1715,22 @@ def _generate_report(hypothesis: str):
 
 
 # ── 入口 ─────────────────────────────────────────────────────────
-def run_session(hypothesis: str = "breakout"):
-    """跑一個假設的完整 session：Agent 探索 → 驗證 → 訓練 → 報表"""
+def run_session(hypothesis: str = "breakout", model: str = ""):
+    """
+    跑一個假設的完整 session：Agent 探索 → 驗證 → 訓練 → 報表
+
+    model: 指定模型，例如 "deepseek"、"gemini"、"qwen"（空字串 = 預設第一個）
+    """
     if hypothesis not in HYPOTHESIS_CONFIGS:
         print(f"未知假設：{hypothesis}，可用：{list(HYPOTHESIS_CONFIGS.keys())}")
         return
-    run_agent(hypothesis)
+    run_agent(hypothesis, model_override=model)
     validate_and_train(hypothesis)
 
 
 if __name__ == "__main__":
     import sys
 
-    hyp = sys.argv[1] if len(sys.argv) > 1 else "breakout"
-    run_session(hyp)
+    hyp   = sys.argv[1] if len(sys.argv) > 1 else "breakout"
+    model = sys.argv[2] if len(sys.argv) > 2 else ""
+    run_session(hyp, model=model)
