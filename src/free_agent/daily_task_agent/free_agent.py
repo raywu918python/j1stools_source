@@ -50,12 +50,31 @@ MODELS = [
 _model_idx = 0
 
 
+def select_model(model: str = "") -> str:
+    """用名稱片段指定模型，例如 qwen / deepseek / llama。"""
+    global _model_idx
+    if not model:
+        return _current_model()
+    needle = model.lower()
+    for i, (model_name, _) in enumerate(MODELS):
+        if needle in model_name.lower():
+            _model_idx = i
+            return model_name
+    raise ValueError(f"找不到模型：{model}，可用：{[m for m, _ in MODELS]}")
+
+
 def _current_model() -> str:
     return MODELS[_model_idx][0]
 
 
 def _current_client():
     return MODELS[_model_idx][1]
+
+
+def _use_full_tool_results() -> bool:
+    """本機模型不怕 token 成本，保留完整 tool result 讓探索資訊更完整。"""
+    model = _current_model().lower()
+    return "qwen" in model or _current_client() is _ollama_client
 
 
 def _next_model() -> bool:
@@ -566,6 +585,8 @@ def execute_tool(name: str, inputs: dict) -> dict:
     if name == "run_backtest":
         from j1stools.backtest_engine import backtest_engine
 
+        if "condition" not in inputs:
+            return {"error": "缺少必填參數 condition，請提供條件字串後再呼叫 run_backtest"}
         condition = _normalize_condition(inputs["condition"])
         hold_days = inputs.get("hold_days", 10)
         sl_stop = inputs.get("sl_stop", 0.08)
@@ -669,8 +690,10 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
     if name == "analyze_signal":
         hold_days = inputs.get("hold_days", 5)
+        if "condition" not in inputs:
+            return {"error": "缺少必填參數 condition，請提供條件字串後再呼叫 analyze_signal"}
         condition = _normalize_condition(inputs["condition"])
-        label_type = inputs.get("label_type", "return")
+        label_type = inputs.get("label_type", "hit")
         profit_target = inputs.get("profit_target", 0.15)
 
         try:
@@ -881,13 +904,16 @@ Margin: margin_bal,short_bal,margin_chg,short_chg,short_ratio,margin_chg_rank,sh
 2. 用高相關指標組合條件，呼叫 analyze_signal(label_type="hit",hold_days=10,profit_target=0.15)
 3. 篩選標準：hit_rate>=0.35 且 sample_count>=30
 4. 不通過→換方向，不重複已試過的組合
-5. 找到越多通過條件越好，盡量多試
+5. 每 5 次 analyze_signal 測試中，至少 2 次必須包含 scan_correlations 前三名以外的指標
+   （也就是條件不能只由前三名指標組成，需加入第4名以後或其他類別指標）
+6. 找到越多通過條件越好，盡量多試
 
 ━━ 關鍵技巧 ━━
 - sample_count 太大（>5000）通常 hit_rate 低，試更嚴格的門檻來縮小樣本
 - 例如：f_n_structure_score > 0.1 → 試 > 0.3、> 0.5、> 0.7
 - 越嚴格的條件（sample_count 500~3000）反而 hit_rate 更高
 - 相關係數只是起點，門檻要自己往上調整才能找到真正有效的條件
+- 不要長時間只使用前三名相關指標；要輪流加入趨勢、量能、籌碼、融資券等非前三名指標探索
 
 回測與模型訓練由外部程式處理，你只負責找條件。
 請用繁體中文回覆。"""
@@ -921,9 +947,12 @@ def _compress_result(fn_name: str, result: dict) -> str:
         return f"base={base} | {th_str} | top:{','.join(feats)} signal_added={result.get('signal_feats_added')}"
 
     if fn_name == "scan_correlations":
-        top = result.get("top_correlations", [])[:8]
-        items = " ".join(f"{r['feature']}({r['correlation']})" for r in top)
-        return f"top相關: {items}"
+        top = result.get("top_correlations", [])
+        top3 = top[:3]
+        others = top[3:12]
+        top3_items = " ".join(f"{r['feature']}({r['correlation']})" for r in top3)
+        other_items = " ".join(f"{r['feature']}({r['correlation']})" for r in others)
+        return f"前三名: {top3_items} | 非前三候選: {other_items}"
 
     if fn_name == "analyze_pattern_signal":
         if "hit_rate" in result:
@@ -956,7 +985,7 @@ def _trim_messages(messages: list, keep_last: int = 20) -> list:
     return fixed + trimmed
 
 
-def run_agent(task: str) -> str:
+def run_agent(task: str, max_signal_calls: int = 0) -> str:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": task},
@@ -964,6 +993,7 @@ def run_agent(task: str) -> str:
     print(f"\n任務：{task}\n{'─' * 60}")
     final_text = ""
     _rate_limit_count = 0
+    _signal_call_count = 0
 
     while True:
         try:
@@ -1014,14 +1044,24 @@ def run_agent(task: str) -> str:
             print(f"→ {fn_name}({json.dumps(fn_args, ensure_ascii=False)})")
             result = execute_tool(fn_name, fn_args)
             print(f"  {json.dumps(result, ensure_ascii=False)}")
-            compressed = _compress_result(fn_name, result)
+            tool_content = (
+                json.dumps(result, ensure_ascii=False)
+                if _use_full_tool_results()
+                else _compress_result(fn_name, result)
+            )
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": compressed,
+                    "content": tool_content,
                 }
             )
+            if fn_name == "analyze_signal":
+                _signal_call_count += 1
+                if max_signal_calls and _signal_call_count >= max_signal_calls:
+                    final_text = f"[測試停止] 已完成 {max_signal_calls} 次 analyze_signal。"
+                    print(f"\n{final_text}")
+                    return final_text
 
     return final_text
 
@@ -1068,8 +1108,9 @@ def _build_history_prompt(entries: list[dict]) -> str:
     if not entries:
         return ""
 
-    passed = [e for e in entries if e.get("hit_rate", 0) >= 0.35]
-    failed = [e for e in entries if e.get("hit_rate", 0) < 0.35]
+    hit_entries = [e for e in entries if "hit_rate" in e]
+    passed = [e for e in hit_entries if e.get("hit_rate", 0) >= 0.35]
+    failed = [e for e in hit_entries if e.get("hit_rate", 0) < 0.35]
 
     lines = ["\n━━ 歷史紀錄（避免重複，探索新方向）━━"]
 
@@ -1535,8 +1576,11 @@ def _generate_report():
     print(f"\n[報表] 已存：{report_path}（{len(rows)} 筆條件）")
 
 
-def daily_task():
+def daily_task(model: str = "", max_signal_calls: int = 0, validate: bool = True):
     global SESSION_START, SESSION_END
+    if model:
+        selected = select_model(model)
+        print(f"[model] {selected}")
 
     today = datetime.now()
     SESSION_END = today.strftime("%Y-%m-%d")
@@ -1549,14 +1593,16 @@ def daily_task():
     task = (
         f"今天是 {SESSION_END}，統計期間：{SESSION_START} 到 {SESSION_END}，股票池 {len(WATCH_STOCKS)} 支。\n"
         "目標：找出更多 hit_rate >= 0.35 且 sample_count >= 30 的新條件。\n"
-        "第一步呼叫 scan_correlations，再用高相關指標組合 analyze_signal 測試。\n"
+        "第一步呼叫 scan_correlations，再用高相關指標與非前三名候選指標組合 analyze_signal 測試。\n"
+        "每 5 次 analyze_signal 至少 2 次要加入 scan_correlations 前三名以外的指標。\n"
         "回測與模型訓練由外部處理，你只需找到盡量多的通過條件。" + history_text
     )
 
-    result = run_agent(task)
+    result = run_agent(task, max_signal_calls=max_signal_calls)
 
     # Agent 結束後，再驗證本次新找到的條件
-    validate_and_train()
+    if validate:
+        validate_and_train()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
     fname = os.path.join(RESULTS_DIR, f"signal_report_{today.strftime('%Y%m%d_%H%M')}.txt")
@@ -1571,13 +1617,17 @@ if __name__ == "__main__":
 
     if len(sys.argv) > 1 and sys.argv[1] in ("--schedule", "-s"):
         RUN_TIME = "08:30"
-        schedule.every().day.at(RUN_TIME).do(daily_task)
+        model = sys.argv[2] if len(sys.argv) > 2 else ""
+        max_signal_calls = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+        schedule.every().day.at(RUN_TIME).do(daily_task, model=model, max_signal_calls=max_signal_calls)
         print(f"Free Agent 已啟動，每天 {RUN_TIME} 自動探索指標組合")
         print(f"報告存至：{RESULTS_DIR}/")
         print("Ctrl+C 停止\n")
-        daily_task()
+        daily_task(model=model, max_signal_calls=max_signal_calls)
         while True:
             schedule.run_pending()
             time.sleep(30)
     else:
-        daily_task()
+        model = sys.argv[1] if len(sys.argv) > 1 else ""
+        max_signal_calls = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+        daily_task(model=model, max_signal_calls=max_signal_calls, validate=max_signal_calls == 0)
