@@ -15,3 +15,7 @@ https://raywu918python-j1s-api.hf.space
 /predictions/2026-05-24?model=xxx — 指定日期 + 模型
 
 curl https://raywu918python-j1s-api.hf.space/predictions/
+
+ollama serve
+
+aider --model ollama/qwen2.5-coder:14b src/free_agent/free_agent.py
