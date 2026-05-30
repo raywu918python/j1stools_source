@@ -38,7 +38,8 @@ _gemini_client = OpenAI(
 )
 
 MODELS = [
-    ("qwen3:14b", _ollama_client),
+    # ("qwen3:14b", _ollama_client),
+    ("qwen3-coder:latest", _ollama_client),
     ("llama-3.3-70b-versatile", _groq_client),
     ("deepseek-v4-flash", _deepseek_client),
     (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),
@@ -1171,7 +1172,7 @@ def validate_and_train(target: dict):
                         use_fixed_tp=True,
                         use_sl_trail=False,
                         use_hold_days=True,
-                        max_holdings=5,
+                        max_positions=5,
                     )
                     pv = portfolio_value.dropna()
                     rets = pv.pct_change(fill_method=None).dropna()
@@ -1201,15 +1202,20 @@ def validate_and_train(target: dict):
                     with open(_backtest_log_path(target), "w", encoding="utf-8") as f:
                         f.write(json.dumps(bt_result, ensure_ascii=False) + "\n")
 
+                    wr_str = f"{win_rate:.1%}" if win_rate is not None else "N/A"
+                    ret_str = f"{total_return:+.2%}" if total_return is not None else "N/A"
                     print(
-                        f"\n  [模型回測] Sharpe={sharpe}  總報酬={total_return:+.2%}  "
-                        f"交易={len(trades_df)} 筆  獲利={win_rate:.1%}  最大回撤={max_dd:.1%}"
+                        f"\n  [模型回測] Sharpe={sharpe}  總報酬={ret_str}  "
+                        f"交易={len(trades_df)} 筆  獲利={wr_str}  最大回撤={max_dd:.1%}"
                     )
                 except Exception as e:
                     print(f"  [模型回測] 失敗：{e}")
                     import traceback
 
                     traceback.print_exc()
+
+            def _json_safe(m: dict) -> dict:
+                return {k: v for k, v in m.items() if k != "rfc"}
 
             rfc_result = {
                 "target": tgt_name,
@@ -1225,9 +1231,9 @@ def validate_and_train(target: dict):
                 "n_conditions": len(all_conds),
                 "n_tech_features": len(tech_cols),
                 "n_signal_features": len(this_cols) + len(hist_cols),
-                "model_a": {"name": "技術指標(無條件)", **model_a},
-                "model_b": {"name": f"歷史條件({len(hist_cols)})", **model_b} if model_b else {},
-                "model_c": {"name": f"本次條件({len(this_cols)})", **model_c} if model_c else {},
+                "model_a": {"name": "技術指標(無條件)", **_json_safe(model_a)},
+                "model_b": {"name": f"歷史條件({len(hist_cols)})", **_json_safe(model_b)} if model_b else {},
+                "model_c": {"name": f"本次條件({len(this_cols)})", **_json_safe(model_c)} if model_c else {},
                 "backtest": bt_result,
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
@@ -1287,14 +1293,18 @@ def _generate_report(target: dict):
         if not m:
             return f"<tr><td style='border:1px solid #333;padding:6px'>{name}</td><td colspan='5' style='color:#888;text-align:center'>未訓練</td></tr>"
         th = m.get("thresholds", {})
+
+        def _fmt(v):
+            return f"{v:.1%}" if isinstance(v, (int, float)) else "-"
+
         return f"""<tr>
       <td style="border:1px solid #333;padding:6px;font-weight:bold">{name}</td>
       <td style="text-align:center;border:1px solid #333;padding:6px">{feat_count}</td>
-      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.5",{}).get("hit_rate","-"):.1%}</td>
-      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.6",{}).get("hit_rate","-"):.1%}</td>
-      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.7",{}).get("hit_rate","-"):.1%}</td>
-      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.8",{}).get("hit_rate","-"):.1%}</td>
-      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.9",{}).get("hit_rate","-"):.1%}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{_fmt(th.get("proba>=0.5",{}).get("hit_rate","-"))}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{_fmt(th.get("proba>=0.6",{}).get("hit_rate","-"))}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{_fmt(th.get("proba>=0.7",{}).get("hit_rate","-"))}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{_fmt(th.get("proba>=0.8",{}).get("hit_rate","-"))}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{_fmt(th.get("proba>=0.9",{}).get("hit_rate","-"))}</td>
     </tr>"""
 
     comparison_html = f"""
@@ -1316,15 +1326,17 @@ def _generate_report(target: dict):
     bt_html = ""
     if backtest:
         trades = backtest.get("total_trades", 0)
-        sharpe = backtest.get("sharpe", 0)
-        total_ret = backtest.get("total_return", 0)
-        mdd = backtest.get("max_drawdown", 0)
-        wr = backtest.get("win_rate", 0)
-        avg_r = backtest.get("avg_return", 0)
-        avg_w = backtest.get("avg_win", 0)
-        avg_l = backtest.get("avg_loss", 0)
+        sharpe = backtest.get("sharpe", 0) or 0
+        total_ret = backtest.get("total_return")
+        mdd = backtest.get("max_drawdown", 0) or 0
+        wr = backtest.get("win_rate")
+        avg_r = backtest.get("avg_return")
+        avg_w = backtest.get("avg_win", 0) or 0
+        avg_l = backtest.get("avg_loss", 0) or 0
         sharpe_color = _sc(sharpe)
         dd_color = "#e74c3c" if mdd < -0.15 else "#e67e22" if mdd < -0.10 else "#2ecc71"
+        _pct = lambda v: f"{v:+.2%}" if v is not None else "N/A"
+        _wpct = lambda v: f"{v:.1%}" if v is not None else "N/A"
         bt_html = f"""
         <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
         <tr>
@@ -1340,12 +1352,12 @@ def _generate_report(target: dict):
         <tr>
           <td style="text-align:center;border:1px solid #333;padding:6px">{trades}</td>
           <td style="text-align:center;border:1px solid #333;padding:6px;font-weight:bold;color:{sharpe_color}">{sharpe:.2f}</td>
-          <td style="text-align:center;border:1px solid #333;padding:6px">{total_ret:+.2%}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px">{_pct(total_ret)}</td>
           <td style="text-align:center;border:1px solid #333;padding:6px;color:{dd_color}">{mdd:.1%}</td>
-          <td style="text-align:center;border:1px solid #333;padding:6px">{wr:.1%}</td>
-          <td style="text-align:center;border:1px solid #333;padding:6px">{avg_r:+.2%}</td>
-          <td style="text-align:center;border:1px solid #333;padding:6px;color:#2ecc71">{avg_w:+.2%}</td>
-          <td style="text-align:center;border:1px solid #333;padding:6px;color:#e74c3c">{avg_l:+.2%}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px">{_wpct(wr)}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px">{f"{avg_r:+.2f}%" if avg_r is not None else "N/A"}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px;color:#2ecc71">{avg_w:+.2f}%</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px;color:#e74c3c">{avg_l:+.2f}%</td>
         </tr>
         </table>"""
 
@@ -1444,5 +1456,6 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[3]) if len(sys.argv) > 3 else 0.08
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
-    model = "llama"
+    model = "ollama"
+    max_calls = 50
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
