@@ -597,7 +597,20 @@ def execute_tool(name: str, inputs: dict) -> dict:
     if name == "check_history":
         top_n = inputs.get("top_n", 10)
         ind_limit = 3
+        # 合併本 session + 歷史 .bak 記錄（上限 500 筆避免 context 爆炸）
         all_entries = _load_signal_log(target, max_entries=9999)
+        bak_path = _signal_log_path(target) + ".bak"
+        if os.path.exists(bak_path):
+            try:
+                with open(bak_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                for line in lines[-300:]:
+                    try:
+                        all_entries.append(json.loads(line.strip()))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         passed = [e for e in all_entries if e.get("hit_rate", 0) >= _pass_threshold(target)]
 
         ind_usage: dict = {}
