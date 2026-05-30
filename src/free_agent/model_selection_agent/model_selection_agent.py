@@ -696,6 +696,28 @@ def execute_tool(name: str, inputs: dict) -> dict:
             return {
                 "error": f"至少使用 3 個不同指標（目前 {len(used_inds)} 個：{sorted(used_inds)}）。2 指標組合由 Grid Search 自動覆蓋。"
             }
+        # 飽和硬擋：合併 session + bak + grid_log 計算，防止 LLM 靠記憶繞過 tool description
+        if not inputs.get("_bypass_min_indicators"):
+            _all = _load_signal_log(target, max_entries=9999)
+            _bak = _signal_log_path(target) + ".bak"
+            if os.path.exists(_bak):
+                try:
+                    with open(_bak, encoding="utf-8") as _f:
+                        for _l in _f:
+                            try:
+                                _all.append(json.loads(_l.strip()))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            _all.extend(_load_grid_log(target))
+            _iu: dict = {}
+            for _e in _all:
+                for _t in _condition_indicators(_e.get("condition", "")):
+                    _iu[_t] = _iu.get(_t, 0) + 1
+            saturated_used = used_inds & {k for k, v in _iu.items() if v >= 3}
+            if saturated_used:
+                return {"error": f"飽和指標 {sorted(saturated_used)} 已出現 3+ 次，請換其他指標。"}
         try:
             ind, close = _get_indicators(TRAIN_START, TRAIN_END)
         except Exception as e:
@@ -791,27 +813,34 @@ def _build_system_prompt(target: dict) -> str:
 
     pass_th = _pass_threshold(target)
 
-    return f"""你是台灣股票量化研究助理，任務是為目標「{name}」建立特徵候選集。
+    return f"""你是台灣股票量化研究助理。
 
-━━ 本次目標 ━━
-持有 {hd} 天，目標報酬 {pt:.0%}，停損 {sl:.0%}。
-通過門檻：hit_rate >= {pass_th:.2f}，sample_count >= 100。
+━━ 本次任務 ━━
+為目標「{name}」（持有 {hd} 天 / 報酬 {pt:.0%} / 停損 {sl:.0%}）
+建立一組**來自不同維度**的特徵候選條件，供後續 RFC 模型使用。
 
-━━ 工作規則 ━━
-1. **第一步必須呼叫 check_history()**
-   - 看 grid_passed：Grid Search 已測好的 2 指標基礎組合，優先在這些上面加第 3 個指標延伸
-   - 看 passed_conditions：前幾次 session 已通過的條件，避免重複
-2. **每次 analyze_signal 使用至少 3 個不同指標**（2 指標由 Grid Search 覆蓋，你專注 3+ 指標）
-3. analyze_signal 的 condition 參數只列出**目前可用指標**，未列出的已飽和禁用，不要使用
-4. 篩選標準：hit_rate >= {pass_th:.2f} 且 sample_count >= 100
-5. sample_count 500~3000 最佳；> 5000 通常 hit_rate 偏低，應加嚴門檻
+**完成標準：量能、籌碼、型態三個維度各至少 1 個通過條件（技術面自然會有，不算在完成條件內）。**
+- 量能 / 籌碼 / 型態各維度找到 1~2 個即可，找到後立刻換下一個維度
+- 技術面可自由探索，但不應成為唯一重心
+- 通過門檻：hit_rate >= {pass_th:.2f}，sample_count >= 100
 
-━━ 探索策略 ━━
+━━ 工作流程 ━━
+1. 先呼叫 check_history()，看 grid_passed（2指標基礎）和 passed_conditions（已通過條件）
+2. 確認量能 / 籌碼 / 型態哪個維度還沒有通過條件，優先去那個維度探索
+3. 取 grid_passed 裡好的組合，加入目標維度的指標，測試 3+ 指標條件
+4. condition 參數的可用指標清單已即時更新，只能使用清單內的指標
+
+━━ 四個維度 ━━
+- 技術面：adx, rsi, macdh, bb_width, atr_rank, ma5_x_ma10, ma10_x_ma60
+- 量能面：vol_ratio, vol_trend, obv, obv_ma
+- 籌碼面：net_foreign, net_inst, inst_rank, foreign_rank, short_chg, short_ratio_rank
+- 型態面：f_n_structure_score, f_n_ab_gain, triangle_score, human_only
+
+━━ 探索提示 ━━
 {hint}
 
-━━ 關鍵技巧 ━━
-- Grid passed 的組合是好的起點：取其中 1~2 個指標，再加 1 個不同維度的指標
-- 多嘗試跨維度組合（技術 + 籌碼、型態 + 量能、均線 + 外資...）
+━━ 技巧 ━━
+- sample_count 500~3000 最佳；> 5000 應加嚴門檻
 - 統計資料期間：{TRAIN_START} ~ {TRAIN_END}
 
 請用繁體中文回覆。"""
