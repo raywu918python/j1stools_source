@@ -851,18 +851,6 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
     _rate_limit_count = 0
     _call_count = 0
     _tool_usage: dict = {}
-    _accepted_signal_count = 0
-    _signal_window_diverse = 0
-    _session_indicator_usage: dict[str, int] = {}
-
-    def _session_top3_indicators() -> list[str]:
-        return [
-            ind
-            for ind, _ in sorted(
-                _session_indicator_usage.items(),
-                key=lambda item: (-item[1], item[0]),
-            )[:3]
-        ]
 
     def _get_tools_with_usage() -> list:
         import copy as _copy
@@ -979,47 +967,8 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
             fn_name = tc.function.name
             fn_args = json.loads(tc.function.arguments)
             print(f"→ {fn_name}({json.dumps(fn_args, ensure_ascii=False)})")
-            accepted_signal_call = False
-            signal_is_diverse = False
-            signal_indicators: set[str] = set()
 
-            if fn_name == "analyze_signal" and "condition" in fn_args:
-                if _accepted_signal_count % 5 == 0:
-                    _signal_window_diverse = 0
-                signal_indicators = _condition_indicators(fn_args["condition"])
-                top3 = _session_top3_indicators()
-                top3_used = sorted(signal_indicators & set(top3))
-                non_top3_used = sorted(signal_indicators - set(top3))
-                is_diverse = len(non_top3_used) >= 2 and len(top3_used) <= 2
-                block_pos = _accepted_signal_count % 5
-                remaining_after = 5 - (block_pos + 1)
-                if not is_diverse and _signal_window_diverse + remaining_after < 2:
-                    result = {
-                        "error": (
-                            "硬性探索規則：每 5 次成功 analyze_signal 至少 2 次必須是多元指標測試。"
-                            f"本 session 常用前三名={top3}。請至少加入 2 個前三名以外指標，"
-                            "再重新呼叫 analyze_signal。"
-                        ),
-                        "used_indicators": sorted(signal_indicators),
-                        "top3_used": top3_used,
-                        "non_top3_used": non_top3_used,
-                        "is_diverse": False,
-                        "current_window": {
-                            "accepted_calls": block_pos,
-                            "diverse_calls": _signal_window_diverse,
-                            "remaining_after_this_call": remaining_after,
-                            "required_diverse_calls": 2,
-                        },
-                    }
-                else:
-                    result = execute_tool(fn_name, fn_args)
-                    accepted_signal_call = "error" not in result
-                    signal_is_diverse = is_diverse
-            else:
-                result = execute_tool(fn_name, fn_args)
-                if fn_name == "analyze_signal":
-                    accepted_signal_call = "error" not in result
-                    signal_indicators = _condition_indicators(fn_args.get("condition", ""))
+            result = execute_tool(fn_name, fn_args)
 
             tool_content = (
                 json.dumps(result, ensure_ascii=False)
@@ -1029,12 +978,6 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
             print(f"  {tool_content}")
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_content})
             _tool_usage[fn_name] = _tool_usage.get(fn_name, 0) + 1
-            if accepted_signal_call:
-                _accepted_signal_count += 1
-                if signal_is_diverse:
-                    _signal_window_diverse += 1
-                for ind in signal_indicators:
-                    _session_indicator_usage[ind] = _session_indicator_usage.get(ind, 0) + 1
             _call_count += 1
             if max_calls and _call_count >= max_calls:
                 print(f"\n[測試] 已達 {max_calls} 次工具呼叫上限，停止")
