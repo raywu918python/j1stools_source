@@ -257,6 +257,49 @@ AGENT_INDICATORS = list(INDICATOR_DESCRIPTIONS.keys()) + [
 ]
 
 
+# ── Grid Search 門檻定義 ─────────────────────────────────────────
+# 每個指標常用門檻值，_run_grid_search() 會自動組合測試
+_GRID_THRESHOLDS: dict[str, list[float]] = {
+    # 技術
+    "rsi": [50, 55, 60, 65],
+    "macdh": [0],
+    "adx": [20, 25, 30],
+    "bb_width": [0.3, 0.5, 0.8],
+    "atr_rank": [0.6, 0.7, 0.8],
+    # 均線交叉（bool 指標，只能 == True）
+    "ma5_x_ma10": [True],
+    "ma5_x_ma20": [True],
+    "ma10_x_ma60": [True],
+    # 量能
+    "vol_ratio": [1.0, 1.5, 2.0, 2.5],
+    "vol_trend": [1.0, 1.2, 1.5],
+    # 法人
+    "net_foreign": [0, 100, 500],
+    "net_trust": [0, 100],
+    "net_dealer": [0, 100],
+    "net_inst": [0, 200, 500],
+    "foreign_rank": [0.6, 0.7, 0.8],
+    "trust_rank": [0.6, 0.7, 0.8],
+    "inst_rank": [0.6, 0.7, 0.8],
+    # 融資券
+    "short_chg": [0, -0.05, -0.1],
+    "short_ratio_rank": [0.7, 0.8, 0.9],
+    "short_ratio": [0.2, 0.3, 0.5],
+    # ABCD 型態
+    "f_n_confirmed": [True],
+    "f_n_structure_score": [0.3, 0.5, 0.7],
+    "f_n_ab_gain": [0.05, 0.1, 0.15],
+    "f_n_d_breakout_strength": [0.3, 0.5, 0.7],
+    "f_n_volume_confirm": [0.3, 0.5],
+    # 三角收斂
+    "human_only": [True],
+    "triangle_score": [0.5, 0.65, 0.8],
+}
+
+# 每個假設要 grid search 的跨類別組合數
+_GRID_COMBOS_PER_HYPOTHESIS = 60
+
+
 def _condition_indicators(condition: str) -> set[str]:
     tokens = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", condition or ""))
     return tokens & set(AGENT_INDICATORS)
@@ -629,6 +672,150 @@ def _load_signal_log(hypothesis: str, max_entries: int = 300) -> list[dict]:
         except Exception:
             pass
     return entries
+
+
+# ── Grid Search ─────────────────────────────────────────────────────
+# 暴力測試跨類別指標組合，補 LLM Agent 可能漏掉的好條件
+def _grid_condition(ind_a: str, th_a: float, ind_b: str, th_b: float) -> str:
+    """產生 (ind_a > th_a) & (ind_b > th_b) 條件字串。bool 指標用 == True。"""
+
+    def _fmt(ind: str, th: float) -> str:
+        if th is True:
+            return f"({ind})"
+        if isinstance(th, bool):
+            return f"({ind})"
+        if isinstance(th, str):
+            return f"({ind} {th})"
+        return f"({ind} > {th})"
+
+    return f"{_fmt(ind_a, th_a)} & {_fmt(ind_b, th_b)}"
+
+
+def _run_grid_search(hypothesis: str):
+    """
+    根據假設的 indicator_categories，從不同類別各挑 n 個指標做跨類別組合，
+    暴力測試 LLM 可能漏掉的多元條件。
+
+    free 模式：從《GRID_THRESHOLDS 有定義的指標》隨機挑 2 個指標組合
+    其他假設：從《該假設的 indicator_categories》跨類別組合
+    """
+    global _current_hypothesis
+    _current_hypothesis = hypothesis
+
+    cfg = HYPOTHESIS_CONFIGS.get(hypothesis, {})
+    categories = cfg.get("indicator_categories", {})
+
+    # 收集可用的指標（有定義門檻的才算）
+    grid_inds = set(_GRID_THRESHOLDS.keys())
+    if hypothesis == "free":
+        # free 模式：全部有門檻的指標
+        candidate_pool = list(grid_inds)
+    else:
+        # 其他假設：只取該假設分類內、且有門檻定義的指標
+        cat_inds = set()
+        for inds in categories.values():
+            cat_inds.update(inds)
+        candidate_pool = sorted(cat_inds & grid_inds)
+
+    if len(candidate_pool) < 2:
+        print(f"  [Grid Search] {cfg['name']} 可用指標不足 2 個，跳過")
+        return 0
+
+    import itertools
+    import random as _random
+
+    # 確保跨類別（free 模式除外）
+    cat_map: dict[str, str] = {}  # indicator -> category name
+    if hypothesis != "free":
+        for cat, inds in categories.items():
+            for ind in inds:
+                if ind in grid_inds:
+                    cat_map[ind] = cat
+
+    combos_tested = 0
+    combos_passed = 0
+    tested_set = set()
+
+    # 讀取已測過的條件，避免重複測試
+    existing = _load_signal_log(hypothesis, max_entries=9999)
+    existing_set = {_normalize_condition(e.get("condition", "")) for e in existing}
+
+    # 從每個類別取代表指標，確保跨類別
+    if hypothesis == "free":
+        # free 模式：隨機生成 pair
+        pairs = list(itertools.combinations(candidate_pool, 2))
+        _random.shuffle(pairs)
+        pairs = pairs[: _GRID_COMBOS_PER_HYPOTHESIS * 2]  # 保留 buffer
+    else:
+        # 確保跨類別：先把指標按類別分組
+        cat_groups: dict[str, list[str]] = {}
+        for ind in candidate_pool:
+            cat = cat_map.get(ind, "_other")
+            if cat not in cat_groups:
+                cat_groups[cat] = []
+            cat_groups[cat].append(ind)
+
+        cat_list = list(cat_groups.keys())
+        if len(cat_list) < 2:
+            print(f"  [Grid Search] {cfg['name']} 只有 1 個類別有門檻定義，跳過")
+            return 0
+
+        # 從不同類別各挑一個指標
+        pairs = []
+        for _ in range(_GRID_COMBOS_PER_HYPOTHESIS * 3):
+            c1, c2 = _random.sample(cat_list, min(2, len(cat_list)))
+            if c1 == c2:
+                continue
+            ind_a = _random.choice(cat_groups[c1])
+            ind_b = _random.choice(cat_groups[c2])
+            pairs.append((ind_a, ind_b))
+
+    print(f"\n  [Grid Search] {cfg['name']}: 開始暴力測試跨類別組合...")
+    ind_cache, _ = _get_indicators(TRAIN_START, TRAIN_END)
+
+    for ind_a, ind_b in pairs:
+        if combos_tested >= _GRID_COMBOS_PER_HYPOTHESIS:
+            break
+
+        th_a = _random.choice(_GRID_THRESHOLDS[ind_a])
+        th_b = _random.choice(_GRID_THRESHOLDS[ind_b])
+        condition = _grid_condition(ind_a, th_a, ind_b, th_b)
+        normalized = _normalize_condition(condition)
+
+        # 跳過已測過的
+        if normalized in existing_set:
+            continue
+
+        # 驗證指標存在
+        if ind_a not in ind_cache or ind_b not in ind_cache:
+            continue
+
+        # 測試
+        try:
+            result = execute_tool(
+                "analyze_signal",
+                {
+                    "condition": condition,
+                    "hold_days": 10,
+                    "label_type": "hit",
+                    "profit_target": 0.15,
+                },
+            )
+            combos_tested += 1
+            if "error" in result:
+                continue
+            hr = result.get("hit_rate", 0)
+            n = result.get("sample_count", 0)
+            if hr >= 0.35 and n >= 100:
+                combos_passed += 1
+                print(f"    ✅ {condition}: hit={hr:.2%} n={n}")
+            else:
+                print(f"    ❌ {condition}: hit={hr:.2%} n={n}")
+        except Exception:
+            continue
+
+    print(f"  [Grid Search] {cfg['name']}: 測試 {combos_tested} 組，通過 {combos_passed} 組")
+    return combos_passed
 
 
 # ── 工具執行 ─────────────────────────────────────────────────────
@@ -1209,7 +1396,7 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
             signal_is_diverse = False
             signal_indicators: set[str] = set()
 
-            if hypothesis == "free" and fn_name == "analyze_signal" and "condition" in fn_args:
+            if fn_name == "analyze_signal" and "condition" in fn_args:
                 if _accepted_signal_count % 5 == 0:
                     _signal_window_diverse = 0
                 signal_indicators = _condition_indicators(fn_args["condition"])
@@ -1222,7 +1409,7 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
                 if not is_diverse and _signal_window_diverse + remaining_after < 2:
                     result = {
                         "error": (
-                            "硬性探索規則（free 角色）：每 5 次成功 analyze_signal 至少 2 次必須是多元指標測試。"
+                            "硬性探索規則：每 5 次成功 analyze_signal 至少 2 次必須是多元指標測試。"
                             f"本 session 常用前三名={top3}。請至少加入 2 個前三名以外指標，"
                             "且最多只使用 2 個常用前三名指標，再重新呼叫 analyze_signal。"
                         ),
@@ -1391,100 +1578,116 @@ def validate_and_train(hypothesis: str = "breakout"):
         if len(train) < 200 or len(test) < 50:
             print(f"  資料不足：train={len(train)}, test={len(test)}")
         else:
-            # ── 訓練單一 RFC（技術指標 + 本次前20 + 歷史前20） ──
-            all_feat_cols = list(dict.fromkeys(tech_cols + this_cols + hist_cols))  # 去重但保序
-            rfc = RandomForestClassifier(n_estimators=100, max_depth=6, n_jobs=-1, random_state=42)
-            rfc.fit(train[all_feat_cols], train["target"])
-
-            model_path = os.path.join(_results_dir(hypothesis), "rfc_model.joblib")
-            joblib.dump(rfc, model_path)
-
-            # ── 用模型生成 proba（預測期 2024~今） ──
-            test_proba = rfc.predict_proba(test[all_feat_cols])[:, 1]
-            test = test.copy()
-            test["proba"] = test_proba
-
-            proba_wide = test.pivot(index="date", columns="stock_id", values="proba").fillna(0)
-            close_wide_bt = test.pivot(index="date", columns="stock_id", values="close")
-
-            # ── 模型回測（用 proba 排序進場） ──
-            from j1stools.backtest_engine import backtest_engine
-
-            entries = proba_wide >= 0.5
-            exits = pd.Series(False, index=proba_wide.index)
-            stock_group_map = {s: "default" for s in proba_wide.columns}
-
-            try:
-                portfolio_value, trades_df, _ = backtest_engine(
-                    close=close_wide_bt,
-                    entries=entries,
-                    exits=exits,
-                    df_proba=proba_wide,
-                    stock_group=stock_group_map,
-                    hold_days=10,
-                    sl_stop=0.08,
-                    tp_stop=0.15,
-                    use_fixed_sl=True,
-                    use_fixed_tp=True,
-                    use_sl_trail=False,
-                    use_hold_days=True,
-                )
-
-                pv = portfolio_value.dropna()
-                rets = pv.pct_change(fill_method=None).dropna()
-                total_return = round(float(pv.iloc[-1] / pv.iloc[0] - 1), 4) if len(pv) > 1 else None
-                sharpe = round(float(rets.mean() / rets.std() * (252**0.5)) if rets.std() > 0 else 0, 2)
-                max_dd = round(float(((pv / pv.cummax()) - 1).min()), 4)
-                rp = trades_df.get("return_pct", pd.Series(dtype=float))
-                win_rate = round(float((rp > 0).mean()), 4) if len(rp) else None
-                avg_return = round(float(rp.mean()), 4) if len(rp) else None
-                avg_win = round(float(rp[rp > 0].mean()), 4) if (rp > 0).any() else 0
-                avg_loss = round(float(rp[rp < 0].mean()), 4) if (rp < 0).any() else 0
-
-                bt_result = {
-                    "type": "model_backtest",
-                    "period": f"{PREDICT_START}~{SESSION_END}",
-                    "total_trades": len(trades_df),
-                    "total_return": total_return,
-                    "sharpe": sharpe,
-                    "max_drawdown": max_dd,
-                    "win_rate": win_rate,
-                    "avg_return": avg_return,
-                    "avg_win": avg_win,
-                    "avg_loss": avg_loss,
-                }
-
-                backtest_log = _backtest_log_path(hypothesis)
-                with open(backtest_log, "w", encoding="utf-8") as f:
-                    f.write(json.dumps(bt_result, ensure_ascii=False) + "\n")
-
-                print(
-                    f"\n  [模型回測] Sharpe={sharpe}  總報酬={total_return:+.2%}  "
-                    f"交易={len(trades_df)} 筆  獲利={win_rate:.1%}  "
-                    f"最大回撤={max_dd:.1%}"
-                )
-
-            except Exception as e:
-                print(f"  [模型回測] 失敗：{e}")
-                import traceback
-
-                traceback.print_exc()
-
-            # ── RFC 驗證統計 ──
             actual = test["target"].values
             base_rate = round(float(actual.mean()), 4)
-            thresholds = {}
-            for th in [0.5, 0.6, 0.7, 0.8, 0.9]:
-                mask = test_proba >= th
-                n = int(mask.sum())
-                thresholds[f"proba>={th}"] = (
-                    {"n": n, "hit_rate": round(float(actual[mask].mean()), 4)}
-                    if n >= 10
-                    else {"n": n, "note": "樣本不足"}
-                )
 
-            importance = sorted(zip(all_feat_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
-            top_feats = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:15]]
+            # ── 定義 RFC 比較用的 helper ──
+            def _train_rfc(feat_cols, model_name):
+                rfc = RandomForestClassifier(n_estimators=100, max_depth=6, n_jobs=-1, random_state=42)
+                rfc.fit(train[feat_cols], train["target"])
+                proba = rfc.predict_proba(test[feat_cols])[:, 1]
+                thresholds = {}
+                for th in [0.5, 0.6, 0.7, 0.8, 0.9]:
+                    mask = proba >= th
+                    n = int(mask.sum())
+                    thresholds[f"proba>={th}"] = (
+                        {"n": n, "hit_rate": round(float(actual[mask].mean()), 4)}
+                        if n >= 10
+                        else {"n": n, "note": "樣本不足"}
+                    )
+                importance = sorted(zip(feat_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
+                top_feats = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:15]]
+                model_path = os.path.join(_results_dir(hypothesis), f"rfc_{model_name}.joblib")
+                joblib.dump(rfc, model_path)
+                print(f"  [{model_name}] base={base_rate} {thresholds}")
+                return {"thresholds": thresholds, "top_features": top_feats, "model_path": model_path, "rfc": rfc}
+
+            # ── 模型 A：只有技術指標（baseline） ──
+            model_a = _train_rfc(tech_cols, "tech_only")
+
+            # ── 模型 B：只有歷史前20條件（bak + backtest_log），不含技術 ──
+            model_b = {}
+            if hist_cols:
+                model_b = _train_rfc(hist_cols, "hist_only")
+
+            # ── 模型 C：只有本次前20條件，不含技術（主要評估對象） ──
+            model_c = {}
+            if this_cols:
+                model_c = _train_rfc(this_cols, "this_only")
+
+            # ── 用模型 C（本次條件）做模型回測 ──
+            bt_result = None
+            if model_c:
+                rfc_c = model_c["rfc"]
+                test_proba = rfc_c.predict_proba(test[this_cols])[:, 1]
+
+                test_c = test.copy()
+                test_c["proba"] = test_proba
+                proba_wide = test_c.pivot(index="date", columns="stock_id", values="proba").fillna(0)
+                close_wide_bt = test_c.pivot(index="date", columns="stock_id", values="close")
+
+                from j1stools.backtest_engine import backtest_engine
+
+                entries = proba_wide >= 0.5
+                exits = pd.Series(False, index=proba_wide.index)
+                stock_group_map = {s: "default" for s in proba_wide.columns}
+
+                try:
+                    portfolio_value, trades_df, _ = backtest_engine(
+                        close=close_wide_bt,
+                        entries=entries,
+                        exits=exits,
+                        df_proba=proba_wide,
+                        stock_group=stock_group_map,
+                        hold_days=10,
+                        sl_stop=0.08,
+                        tp_stop=0.15,
+                        use_fixed_sl=True,
+                        use_fixed_tp=True,
+                        use_sl_trail=False,
+                        use_hold_days=True,
+                    )
+
+                    pv = portfolio_value.dropna()
+                    rets = pv.pct_change(fill_method=None).dropna()
+                    total_return = round(float(pv.iloc[-1] / pv.iloc[0] - 1), 4) if len(pv) > 1 else None
+                    sharpe = round(float(rets.mean() / rets.std() * (252**0.5)) if rets.std() > 0 else 0, 2)
+                    max_dd = round(float(((pv / pv.cummax()) - 1).min()), 4)
+                    rp = trades_df.get("return_pct", pd.Series(dtype=float))
+                    win_rate = round(float((rp > 0).mean()), 4) if len(rp) else None
+                    avg_return = round(float(rp.mean()), 4) if len(rp) else None
+                    avg_win = round(float(rp[rp > 0].mean()), 4) if (rp > 0).any() else 0
+                    avg_loss = round(float(rp[rp < 0].mean()), 4) if (rp < 0).any() else 0
+
+                    bt_result = {
+                        "type": "model_backtest",
+                        "model": "tech_hist20",
+                        "period": f"{PREDICT_START}~{SESSION_END}",
+                        "total_trades": len(trades_df),
+                        "total_return": total_return,
+                        "sharpe": sharpe,
+                        "max_drawdown": max_dd,
+                        "win_rate": win_rate,
+                        "avg_return": avg_return,
+                        "avg_win": avg_win,
+                        "avg_loss": avg_loss,
+                    }
+
+                    backtest_log_path = _backtest_log_path(hypothesis)
+                    with open(backtest_log_path, "w", encoding="utf-8") as f:
+                        f.write(json.dumps(bt_result, ensure_ascii=False) + "\n")
+
+                    print(
+                        f"\n  [模型回測] Sharpe={sharpe}  總報酬={total_return:+.2%}  "
+                        f"交易={len(trades_df)} 筆  獲利={win_rate:.1%}  "
+                        f"最大回撤={max_dd:.1%}"
+                    )
+
+                except Exception as e:
+                    print(f"  [模型回測] 失敗：{e}")
+                    import traceback
+
+                    traceback.print_exc()
 
             rfc_result = {
                 "hypothesis": hypothesis,
@@ -1496,10 +1699,10 @@ def validate_and_train(hypothesis: str = "breakout"):
                 "n_conditions": len(all_conds),
                 "n_tech_features": len(tech_cols),
                 "n_signal_features": len(this_cols) + len(hist_cols),
-                "thresholds": thresholds,
-                "top_features": top_feats,
+                "model_a": {"name": "技術指標(無條件)", **model_a},
+                "model_b": {"name": f"歷史條件({len(hist_cols)})", **model_b} if model_b else {},
+                "model_c": {"name": f"本次條件({len(this_cols)})", **model_c} if model_c else {},
                 "backtest": bt_result,
-                "model_path": model_path,
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
             rfc_path = os.path.join(_results_dir(hypothesis), "rfc_result.json")
@@ -1547,7 +1750,7 @@ def _generate_report(hypothesis: str):
     top_feats = rfc.get("top_features", [])
     n_conds = rfc.get("n_conditions", 0)
 
-    # ── 模型回測摘要 ──
+    # ── 三個模型的比較表 ──
     def _sc(s):
         if s >= 2.0:
             return "#1a7a3a"
@@ -1559,6 +1762,62 @@ def _generate_report(hypothesis: str):
             return "#e67e22"
         return "#e74c3c"
 
+    def _model_thresholds_html(m):
+        if not m:
+            return '<p style="color:#888">未訓練</p>'
+        rows = ""
+        for th_name, v in m.get("thresholds", {}).items():
+            n = v.get("n", 0)
+            if "hit_rate" in v:
+                hr = v["hit_rate"]
+                hr_color = "#2ecc71" if hr >= 0.5 else "#f39c12" if hr >= 0.35 else "#e74c3c"
+                rows += (
+                    f"<tr><td>{th_name}</td><td>{n}</td>"
+                    f'<td style="color:{hr_color};font-weight:bold">{hr:.1%}</td></tr>'
+                )
+            else:
+                rows += (
+                    f"<tr><td>{th_name}</td><td style='color:#555'>{n}</td><td style='color:#555'>樣本不足</td></tr>"
+                )
+        feat_str = ", ".join(f["feature"] for f in m.get("top_features", [])[:5] if f.get("importance", 0) > 0)
+        return f'<table style="width:100%;border-collapse:collapse"><tr><th>門檻</th><th>樣本數</th><th>命中率</th></tr>{rows}</table><p style="font-size:12px;color:#aaa">重要特徵：{feat_str}</p>'
+
+    ma = rfc.get("model_a", {})
+    mb = rfc.get("model_b", {})
+    mc = rfc.get("model_c", {})
+
+    def _row_html(m, name, feat_count):
+        if not m:
+            return f"<tr><td style='border:1px solid #333;padding:6px'>{name}</td><td colspan='5' style='color:#888;text-align:center'>未訓練</td></tr>"
+        th = m.get("thresholds", {})
+        return f"""<tr>
+      <td style="border:1px solid #333;padding:6px;font-weight:bold">{name}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{feat_count}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.5",{}).get("hit_rate","-"):.1%}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.6",{}).get("hit_rate","-"):.1%}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.7",{}).get("hit_rate","-"):.1%}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.8",{}).get("hit_rate","-"):.1%}</td>
+      <td style="text-align:center;border:1px solid #333;padding:6px">{th.get("proba>=0.9",{}).get("hit_rate","-"):.1%}</td>
+    </tr>"""
+
+    comparison_html = f"""
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+    <tr>
+      <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">模型</th>
+      <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">特徵數</th>
+      <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.5</th>
+      <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.6</th>
+      <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.7</th>
+      <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.8</th>
+      <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.9</th>
+    </tr>
+    {_row_html(ma, ma.get("name","技術指標(無條件)"), rfc.get("n_tech_features",0))}
+    {_row_html(mb, mb.get("name","歷史條件"), len(hist_cols))}
+    {_row_html(mc, mc.get("name","本次條件"), len(this_cols))}
+    </table>
+    """
+
+    # ── 模型回測摘要 ──
     bt_html = ""
     if backtest:
         trades = backtest.get("total_trades", 0)
@@ -1596,41 +1855,19 @@ def _generate_report(hypothesis: str):
         </table>
         """
 
-    # ── RFC 門檻命中率 ──
-    th_rows = ""
-    for th_name, v in thresholds.items():
-        n = v.get("n", 0)
-        if "hit_rate" in v:
-            hr = v["hit_rate"]
-            hr_color = "#2ecc71" if hr >= 0.5 else "#f39c12" if hr >= 0.35 else "#e74c3c"
-            th_rows += (
-                f"<tr>"
-                f'<td style="text-align:center;border:1px solid #333;padding:6px">{th_name}</td>'
-                f'<td style="text-align:center;border:1px solid #333;padding:6px">{n}</td>'
-                f'<td style="text-align:center;border:1px solid #333;padding:6px;color:{hr_color};font-weight:bold">{hr:.1%}</td>'
-                f"</tr>"
-            )
-        else:
-            th_rows += (
-                f"<tr>"
-                f'<td style="text-align:center;border:1px solid #333;padding:6px">{th_name}</td>'
-                f'<td style="text-align:center;border:1px solid #333;padding:6px;color:#555">{n}</td>'
-                f'<td style="text-align:center;border:1px solid #333;padding:6px;color:#555">樣本不足</td>'
-                f"</tr>"
-            )
-
-    # ── 重要特徵排名 ──
+    # ── 模型 C 的特徵排名 ──
     feat_rows = ""
-    for i, ft in enumerate(top_feats):
-        bar_w = min(int(ft["importance"] * 100), 100)
-        feat_rows += (
-            f"<tr>"
-            f'<td style="text-align:center;border:1px solid #333;padding:6px">{i+1}</td>'
-            f'<td style="font-family:monospace;font-size:12px;border:1px solid #333;padding:6px">{ft["feature"]}</td>'
-            f'<td style="text-align:center;border:1px solid #333;padding:6px">{ft["importance"]:.4f}</td>'
-            f'<td style="border:1px solid #333;padding:6px"><div style="background:#4fc3f7;height:12px;width:{bar_w}%;border-radius:3px;min-width:4px"></div></td>'
-            f"</tr>"
-        )
+    if mc:
+        for i, ft in enumerate(mc.get("top_features", [])[:15]):
+            bar_w = min(int(ft["importance"] * 100), 100)
+            feat_rows += (
+                f"<tr>"
+                f'<td style="text-align:center;border:1px solid #333;padding:6px">{i+1}</td>'
+                f'<td style="font-family:monospace;font-size:12px;border:1px solid #333;padding:6px">{ft["feature"]}</td>'
+                f'<td style="text-align:center;border:1px solid #333;padding:6px">{ft["importance"]:.4f}</td>'
+                f'<td style="border:1px solid #333;padding:6px"><div style="background:#4fc3f7;height:12px;width:{bar_w}%;border-radius:3px;min-width:4px"></div></td>'
+                f"</tr>"
+            )
 
     # ── 指標使用統計 ───────────────────────────────────────────
     import re as _re
@@ -1757,25 +1994,22 @@ def _generate_report(hypothesis: str):
 {this_ind_html}
 </table>
 
+<h2>三個 RFC 模型比較</h2>
+<p style="color:#aaa;font-size:13px">驗證期（{PREDICT_START}~{SESSION_END}）不同 proba 門檻的命中率比較</p>
+{comparison_html}
+
 <h2>模型回測結果（2024-2026 out-of-sample）</h2>
 <p style="color:#aaa;font-size:13px">
-  用 RFC 模型（{n_conds} 個條件 + 技術指標）的 proba 排序進場。
+  用模型 C（{mc.get("name","完整模型")}）的 proba 排序進場。
   進場門檻 proba >= 0.5，持有 10 天 / 停利 15% / 停損 8%。
   回測時依 proba 高低決定進場順序（越高越優先），最多同時持有 10 檔。
 </p>
 {bt_html}
 
-<h2>RFC 門檻命中率（驗證期）</h2>
-<p style="color:#aaa;font-size:13px">基礎命中率 = {rfc["base_rate"]:.1%}（test set label 平均值）</p>
-<table style="width:40%">
-<tr><th>門檻</th><th>樣本數</th><th>命中率</th></tr>
-{th_rows}
-</table>
-
-<h2>重要特徵排名（Feature Importance）</h2>
+<h2>模型 C 重要特徵排名（Feature Importance）</h2>
 <table style="width:80%">
 <tr><th>#</th><th>特徵</th><th>重要性</th><th>視覺化</th></tr>
-{feat_rows}
+{feat_rows if feat_rows else '<tr><td colspan="4" style="color:#888;text-align:center">無資料</td></tr>'}
 </table>
 
 <h2>Agent 探索報告</h2>
@@ -1793,7 +2027,7 @@ def _generate_report(hypothesis: str):
 # ── 入口 ─────────────────────────────────────────────────────────
 def run_session(hypothesis: str = "breakout", model: str = "", max_calls: int = 0):
     """
-    跑一個假設的完整 session：Agent 探索 → 驗證 → 訓練 → 報表
+    跑一個假設的完整 session：Agent 探索 → Grid Search → 驗證 → 訓練 → 報表
 
     model: 指定模型，例如 "deepseek"、"gemini"、"qwen"（空字串 = 預設第一個）
     max_calls: 測試模式最多幾次工具呼叫（0 = 不限並執行驗證）
@@ -1802,6 +2036,8 @@ def run_session(hypothesis: str = "breakout", model: str = "", max_calls: int = 
         print(f"未知假設：{hypothesis}，可用：{list(HYPOTHESIS_CONFIGS.keys())}")
         return
     run_agent(hypothesis, max_calls=max_calls, model_override=model)
+    # Grid Search 補 LLM 漏掉的跨類別組合（不會重複已測過的條件）
+    _run_grid_search(hypothesis)
     validate_and_train(hypothesis)
 
 
@@ -1811,5 +2047,5 @@ if __name__ == "__main__":
     hyp = sys.argv[1] if len(sys.argv) > 1 else "free"
     model = sys.argv[2] if len(sys.argv) > 2 else "qwen"
     max_calls = int(sys.argv[3]) if len(sys.argv) > 3 else 0
-    max_calls = 50
+    max_calls = 10
     run_session(hyp, model=model, max_calls=max_calls)
