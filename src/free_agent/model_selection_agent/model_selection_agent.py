@@ -1237,8 +1237,13 @@ def _generate_report(target: dict):
         print(f"[報表] 無 RFC 結果")
         return
 
-    with open(rfc_path, encoding="utf-8") as f:
-        rfc = json.load(f)
+    try:
+        with open(rfc_path, encoding="utf-8") as f:
+            rfc = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"[報表] rfc_result.json 損壞（{e}），刪除後重跑")
+        os.remove(rfc_path)
+        return
 
     backtest = rfc.get("backtest") or {}
     ma = rfc.get("model_a", {})
