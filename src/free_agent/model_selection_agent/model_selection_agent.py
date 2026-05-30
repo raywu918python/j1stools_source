@@ -636,7 +636,6 @@ def execute_tool(name: str, inputs: dict) -> dict:
         profit_target = target["profit_target"]
         condition = _normalize_condition(inputs["condition"])
         label_type = inputs.get("label_type", "hit")
-        # LLM 至少使用 3 個不同指標（2 指標由 Grid Search 覆蓋）
         used_inds = _condition_indicators(condition)
         if len(used_inds) < 3:
             return {
@@ -871,6 +870,28 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
         sig_entries = _load_signal_log(target, max_entries=9999)
         n_tested = len(sig_entries)
         n_passed = len([e for e in sig_entries if e.get("hit_rate", 0) >= _pass_threshold(target)])
+
+        # 計算歷史（含 bak）飽和指標
+        all_entries = list(sig_entries)
+        _bak = _signal_log_path(target) + ".bak"
+        if os.path.exists(_bak):
+            try:
+                with open(_bak, encoding="utf-8") as _bf:
+                    for _line in _bf:
+                        try:
+                            all_entries.append(json.loads(_line.strip()))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        _ind_usage: dict = {}
+        for _e in all_entries:
+            for _t in _condition_indicators(_e.get("condition", "")):
+                _ind_usage[_t] = _ind_usage.get(_t, 0) + 1
+        saturated = sorted(k for k, v in _ind_usage.items() if v >= 3)
+
+        available = sorted(set(AGENT_INDICATORS) - set(saturated))
+
         result = _copy.deepcopy(TOOLS)
         for tool in result:
             name = tool["function"]["name"]
@@ -880,6 +901,11 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
                 notes.append(f"已呼叫 {count} 次")
             if name == "analyze_signal":
                 notes.append(f"本 session 已測 {n_tested} 個條件，{n_passed} 個通過")
+                # 直接把可用指標列表注入 condition 參數 description
+                tool["function"]["parameters"]["properties"]["condition"]["description"] = (
+                    f"條件字串，用 & | ~，每個子句加括號。"
+                    f"【只能使用以下 {len(available)} 個指標，其餘已飽和禁用】：{available}"
+                )
             if notes:
                 tool["function"]["description"] += f"（{'；'.join(notes)}）"
         return result
@@ -1457,5 +1483,5 @@ if __name__ == "__main__":
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
     model = "ollama"
-    max_calls = 50
+    max_calls = 10
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
