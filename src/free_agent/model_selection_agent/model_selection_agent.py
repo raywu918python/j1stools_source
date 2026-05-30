@@ -17,6 +17,7 @@ model_selection_agent.py — 假設驅動的專屬模型建立 Agent
 
 import json
 import os
+import re
 import time
 from datetime import datetime
 
@@ -60,6 +61,12 @@ def _current_model() -> str:
 
 def _current_client():
     return MODELS[_model_idx][1]
+
+
+def _use_full_tool_results() -> bool:
+    """本機模型不怕 token 成本，保留完整 tool result 給 qwen 參考。"""
+    model = _current_model().lower()
+    return "qwen" in model or _current_client() is _ollama_client
 
 
 def _next_model() -> bool:
@@ -239,6 +246,20 @@ INDICATOR_DESCRIPTIONS: dict[str, str] = {
     "is_refined_triangle": "是否為嚴格三角收斂型態",
     "triangle_score": "三角收斂品質分數（0~1，>0.65 高品質）",
 }
+
+
+AGENT_INDICATORS = list(INDICATOR_DESCRIPTIONS.keys()) + [
+    "close",
+    "high",
+    "low",
+    "open",
+    "volume",
+]
+
+
+def _condition_indicators(condition: str) -> set[str]:
+    tokens = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", condition or ""))
+    return tokens & set(AGENT_INDICATORS)
 
 
 # ── 工具定義 ────────────────────────────────────────────────────
@@ -623,8 +644,6 @@ def execute_tool(name: str, inputs: dict) -> dict:
         pass
 
     if name == "check_history":
-        import re as _re
-
         top_n = inputs.get("top_n", 10)
         ind_limit = 3  # 每個指標最多出現幾次才算飽和
         cat_target = 2  # 每個類別至少需要幾個通過條件
@@ -637,9 +656,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
         ind_usage: dict = {}
         for e in all_entries:
             cond = e.get("condition", "")
-            for t in _re.findall(r"([a-z_]+)\s*[><!=]", cond):
-                ind_usage[t] = ind_usage.get(t, 0) + 1
-            for t in _re.findall(r"\(\s*([a-z_]+)\s*\)", cond):
+            for t in _condition_indicators(cond):
                 ind_usage[t] = ind_usage.get(t, 0) + 1
 
         saturated = [k for k, v in ind_usage.items() if v >= ind_limit]
@@ -933,6 +950,8 @@ def _build_system_prompt(hypothesis: str) -> str:
 3. 呼叫 analyze_signal(label_type="hit", hold_days=10, profit_target=0.15)
 4. 篩選標準：hit_rate >= 0.35 且 sample_count >= 100
 5. 每個指標最多出現 3 次（看 saturated_indicators），超過就換別的
+6. 每 5 次 analyze_signal 至少 2 次必須是多元指標測試：
+   至少使用 2 個本 session 常用前三名以外的指標，且最多使用 2 個常用前三名指標
 
 ━━ 探索提示 ━━
 {cfg['explore_hint']}
@@ -942,6 +961,7 @@ def _build_system_prompt(hypothesis: str) -> str:
 
 ━━ 關鍵技巧 ━━
 - sample_count > 5000 時 hit_rate 通常低，加嚴門檻縮小樣本（500~3000 最佳）
+- 不要長時間使用同一組核心指標；要輪流探索技術、籌碼、量能、融資券、型態等不同維度
 - 統計資料期間：{TRAIN_START} ~ {TRAIN_END}
 
 回測與模型訓練由外部程式處理，你只負責蒐集多樣化的特徵候選條件。
@@ -1079,6 +1099,18 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
     _rate_limit_count = 0
     _call_count = 0
     _tool_usage: dict = {}  # tool 名稱 → 呼叫次數
+    _accepted_signal_count = 0
+    _signal_window_diverse = 0
+    _session_indicator_usage: dict[str, int] = {}
+
+    def _session_top3_indicators() -> list[str]:
+        return [
+            ind
+            for ind, _ in sorted(
+                _session_indicator_usage.items(),
+                key=lambda item: (-item[1], item[0]),
+            )[:3]
+        ]
 
     def _get_tools_with_usage() -> list:
         import copy as _copy
@@ -1173,11 +1205,62 @@ def run_agent(hypothesis: str = "breakout", max_calls: int = 0, model_override: 
             fn_name = tc.function.name
             fn_args = json.loads(tc.function.arguments)
             print(f"→ {fn_name}({json.dumps(fn_args, ensure_ascii=False)})")
-            result = execute_tool(fn_name, fn_args)
-            compressed = _compress_result(fn_name, result)
-            print(f"  {compressed}")
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": compressed})
+            accepted_signal_call = False
+            signal_is_diverse = False
+            signal_indicators: set[str] = set()
+
+            if hypothesis == "free" and fn_name == "analyze_signal" and "condition" in fn_args:
+                if _accepted_signal_count % 5 == 0:
+                    _signal_window_diverse = 0
+                signal_indicators = _condition_indicators(fn_args["condition"])
+                top3 = _session_top3_indicators()
+                top3_used = sorted(signal_indicators & set(top3))
+                non_top3_used = sorted(signal_indicators - set(top3))
+                is_diverse = len(non_top3_used) >= 2 and len(top3_used) <= 2
+                block_pos = _accepted_signal_count % 5
+                remaining_after = 5 - (block_pos + 1)
+                if not is_diverse and _signal_window_diverse + remaining_after < 2:
+                    result = {
+                        "error": (
+                            "硬性探索規則（free 角色）：每 5 次成功 analyze_signal 至少 2 次必須是多元指標測試。"
+                            f"本 session 常用前三名={top3}。請至少加入 2 個前三名以外指標，"
+                            "且最多只使用 2 個常用前三名指標，再重新呼叫 analyze_signal。"
+                        ),
+                        "used_indicators": sorted(signal_indicators),
+                        "top3_used": top3_used,
+                        "non_top3_used": non_top3_used,
+                        "is_diverse": False,
+                        "current_window": {
+                            "accepted_calls": block_pos,
+                            "diverse_calls": _signal_window_diverse,
+                            "remaining_after_this_call": remaining_after,
+                            "required_diverse_calls": 2,
+                        },
+                    }
+                else:
+                    result = execute_tool(fn_name, fn_args)
+                    accepted_signal_call = "error" not in result
+                    signal_is_diverse = is_diverse
+            else:
+                result = execute_tool(fn_name, fn_args)
+                if fn_name == "analyze_signal":
+                    accepted_signal_call = "error" not in result
+                    signal_indicators = _condition_indicators(fn_args.get("condition", ""))
+
+            tool_content = (
+                json.dumps(result, ensure_ascii=False)
+                if _use_full_tool_results()
+                else _compress_result(fn_name, result)
+            )
+            print(f"  {tool_content}")
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_content})
             _tool_usage[fn_name] = _tool_usage.get(fn_name, 0) + 1
+            if accepted_signal_call:
+                _accepted_signal_count += 1
+                if signal_is_diverse:
+                    _signal_window_diverse += 1
+                for ind in signal_indicators:
+                    _session_indicator_usage[ind] = _session_indicator_usage.get(ind, 0) + 1
             _call_count += 1
             if max_calls and _call_count >= max_calls:
                 print(f"\n[測試] 已達 {max_calls} 次工具呼叫上限，停止")
@@ -1643,22 +1726,26 @@ def _generate_report(hypothesis: str):
 
 
 # ── 入口 ─────────────────────────────────────────────────────────
-def run_session(hypothesis: str = "breakout", model: str = ""):
+def run_session(hypothesis: str = "breakout", model: str = "", max_calls: int = 0):
     """
     跑一個假設的完整 session：Agent 探索 → 驗證 → 訓練 → 報表
 
     model: 指定模型，例如 "deepseek"、"gemini"、"qwen"（空字串 = 預設第一個）
+    max_calls: 測試模式最多幾次工具呼叫（0 = 不限並執行驗證）
     """
     if hypothesis not in HYPOTHESIS_CONFIGS:
         print(f"未知假設：{hypothesis}，可用：{list(HYPOTHESIS_CONFIGS.keys())}")
         return
-    run_agent(hypothesis, model_override=model)
+    run_agent(hypothesis, max_calls=max_calls, model_override=model)
+    # if max_calls == 0:
     validate_and_train(hypothesis)
 
 
 if __name__ == "__main__":
     import sys
 
-    hyp   = sys.argv[1] if len(sys.argv) > 1 else "breakout"
+    hyp = sys.argv[1] if len(sys.argv) > 1 else "free"
     model = sys.argv[2] if len(sys.argv) > 2 else ""
-    run_session(hyp, model=model)
+    # max_calls = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    max_calls = 50
+    run_session(hyp, model=model, max_calls=max_calls)
