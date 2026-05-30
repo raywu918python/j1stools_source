@@ -564,7 +564,7 @@ def _run_grid_search(target: dict):
         if ind_a not in ind_cache or ind_b not in ind_cache:
             continue
         try:
-            result = execute_tool("analyze_signal", {"condition": condition})
+            result = execute_tool("analyze_signal", {"condition": condition, "_bypass_min_indicators": True})
             combos_tested += 1
             if "error" in result:
                 continue
@@ -637,7 +637,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
         condition = _normalize_condition(inputs["condition"])
         label_type = inputs.get("label_type", "hit")
         used_inds = _condition_indicators(condition)
-        if len(used_inds) < 3:
+        if len(used_inds) < 3 and not inputs.get("_bypass_min_indicators"):
             return {
                 "error": f"至少使用 3 個不同指標（目前 {len(used_inds)} 個：{sorted(used_inds)}）。2 指標組合由 Grid Search 自動覆蓋。"
             }
