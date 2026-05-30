@@ -196,21 +196,6 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "analyze_pattern_signal",
-            "description": "偵測 ABCD 或三角收斂型態，統計型態後的報酬。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "abcd 或 triangle"},
-                    "label_type": {"type": "string", "description": "hit/return/max_return，預設 hit"},
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "check_history",
             "description": (
                 "查詢本 target 已測試過的條件記錄。"
@@ -684,89 +669,6 @@ def execute_tool(name: str, inputs: dict) -> dict:
         _append_signal_log({**out, "date": datetime.now().strftime("%Y-%m-%d")}, target)
         return out
 
-    if name == "analyze_pattern_signal":
-        import random as _random
-
-        pattern = inputs.get("pattern", "abcd")
-        hold_days = target["hold_days"]
-        profit_target = target["profit_target"]
-        label_type = inputs.get("label_type", "hit")
-        from j1stools import parquet_db
-
-        stocks_sample = WATCH_STOCKS if pattern == "abcd" else _random.sample(WATCH_STOCKS, min(100, len(WATCH_STOCKS)))
-        try:
-            df_p = parquet_db.query_price(stocks_sample, TRAIN_START, TRAIN_END)
-            df_p["date"] = pd.to_datetime(df_p["date"])
-        except Exception as e:
-            return {"error": f"資料載入失敗：{e}"}
-        close_wide = df_p.pivot(index="date", columns="stock_id", values="close").sort_index()
-        signal_mask = pd.DataFrame(False, index=close_wide.index, columns=close_wide.columns)
-        if pattern == "abcd":
-            try:
-                from j1stools.abcd_feature import detect_n_shape_features
-
-                df_abcd = detect_n_shape_features(df_p.copy())
-                confirmed = (
-                    df_abcd.pivot(index="date", columns="stock_id", values="f_n_confirmed")
-                    .reindex(close_wide.index)
-                    .fillna(0)
-                )
-                signal_mask = confirmed.astype(bool)
-            except Exception as e:
-                return {"error": f"ABCD 偵測失敗：{e}"}
-        elif pattern == "triangle":
-            try:
-                from j1stools.pattern_triangle import add_triangle_compare_columns
-
-                _tri_cache_paths = [
-                    os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache_2020_2025.pkl"),
-                    os.path.join(os.path.dirname(__file__), "../../..", "triangle_human_cache.pkl"),
-                ]
-                df_tri = None
-                for cp in _tri_cache_paths:
-                    cp = os.path.normpath(cp)
-                    if os.path.exists(cp):
-                        df_tri = pd.read_pickle(cp)
-                        df_tri["date"] = pd.to_datetime(df_tri["date"])
-                        df_tri = add_triangle_compare_columns(df_tri)
-                        break
-                if df_tri is None:
-                    from j1stools.pattern_triangle import find_human_triangle
-
-                    df_tri = find_human_triangle(df_p.copy())
-                df_tri_sig = df_tri[df_tri["human_only"].fillna(False)]
-                for _, row in df_tri_sig.iterrows():
-                    d, s = row["date"], row["stock_id"]
-                    if d in signal_mask.index and s in signal_mask.columns:
-                        signal_mask.at[d, s] = True
-            except Exception as e:
-                return {"error": f"三角收斂偵測失敗：{e}"}
-        future_high = pd.concat([close_wide.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).max()
-        if label_type == "hit":
-            labels = (future_high / close_wide - 1) >= profit_target
-        else:
-            labels = close_wide.shift(-hold_days) / close_wide - 1
-        values = labels[signal_mask].values.flatten()
-        values = values[~pd.isnull(values)]
-        n = len(values)
-        if n < 20:
-            return {"error": f"樣本太少（{n} 筆）"}
-        if label_type == "hit":
-            return {
-                "pattern": pattern,
-                "hold_days": hold_days,
-                "sample_count": n,
-                "hit_rate": round(float(np.mean(values.astype(float))), 4),
-            }
-        values = values.astype(float)
-        return {
-            "pattern": pattern,
-            "hold_days": hold_days,
-            "sample_count": n,
-            "avg_return": round(float(np.mean(values)), 4),
-            "win_rate": round(float((values > 0).mean()), 4),
-        }
-
     return {"error": f"未知工具：{name}"}
 
 
@@ -866,10 +768,6 @@ def _compress_result(fn_name: str, result: dict) -> str:
             f"mdd={result.get('max_drawdown')} win={result.get('win_rate')} "
             f"trades={result.get('total_trades')}"
         )
-    if fn_name == "analyze_pattern_signal":
-        if "hit_rate" in result:
-            return f"pattern={result.get('pattern')} hit={result['hit_rate']} n={result.get('sample_count')}"
-        return f"pattern={result.get('pattern')} avg={result.get('avg_return')} win={result.get('win_rate')} n={result.get('sample_count')}"
     return json.dumps(result, ensure_ascii=False)[:200]
 
 
