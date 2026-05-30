@@ -41,6 +41,7 @@ _gemini_client = OpenAI(
 )
 
 MODELS = [
+    ("qwen2.5:14b", _ollama_client),  # 免錢：本機
     ("deepseek-v4-flash", _deepseek_client),  # 主力
     (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),  # 備用1：免費（每天20次）
     # ("llama-3.3-70b-versatile", _groq_client),
@@ -50,7 +51,6 @@ MODELS = [
     #    把 tool name 和 arguments 混在一起（如 <function=name,{args}>），
     #    Groq API 直接拒絕（tool_use_failed）。tool 越多越不穩定。
     # 潛在解法：減少 tool 數量或改用 text 輸出再 regex 解析，但成本太高不值得。
-    ("qwen2.5:14b", _ollama_client),  # 備用3：本機
 ]
 _model_idx = 0
 
@@ -1737,7 +1737,6 @@ def run_session(hypothesis: str = "breakout", model: str = "", max_calls: int = 
         print(f"未知假設：{hypothesis}，可用：{list(HYPOTHESIS_CONFIGS.keys())}")
         return
     run_agent(hypothesis, max_calls=max_calls, model_override=model)
-    # if max_calls == 0:
     validate_and_train(hypothesis)
 
 
@@ -1745,7 +1744,7 @@ if __name__ == "__main__":
     import sys
 
     hyp = sys.argv[1] if len(sys.argv) > 1 else "free"
-    model = sys.argv[2] if len(sys.argv) > 2 else ""
-    # max_calls = int(sys.argv[3]) if len(sys.argv) > 3 else 0
-    max_calls = 50
+    model = sys.argv[2] if len(sys.argv) > 2 else "qwen"
+    max_calls = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    max_calls = 10
     run_session(hyp, model=model, max_calls=max_calls)
