@@ -14,6 +14,7 @@ free_agent.py — Groq + Llama 3.3 70B 免費統計探索 Agent
 
 import json
 import os
+import re
 import schedule
 import time
 from datetime import datetime, timedelta
@@ -48,6 +49,27 @@ MODELS = [
     # ("llama-3.1-8b-instant", _groq_client),
 ]
 _model_idx = 0
+
+AGENT_INDICATORS = [
+    "close", "high", "low", "open", "volume",
+    "ma5", "ma10", "ma20", "ma60", "ma120",
+    "ma5_x_ma10", "ma5_x_ma20", "ma10_x_ma60",
+    "rsi", "macd", "macdh", "bb_upper", "bb_lower", "bb_mid", "bb_width",
+    "adx", "plus_di", "minus_di",
+    "atr", "atr_rank",
+    "vol_ratio", "vol_trend", "obv", "obv_ma",
+    "f_n_confirmed", "f_n_structure_score", "f_n_ab_gain",
+    "f_n_d_breakout_strength", "f_n_volume_confirm",
+    "net_foreign", "net_trust", "net_dealer", "net_inst",
+    "foreign_rank", "trust_rank", "dealer_rank", "inst_rank",
+    "margin_bal", "short_bal", "margin_chg", "short_chg",
+    "short_ratio", "margin_chg_rank", "short_ratio_rank",
+]
+
+
+def _condition_indicators(condition: str) -> set[str]:
+    tokens = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", condition or ""))
+    return tokens & set(AGENT_INDICATORS)
 
 
 def select_model(model: str = "") -> str:
@@ -922,8 +944,8 @@ Margin: margin_bal,short_bal,margin_chg,short_chg,short_ratio,margin_chg_rank,sh
 2. 用高相關指標組合條件，呼叫 analyze_signal(label_type="hit",hold_days=10,profit_target=0.15)
 3. 篩選標準：hit_rate>=0.35 且 sample_count>=30
 4. 不通過→換方向，不重複已試過的組合
-5. 每 5 次 analyze_signal 測試中，至少 2 次必須包含 scan_correlations 前三名以外的指標
-   （也就是條件不能只由前三名指標組成，需加入第4名以後或其他類別指標）
+5. 每 5 次 analyze_signal 測試中，至少 2 次必須是「多元指標測試」：
+   至少包含 2 個 scan_correlations 前三名以外的指標，且最多只能使用 2 個前三名指標
 6. 找到越多通過條件越好，盡量多試
 
 ━━ 關鍵技巧 ━━
@@ -932,6 +954,7 @@ Margin: margin_bal,short_bal,margin_chg,short_chg,short_ratio,margin_chg_rank,sh
 - 越嚴格的條件（sample_count 500~3000）反而 hit_rate 更高
 - 相關係數只是起點，門檻要自己往上調整才能找到真正有效的條件
 - 不要長時間只使用前三名相關指標；要輪流加入趨勢、量能、籌碼、融資券等非前三名指標探索
+- 多元指標測試範例：bb_width + plus_di + vol_trend + rsi，或 f_n_d_breakout_strength + atr_rank + net_foreign + vol_ratio
 
 回測與模型訓練由外部程式處理，你只負責找條件。
 請用繁體中文回覆。"""
@@ -1012,6 +1035,9 @@ def run_agent(task: str, max_signal_calls: int = 0) -> str:
     final_text = ""
     _rate_limit_count = 0
     _signal_call_count = 0
+    _signal_window_diverse = 0
+    _no_tool_retry_count = 0
+    _corr_top3: list[str] = []
 
     while True:
         try:
@@ -1052,15 +1078,75 @@ def run_agent(task: str, max_signal_calls: int = 0) -> str:
         messages.append(msg)
 
         if not msg.tool_calls:
+            if max_signal_calls and _signal_call_count < max_signal_calls:
+                _no_tool_retry_count += 1
+                if _no_tool_retry_count >= 3:
+                    final_text = f"[測試停止] qwen 連續 {_no_tool_retry_count} 次未呼叫 tool，已完成 {_signal_call_count} 次成功 analyze_signal。"
+                    print(f"\n{final_text}")
+                    break
+                remaining = max_signal_calls - _signal_call_count
+                reminder = (
+                    f"尚未完成測試：目前只有 {_signal_call_count} 次成功 analyze_signal，"
+                    f"還需要 {remaining} 次。請不要總結，直接繼續呼叫 analyze_signal。"
+                )
+                print(f"\n[測試續跑] {reminder}")
+                messages.append({"role": "user", "content": reminder})
+                continue
             final_text = msg.content or ""
             print(f"\n{'=' * 60}\nAgent 報告：\n{final_text}")
             break
 
+        _no_tool_retry_count = 0
         for tc in msg.tool_calls:
             fn_name = tc.function.name
             fn_args = json.loads(tc.function.arguments)
             print(f"→ {fn_name}({json.dumps(fn_args, ensure_ascii=False)})")
-            result = execute_tool(fn_name, fn_args)
+            accepted_signal_call = False
+            signal_is_diverse = False
+
+            if fn_name == "analyze_signal" and _corr_top3 and "condition" in fn_args:
+                if _signal_call_count % 5 == 0:
+                    _signal_window_diverse = 0
+                used_indicators = _condition_indicators(fn_args["condition"])
+                top3_used = sorted(used_indicators & set(_corr_top3))
+                non_top3_used = sorted(used_indicators - set(_corr_top3))
+                is_diverse = len(non_top3_used) >= 2 and len(top3_used) <= 2
+                block_pos = _signal_call_count % 5
+                remaining_after = 5 - (block_pos + 1)
+                if not is_diverse and _signal_window_diverse + remaining_after < 2:
+                    result = {
+                        "error": (
+                            "硬性探索規則：每 5 次 analyze_signal 至少 2 次必須是多元指標測試："
+                            f"至少使用 2 個前三名以外的指標，且最多使用 2 個前三名指標。前三名={_corr_top3}。"
+                            "請加入第4名以後或其他類別指標，例如 atr_rank、plus_di、rsi、"
+                            "vol_trend、vol_ratio、short_ratio、net_foreign 等，再重新呼叫 analyze_signal。"
+                        ),
+                        "used_indicators": sorted(used_indicators),
+                        "top3_used": top3_used,
+                        "non_top3_used": non_top3_used,
+                        "is_diverse": False,
+                        "current_window": {
+                            "accepted_calls": block_pos,
+                            "diverse_calls": _signal_window_diverse,
+                            "remaining_after_this_call": remaining_after,
+                            "required_diverse_calls": 2,
+                        },
+                    }
+                else:
+                    result = execute_tool(fn_name, fn_args)
+                    accepted_signal_call = "error" not in result
+                    signal_is_diverse = is_diverse
+            else:
+                result = execute_tool(fn_name, fn_args)
+                if fn_name == "analyze_signal":
+                    accepted_signal_call = "error" not in result
+
+            if fn_name == "scan_correlations" and "top_correlations" in result:
+                _corr_top3 = [r["feature"] for r in result.get("top_correlations", [])[:3]]
+                _signal_call_count = 0
+                _signal_window_diverse = 0
+                print(f"  [探索限制] 前三名={_corr_top3}；每 5 次 analyze_signal 至少 2 次需為多元指標測試")
+
             print(f"  {json.dumps(result, ensure_ascii=False)}")
             tool_content = (
                 json.dumps(result, ensure_ascii=False)
@@ -1074,8 +1160,10 @@ def run_agent(task: str, max_signal_calls: int = 0) -> str:
                     "content": tool_content,
                 }
             )
-            if fn_name == "analyze_signal":
+            if accepted_signal_call:
                 _signal_call_count += 1
+                if signal_is_diverse:
+                    _signal_window_diverse += 1
                 if max_signal_calls and _signal_call_count >= max_signal_calls:
                     final_text = f"[測試停止] 已完成 {max_signal_calls} 次 analyze_signal。"
                     print(f"\n{final_text}")
@@ -1352,21 +1440,7 @@ def _generate_report():
 
     rows.sort(key=lambda x: x["sharpe"], reverse=True)
 
-    _ALL_AGENT_INDICATORS = [
-        "close", "high", "low", "open", "volume",
-        "ma5", "ma10", "ma20", "ma60", "ma120",
-        "ma5_x_ma10", "ma5_x_ma20", "ma10_x_ma60",
-        "rsi", "macd", "macdh", "bb_upper", "bb_lower", "bb_mid", "bb_width",
-        "adx", "plus_di", "minus_di",
-        "atr", "atr_rank",
-        "vol_ratio", "vol_trend", "obv", "obv_ma",
-        "f_n_confirmed", "f_n_structure_score", "f_n_ab_gain",
-        "f_n_d_breakout_strength", "f_n_volume_confirm",
-        "net_foreign", "net_trust", "net_dealer", "net_inst",
-        "foreign_rank", "trust_rank", "dealer_rank", "inst_rank",
-        "margin_bal", "short_bal", "margin_chg", "short_chg",
-        "short_ratio", "margin_chg_rank", "short_ratio_rank",
-    ]
+    _ALL_AGENT_INDICATORS = AGENT_INDICATORS
     _IND_ORDER = {name: i for i, name in enumerate(_ALL_AGENT_INDICATORS)}
 
     # 指標使用頻率：先列出所有可用指標，沒被用到也顯示 0
@@ -1705,7 +1779,7 @@ def daily_task(model: str = "", max_signal_calls: int = 0, validate: bool = True
         f"今天是 {SESSION_END}，統計期間：{SESSION_START} 到 {SESSION_END}，股票池 {len(WATCH_STOCKS)} 支。\n"
         "目標：找出更多 hit_rate >= 0.35 且 sample_count >= 30 的新條件。\n"
         "第一步呼叫 scan_correlations，再用高相關指標與非前三名候選指標組合 analyze_signal 測試。\n"
-        "每 5 次 analyze_signal 至少 2 次要加入 scan_correlations 前三名以外的指標。\n"
+        "每 5 次 analyze_signal 至少 2 次要做多元指標測試：至少 2 個非前三名指標，且最多 2 個前三名指標。\n"
         "回測與模型訓練由外部處理，你只需找到盡量多的通過條件。" + history_text
     )
 
