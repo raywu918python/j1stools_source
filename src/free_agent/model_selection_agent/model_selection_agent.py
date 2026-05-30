@@ -39,6 +39,7 @@ _gemini_client = OpenAI(
 
 MODELS = [
     ("qwen3:14b", _ollama_client),
+    ("llama-3.3-70b-versatile", _groq_client),
     ("deepseek-v4-flash", _deepseek_client),
     (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),
 ]
@@ -1443,5 +1444,5 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[3]) if len(sys.argv) > 3 else 0.08
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
-    model = "gemini"
+    model = "llama"
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
