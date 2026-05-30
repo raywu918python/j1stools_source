@@ -1212,8 +1212,10 @@ def validate_and_train(target: dict):
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
             rfc_path = os.path.join(_results_dir(target), "rfc_result.json")
-            with open(rfc_path, "w", encoding="utf-8") as f:
+            tmp_path = rfc_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(rfc_result, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, rfc_path)
             print(f"  RFC 結果已存：{rfc_path}")
 
     except Exception as e:
@@ -1422,4 +1424,5 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[3]) if len(sys.argv) > 3 else 0.08
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
+
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
