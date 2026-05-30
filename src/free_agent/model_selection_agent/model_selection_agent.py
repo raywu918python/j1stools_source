@@ -95,9 +95,9 @@ INDICATOR_DESCRIPTIONS: dict[str, str] = {
     "ma20": "20日均線",
     "ma60": "60日均線",
     "ma120": "120日均線",
-    "ma5_x_ma10": "5日上穿10日均線（黃金交叉信號）",
-    "ma5_x_ma20": "5日上穿20日均線",
-    "ma10_x_ma60": "10日上穿60日均線（中期多頭確認）",
+    "ma5_x_ma10": "5日均線在10日均線之上（多頭排列）",
+    "ma5_x_ma20": "5日均線在20日均線之上",
+    "ma10_x_ma60": "10日均線在60日均線之上（中期多頭）",
     "vol_ratio": "量比（當日量/20日均量，>2 爆量）",
     "vol_trend": "量能趨勢（20日均量/60日均量，>1 量能放大）",
     "obv": "OBV 能量潮（累計成交量方向）",
@@ -241,7 +241,7 @@ def _build_indicators(stocks: list, start: str, end: str):
 
     for fast, slow, name in [(5, 10, "ma5_x_ma10"), (5, 20, "ma5_x_ma20"), (10, 60, "ma10_x_ma60")]:
         f, s = ind[f"ma{fast}"], ind[f"ma{slow}"]
-        ind[name] = (f > s) & (f.shift(1) <= s.shift(1))
+        ind[name] = f > s
 
     delta = close.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
