@@ -170,8 +170,6 @@ _GRID_THRESHOLDS: dict[str, list[float]] = {
     "human_only": [True],
     "triangle_score": [0.5, 0.65, 0.8],
 }
-_GRID_COMBOS_PER_SESSION = 60
-
 
 def _condition_indicators(condition: str) -> set[str]:
     tokens = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", condition or ""))
@@ -555,25 +553,35 @@ def _run_grid_search(target: dict, force: bool = False):
     existing_entries = _load_grid_log(target)
     existing_set = {_normalize_condition(e.get("condition", "")) for e in existing_entries}
 
-    if existing_entries and not force:
+    today = datetime.now().strftime("%Y-%m-%d")
+    already_today = any(e.get("date") == today for e in existing_entries)
+    if existing_entries and already_today and not force:
         passed = [e for e in existing_entries if e.get("hit_rate", 0) >= _pass_threshold(target)]
-        print(f"\n  [Grid Search] {name}: 已有 {len(existing_entries)} 筆記錄（{len(passed)} 筆通過），跳過重跑")
+        print(f"\n  [Grid Search] {name}: 今日已跑（{len(existing_entries)} 筆，{len(passed)} 筆通過），跳過")
         return len(passed)
 
     candidate_pool = sorted(set(_GRID_THRESHOLDS.keys()))
     if len(candidate_pool) < 2:
         return 0
 
-    import itertools, random as _random
+    import itertools
+
+    # 重跑時清掉舊結果
+    if os.path.exists(grid_path):
+        os.remove(grid_path)
+    existing_set = set()
 
     combos_tested = 0
     combos_passed = 0
 
-    pairs = list(itertools.combinations(candidate_pool, 2))
-    _random.shuffle(pairs)
-    pairs = pairs[: _GRID_COMBOS_PER_SESSION * 2]
-
-    print(f"\n  [Grid Search] {name}: 開始暴力測試跨類別組合...")
+    # 全部指標對 × 全部門檻組合（exhaustive，只跑一次所以要完整）
+    all_combos = [
+        (ind_a, th_a, ind_b, th_b)
+        for ind_a, ind_b in itertools.combinations(candidate_pool, 2)
+        for th_a in _GRID_THRESHOLDS[ind_a]
+        for th_b in _GRID_THRESHOLDS[ind_b]
+    ]
+    print(f"\n  [Grid Search] {name}: exhaustive 測試 {len(all_combos)} 組組合...")
     ind_cache, close_cache = _get_indicators(TRAIN_START, TRAIN_END)
     hd = target["hold_days"]
     pt = target["profit_target"]
@@ -581,13 +589,9 @@ def _run_grid_search(target: dict, force: bool = False):
         [close_cache.shift(-i) for i in range(1, hd + 1)], axis=0
     ).groupby(level=0).max()
 
-    for ind_a, ind_b in pairs:
-        if combos_tested >= _GRID_COMBOS_PER_SESSION:
-            break
+    for ind_a, th_a, ind_b, th_b in all_combos:
         if ind_a not in ind_cache or ind_b not in ind_cache:
             continue
-        th_a = _random.choice(_GRID_THRESHOLDS[ind_a])
-        th_b = _random.choice(_GRID_THRESHOLDS[ind_b])
         condition = _normalize_condition(_grid_condition(ind_a, th_a, ind_b, th_b))
         if condition in existing_set:
             continue
@@ -1114,8 +1118,8 @@ def validate_and_train(target: dict):
                 sig_long.columns = ["date", "stock_id", col]
                 feat_df = feat_df.merge(sig_long, on=["date", "stock_id"], how="left")
                 feat_df[col] = feat_df[col].fillna(0)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [條件建構失敗] {col}: {e}")
 
         this_cols = [cond_to_col[e["condition"]] for e in this_top20 if cond_to_col[e["condition"]] in feat_df.columns]
         hist_cols = [cond_to_col[e["condition"]] for e in hist_top20 if cond_to_col[e["condition"]] in feat_df.columns]
@@ -1230,6 +1234,9 @@ def validate_and_train(target: dict):
             def _json_safe(m: dict) -> dict:
                 return {k: v for k, v in m.items() if k != "rfc"}
 
+            # f_sig_* → 原始條件對照表（供報表顯示）
+            col_to_cond = {v: k for k, v in cond_to_col.items()}
+
             rfc_result = {
                 "target": tgt_name,
                 "hold_days": hd,
@@ -1243,7 +1250,10 @@ def validate_and_train(target: dict):
                 "test_period": f"{PREDICT_START} ~ {SESSION_END}",
                 "n_conditions": len(all_conds),
                 "n_tech_features": len(tech_cols),
+                "n_this_features": len(this_cols),
+                "n_hist_features": len(hist_cols),
                 "n_signal_features": len(this_cols) + len(hist_cols),
+                "col_to_cond": col_to_cond,
                 "model_a": {"name": "技術指標(無條件)", **_json_safe(model_a)},
                 "model_b": {"name": f"歷史條件({len(hist_cols)})", **_json_safe(model_b)} if model_b else {},
                 "model_c": {"name": f"本次條件({len(this_cols)})", **_json_safe(model_c)} if model_c else {},
@@ -1331,9 +1341,9 @@ def _generate_report(target: dict):
       <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.8</th>
       <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.9</th>
     </tr>
-    {_row_html(ma, "技術指標(無條件)", rfc.get("n_tech_features",0))}
-    {_row_html(mb, "歷史條件", len(rfc.get("model_b",{}).get("thresholds",{})))}
-    {_row_html(mc, "本次條件", len(rfc.get("model_c",{}).get("thresholds",{})))}
+    {_row_html(ma, "技術指標(無條件)", rfc.get("n_tech_features", 0))}
+    {_row_html(mb, "歷史條件", rfc.get("n_hist_features", 0))}
+    {_row_html(mc, "本次條件", rfc.get("n_this_features", 0))}
     </table>"""
 
     bt_html = ""
@@ -1374,13 +1384,16 @@ def _generate_report(target: dict):
         </tr>
         </table>"""
 
+    col_to_cond = rfc.get("col_to_cond", {})
     feat_rows = ""
     if mc:
         for i, ft in enumerate(mc.get("top_features", [])[:15]):
             bar_w = min(int(ft["importance"] * 100), 100)
+            feat_name = ft["feature"]
+            label = col_to_cond.get(feat_name, feat_name)  # f_sig_0 → 原始條件；技術指標保持原名
             feat_rows += (
                 f"<tr><td style='text-align:center;border:1px solid #333;padding:6px'>{i+1}</td>"
-                f"<td style='font-family:monospace;font-size:12px;border:1px solid #333;padding:6px'>{ft['feature']}</td>"
+                f"<td style='font-family:monospace;font-size:11px;border:1px solid #333;padding:6px;word-break:break-all'>{label}</td>"
                 f"<td style='text-align:center;border:1px solid #333;padding:6px'>{ft['importance']:.4f}</td>"
                 f"<td style='border:1px solid #333;padding:6px'><div style='background:#4fc3f7;height:12px;width:{bar_w}%;border-radius:3px;min-width:4px'></div></td></tr>"
             )
