@@ -634,6 +634,12 @@ def execute_tool(name: str, inputs: dict) -> dict:
         profit_target = target["profit_target"]
         condition = _normalize_condition(inputs["condition"])
         label_type = inputs.get("label_type", "hit")
+        # LLM 至少使用 3 個不同指標（2 指標由 Grid Search 覆蓋）
+        used_inds = _condition_indicators(condition)
+        if len(used_inds) < 3:
+            return {
+                "error": f"至少使用 3 個不同指標（目前 {len(used_inds)} 個：{sorted(used_inds)}）。2 指標組合由 Grid Search 自動覆蓋。"
+            }
         try:
             ind, close = _get_indicators(TRAIN_START, TRAIN_END)
         except Exception as e:
@@ -737,12 +743,11 @@ def _build_system_prompt(target: dict) -> str:
 
 ━━ 工作規則 ━━
 1. **第一步必須呼叫 check_history()**，查看已測試記錄（saturated_indicators、passed_conditions）
-2. 可自由組合任何指標（技術、籌碼、量能、型態），無類別限制
-3. 呼叫 analyze_signal(condition="...")，hold_days/profit_target 系統自動使用目標設定
-4. 篩選標準：hit_rate >= {pass_th:.2f} 且 sample_count >= 100
-5. 每個指標最多出現 3 次（看 saturated_indicators），超過就換別的
-6. 每 5 次 analyze_signal 至少 2 次必須是多元指標測試：
-   至少使用 2 個本 session 常用前三名以外的指標
+2. **每次 analyze_signal 必須使用至少 3 個不同指標**（2 指標組合由 Grid Search 自動覆蓋，LLM 專注 3+ 指標）
+3. 可自由組合任何指標（技術、籌碼、量能、型態），無類別限制
+4. 呼叫 analyze_signal(condition="...")，hold_days/profit_target 系統自動使用目標設定
+5. 篩選標準：hit_rate >= {pass_th:.2f} 且 sample_count >= 100
+6. 每個指標最多出現 3 次（看 saturated_indicators），超過就換別的
 
 ━━ 探索提示 ━━
 {hint}
@@ -1437,5 +1442,5 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[3]) if len(sys.argv) > 3 else 0.08
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
-
+    model = "gemini"
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
