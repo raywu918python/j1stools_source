@@ -631,7 +631,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
             return {"error": f"條件解析失敗：{e}"}
         if not isinstance(signal, pd.DataFrame):
             return {"error": "條件必須回傳 DataFrame"}
-        mask = signal.fillna(False).infer_objects(copy=False).astype(bool)
+        mask = signal.astype("boolean").fillna(False).astype(bool)
         future_high = pd.concat([close.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).max()
         if label_type == "hit":
             labels = (future_high / close - 1) >= profit_target
