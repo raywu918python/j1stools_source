@@ -838,7 +838,7 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
         f"為目標「{tgt_name}」蒐集特徵候選條件。\n"
         f"目標：持有 {target['hold_days']} 天，報酬 {target['profit_target']:.0%}。\n"
         f"門檻：hit_rate >= {_pass_threshold(target):.2f}，sample_count >= 100（{TRAIN_START}~{TRAIN_END}）。\n"
-        f"{'（測試模式：快速探索幾個方向即可）' if max_calls else ''}\n"
+        f"{'（你必須做滿 ' + str(max_calls) + ' 次工具呼叫才能停止，不要提早結束）' if max_calls else ''}\n"
         f"提示：可先呼叫 check_history() 查看已測試記錄，避免重複。"
     )
 
@@ -1170,6 +1170,7 @@ def validate_and_train(target: dict):
                         use_fixed_tp=True,
                         use_sl_trail=False,
                         use_hold_days=True,
+                        max_holdings=5,
                     )
                     pv = portfolio_value.dropna()
                     rets = pv.pct_change(fill_method=None).dropna()
