@@ -490,6 +490,10 @@ def _signal_log_path(target: dict) -> str:
     return os.path.join(_results_dir(target), "signal_log.jsonl")
 
 
+def _grid_log_path(target: dict) -> str:
+    return os.path.join(_results_dir(target), "grid_log.jsonl")
+
+
 def _backtest_log_path(target: dict) -> str:
     return os.path.join(_results_dir(target), "backtest_log.jsonl")
 
@@ -527,54 +531,92 @@ def _grid_condition(ind_a: str, th_a, ind_b: str, th_b) -> str:
     return f"{_fmt(ind_a, th_a)} & {_fmt(ind_b, th_b)}"
 
 
-def _run_grid_search(target: dict):
-    """暴力測試跨類別指標組合，補 LLM 漏掉的好條件。"""
+def _load_grid_log(target: dict) -> list[dict]:
+    path = _grid_log_path(target)
+    if not os.path.exists(path):
+        return []
+    entries = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                entries.append(json.loads(line.strip()))
+            except Exception:
+                pass
+    return entries
+
+
+def _run_grid_search(target: dict, force: bool = False):
+    """暴力測試 2 指標組合，結果永久存於 grid_log.jsonl（只跑一次）。"""
     global _current_target
     _current_target = target
     name = _target_name(target)
 
+    grid_path = _grid_log_path(target)
+    existing_entries = _load_grid_log(target)
+    existing_set = {_normalize_condition(e.get("condition", "")) for e in existing_entries}
+
+    if existing_entries and not force:
+        passed = [e for e in existing_entries if e.get("hit_rate", 0) >= _pass_threshold(target)]
+        print(f"\n  [Grid Search] {name}: 已有 {len(existing_entries)} 筆記錄（{len(passed)} 筆通過），跳過重跑")
+        return len(passed)
+
     candidate_pool = sorted(set(_GRID_THRESHOLDS.keys()))
     if len(candidate_pool) < 2:
-        print(f"  [Grid Search] 可用指標不足 2 個，跳過")
         return 0
 
     import itertools, random as _random
 
     combos_tested = 0
     combos_passed = 0
-    existing = _load_signal_log(target, max_entries=9999)
-    existing_set = {_normalize_condition(e.get("condition", "")) for e in existing}
 
     pairs = list(itertools.combinations(candidate_pool, 2))
     _random.shuffle(pairs)
     pairs = pairs[: _GRID_COMBOS_PER_SESSION * 2]
 
     print(f"\n  [Grid Search] {name}: 開始暴力測試跨類別組合...")
-    ind_cache, _ = _get_indicators(TRAIN_START, TRAIN_END)
+    ind_cache, close_cache = _get_indicators(TRAIN_START, TRAIN_END)
+    hd = target["hold_days"]
+    pt = target["profit_target"]
+    future_high = pd.concat(
+        [close_cache.shift(-i) for i in range(1, hd + 1)], axis=0
+    ).groupby(level=0).max()
 
     for ind_a, ind_b in pairs:
         if combos_tested >= _GRID_COMBOS_PER_SESSION:
             break
-        th_a = _random.choice(_GRID_THRESHOLDS[ind_a])
-        th_b = _random.choice(_GRID_THRESHOLDS[ind_b])
-        condition = _grid_condition(ind_a, th_a, ind_b, th_b)
-        normalized = _normalize_condition(condition)
-        if normalized in existing_set:
-            continue
         if ind_a not in ind_cache or ind_b not in ind_cache:
             continue
+        th_a = _random.choice(_GRID_THRESHOLDS[ind_a])
+        th_b = _random.choice(_GRID_THRESHOLDS[ind_b])
+        condition = _normalize_condition(_grid_condition(ind_a, th_a, ind_b, th_b))
+        if condition in existing_set:
+            continue
         try:
-            result = execute_tool("analyze_signal", {"condition": condition, "_bypass_min_indicators": True})
+            signal = eval(condition, {"__builtins__": {}}, ind_cache)
+            mask = signal.astype("boolean").fillna(False).astype(bool)
+            labels = (future_high / close_cache - 1) >= pt
+            values = labels[mask].values.flatten()
+            values = values[~pd.isnull(values)].astype(float)
             combos_tested += 1
-            if "error" in result:
+            n = len(values)
+            if n < 20:
                 continue
-            hr = result.get("hit_rate", 0)
-            n = result.get("sample_count", 0)
-            if hr >= 0.35 and n >= 100:
+            hr = round(float(np.mean(values)), 4)
+            entry = {
+                "condition": condition,
+                "hit_rate": hr,
+                "sample_count": n,
+                "hold_days": hd,
+                "profit_target": pt,
+                "source": "grid",
+                "date": datetime.now().strftime("%Y-%m-%d"),
+            }
+            with open(grid_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            existing_set.add(condition)
+            if hr >= _pass_threshold(target) and n >= 100:
                 combos_passed += 1
                 print(f"    ✅ {condition}: hit={hr:.2%} n={n}")
-            else:
-                print(f"    ❌ {condition}: hit={hr:.2%} n={n}")
         except Exception:
             continue
 
@@ -599,7 +641,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
     if name == "check_history":
         top_n = inputs.get("top_n", 10)
         ind_limit = 3
-        # 合併本 session + 歷史 .bak 記錄（上限 500 筆避免 context 爆炸）
+        # 合併：本 session + .bak + grid_log（永久）
         all_entries = _load_signal_log(target, max_entries=9999)
         bak_path = _signal_log_path(target) + ".bak"
         if os.path.exists(bak_path):
@@ -613,6 +655,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
                         pass
             except Exception:
                 pass
+        all_entries.extend(_load_grid_log(target))
         passed = [e for e in all_entries if e.get("hit_rate", 0) >= _pass_threshold(target)]
 
         ind_usage: dict = {}
@@ -859,7 +902,7 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
         n_tested = len(sig_entries)
         n_passed = len([e for e in sig_entries if e.get("hit_rate", 0) >= _pass_threshold(target)])
 
-        # 計算歷史（含 bak）飽和指標
+        # 計算歷史（含 bak + grid_log）飽和指標
         all_entries = list(sig_entries)
         _bak = _signal_log_path(target) + ".bak"
         if os.path.exists(_bak):
@@ -872,6 +915,7 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
                             pass
             except Exception:
                 pass
+        all_entries.extend(_load_grid_log(target))
         _ind_usage: dict = {}
         for _e in all_entries:
             for _t in _condition_indicators(_e.get("condition", "")):
@@ -1412,8 +1456,8 @@ def run_session(
         f"\n{'=' * 60}\n開始目標 {tgt_name}：持有 {hold_days} 天 / 目標 {profit_target:.0%} / 停損 {sl_stop:.0%}\n{'=' * 60}"
     )
 
+    _run_grid_search(target)   # 第一次跑完後永久快取，之後直接跳過
     run_agent(target, max_calls=max_calls, model_override=model)
-    _run_grid_search(target)
     validate_and_train(target)
 
 
