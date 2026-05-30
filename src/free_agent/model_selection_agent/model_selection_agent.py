@@ -90,8 +90,8 @@ INDICATOR_DESCRIPTIONS: dict[str, str] = {
     "bb_upper": "布林通道上軌",
     "bb_lower": "布林通道下軌",
     "bb_mid": "布林通道中線（20日均線）",
-    "atr": "ATR 真實波幅（波動度絕對值）",
-    "atr_rank": "ATR 歷史百分位（>0.7 波動處於歷史高位）",
+    "atr_rank": "ATR 歷史百分位（值域0~1，>0.7 波動處於歷史高位）",
+    "atr_pct": "ATR 占股價比例（atr/close，>0.05 代表每日波動超過 5%，跨股票可比）",
     "ma5": "5日均線",
     "ma10": "10日均線",
     "ma20": "20日均線",
@@ -108,17 +108,19 @@ INDICATOR_DESCRIPTIONS: dict[str, str] = {
     "net_trust": "投信買賣超張數（>0 投信買超）",
     "net_dealer": "自營商買賣超張數（>0 自營買超）",
     "net_inst": "三大法人合計買賣超（>0 法人合計買超）",
-    "foreign_rank": "外資買超歷史百分位（>0.7 外資強力買入）",
-    "trust_rank": "投信買超歷史百分位（>0.7 投信強力買入）",
-    "dealer_rank": "自營商買超歷史百分位",
-    "inst_rank": "三大法人合計歷史百分位（>0.7 法人整體強買）",
-    "margin_bal": "融資餘額（融資張數）",
-    "short_bal": "融券餘額（空頭張數，>0 有融券部位）",
-    "margin_chg": "融資變化率（pct_change）",
+    "foreign_rank": "外資買超歷史百分位（值域0~1，>0.7 外資強力買入）",
+    "trust_rank": "投信買超歷史百分位（值域0~1，>0.7 投信強力買入）",
+    "dealer_rank": "自營商買超歷史百分位（值域0~1，>0.7 強買）",
+    "inst_rank": "三大法人合計歷史百分位（值域0~1，>0.7 法人整體強買）",
+    "net_foreign_pct": "外資買超張數/30日均量（跨股票可比，>0.05 外資強力買入）",
+    "net_inst_pct": "三大法人合計買超/30日均量（跨股票可比，>0.05 法人整體強買）",
+    "net_trust_pct": "投信買超/30日均量（跨股票可比，>0.02 投信積極買入）",
+    "net_dealer_pct": "自營商買超/30日均量（跨股票可比）",
+    "margin_chg": "融資變化率（pct_change，>0 融資增加，<0 融資減少）",
     "short_chg": "融券變化率（<0 融券減少，回補中）",
     "short_ratio": "融券/融資比率（>0.3 融券壓力大）",
-    "short_ratio_rank": "融券比率歷史百分位（>0.9 處於歷史極高位）",
-    "margin_chg_rank": "融資變化率歷史百分位",
+    "short_ratio_rank": "融券比率歷史百分位（值域0~1，>0.9 處於歷史極高位）",
+    "margin_chg_rank": "融資變化率歷史百分位（值域0~1，>0.7 融資大幅增加）",
     "f_n_confirmed": "ABCD N字型態確認（>0 表示型態成立）",
     "f_n_structure_score": "ABCD 結構品質分數（0~1，>0.6 高品質）",
     "f_n_bc_retracement": "BC 段回撤比例（黃金比例 0.382~0.618 最佳）",
@@ -131,12 +133,12 @@ INDICATOR_DESCRIPTIONS: dict[str, str] = {
     "triangle_score": "三角收斂品質分數（0~1，>0.65 高品質）",
 }
 
+# close/high/low/open 只能用於相對比較（close > ma20、close > bb_upper），不可與固定數字比較
 AGENT_INDICATORS = list(INDICATOR_DESCRIPTIONS.keys()) + [
     "close",
     "high",
     "low",
     "open",
-    "volume",
 ]
 
 
@@ -172,9 +174,22 @@ _GRID_THRESHOLDS: dict[str, list[float]] = {
 }
 
 
+# 純比較基準，不計入飽和（不代表任何市場信號）
+_SATURATE_EXEMPT = {
+    "close", "high", "low", "open",
+    "ma5", "ma10", "ma20", "ma60", "ma120",
+    "bb_upper", "bb_lower", "bb_mid", "obv_ma",
+}
+
+
 def _condition_indicators(condition: str) -> set[str]:
     tokens = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", condition or ""))
     return tokens & set(AGENT_INDICATORS)
+
+
+def _saturable_indicators(condition: str) -> set[str]:
+    """只回傳應計入飽和的指標（排除純比較基準）。"""
+    return _condition_indicators(condition) - _SATURATE_EXEMPT
 
 
 # ── 工具定義 ────────────────────────────────────────────────────
@@ -263,8 +278,8 @@ def _build_indicators(stocks: list, start: str, end: str):
 
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()]).groupby(level=0).max()
     atr14 = tr.rolling(14).mean()
-    ind["atr"] = atr14
     ind["atr_rank"] = _rolling_rank(atr14)
+    ind["atr_pct"] = atr14 / (close + 1e-9)  # ATR 占股價比例，跨股票可比
 
     high_diff = high.diff()
     low_diff = -low.diff()
@@ -351,6 +366,10 @@ def _build_indicators(stocks: list, start: str, end: str):
         inst = sum(nets)
         ind["net_inst"] = inst
         ind["inst_rank"] = _rolling_rank(inst)
+        # 法人張數 / 30日均量 → 跨股票可比的相對買賣力道
+        vol_ma30 = vol.rolling(30, min_periods=10).mean()
+        for col in ["net_foreign", "net_trust", "net_dealer", "net_inst"]:
+            ind[f"{col}_pct"] = ind[col] / (vol_ma30 + 1e-9)
     except Exception:
         pass
 
@@ -643,7 +662,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
     if name == "check_history":
         top_n = inputs.get("top_n", 10)
-        ind_limit = 3
+        ind_limit = 5
         # 合併：本 session + .bak + grid_log（永久）
         all_entries = _load_signal_log(target, max_entries=9999)
         bak_path = _signal_log_path(target) + ".bak"
@@ -666,8 +685,8 @@ def execute_tool(name: str, inputs: dict) -> dict:
         passed_grid = [e for e in grid_entries if e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100]
 
         ind_usage: dict = {}
-        for e in all_entries:
-            for t in _condition_indicators(e.get("condition", "")):
+        for e in llm_entries:  # grid 條目不計入飽和
+            for t in _saturable_indicators(e.get("condition", "")):
                 ind_usage[t] = ind_usage.get(t, 0) + 1
         saturated = [k for k, v in ind_usage.items() if v >= ind_limit]
 
@@ -694,7 +713,11 @@ def execute_tool(name: str, inputs: dict) -> dict:
         used_inds = _condition_indicators(condition)
         if len(used_inds) < 3 and not inputs.get("_bypass_min_indicators"):
             return {
-                "error": f"至少使用 3 個不同指標（目前 {len(used_inds)} 個：{sorted(used_inds)}）。2 指標組合由 Grid Search 自動覆蓋。"
+                "error": (
+                    f"需要 3 個指標（目前 {len(used_inds)} 個）。"
+                    "請取 grid_passed 任一條件，再加入量能（vol_ratio/vol_trend）、"
+                    "型態（f_n_structure_score/triangle_score）或籌碼（short_ratio_rank/trust_rank）之一。"
+                )
             }
         # 飽和硬擋：合併 session + bak + grid_log 計算，防止 LLM 靠記憶繞過 tool description
         if not inputs.get("_bypass_min_indicators"):
@@ -713,10 +736,11 @@ def execute_tool(name: str, inputs: dict) -> dict:
             _all.extend(_load_grid_log(target))
             _iu: dict = {}
             for _e in _all:
-                for _t in _condition_indicators(_e.get("condition", "")):
-                    _iu[_t] = _iu.get(_t, 0) + 1
-            all_saturated = {k for k, v in _iu.items() if v >= 3}
-            saturated_used = used_inds & all_saturated
+                if _e.get("source") != "grid":  # grid 條目不計入飽和
+                    for _t in _saturable_indicators(_e.get("condition", "")):
+                        _iu[_t] = _iu.get(_t, 0) + 1
+            all_saturated = {k for k, v in _iu.items() if v >= 5}
+            saturated_used = _saturable_indicators(condition) & all_saturated
             if saturated_used:
                 available_now = sorted(set(AGENT_INDICATORS) - all_saturated)
                 return {
@@ -862,13 +886,24 @@ def _compress_result(fn_name: str, result: dict) -> str:
             flag = "✅" if result["hit_rate"] >= 0.35 else "❌"
             return f"hit={result['hit_rate']} n={result.get('sample_count')} {flag} ...{cond}"
         return f"avg={result.get('avg_return')} win={result.get('win_rate')} n={result.get('sample_count')} ...{cond}"
+    if fn_name == "check_history":
+        lines = [
+            f"total={result.get('total_tested')} passed={result.get('passed')}",
+            f"saturated={result.get('saturated_indicators',[])}",
+            f"grid_summary={result.get('grid_summary','')}",
+        ]
+        for e in result.get("grid_passed", [])[:10]:
+            lines.append(f"  grid✅ hit={e['hit_rate']} {e['condition']}")
+        for e in result.get("passed_conditions", [])[:10]:
+            lines.append(f"  llm✅  hit={e['hit_rate']} {e['condition']}")
+        return "\n".join(lines)
     if fn_name == "run_backtest":
         return (
             f"return={result.get('total_return')} sharpe={result.get('sharpe')} "
             f"mdd={result.get('max_drawdown')} win={result.get('win_rate')} "
             f"trades={result.get('total_trades')}"
         )
-    return json.dumps(result, ensure_ascii=False)[:200]
+    return json.dumps(result, ensure_ascii=False)[:300]
 
 
 def _trim_messages(messages: list, keep_last: int = 20) -> list:
@@ -953,11 +988,12 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
                             pass
             except Exception:
                 pass
-        all_entries.extend(_load_grid_log(target))
+        # grid 條目不計入飽和，只計算 LLM 生成的條目
         _ind_usage: dict = {}
         for _e in all_entries:
-            for _t in _condition_indicators(_e.get("condition", "")):
-                _ind_usage[_t] = _ind_usage.get(_t, 0) + 1
+            if _e.get("source") != "grid":
+                for _t in _saturable_indicators(_e.get("condition", "")):
+                    _ind_usage[_t] = _ind_usage.get(_t, 0) + 1
         saturated = sorted(k for k, v in _ind_usage.items() if v >= 3)
 
         available = sorted(set(AGENT_INDICATORS) - set(saturated))
@@ -1514,6 +1550,6 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[3]) if len(sys.argv) > 3 else 0.08
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
-    model = "ollama"
+    model = "deepseek"
     max_calls = 100
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
