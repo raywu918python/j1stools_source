@@ -690,19 +690,27 @@ def execute_tool(name: str, inputs: dict) -> dict:
                 ind_usage[t] = ind_usage.get(t, 0) + 1
         saturated = [k for k, v in ind_usage.items() if v >= ind_limit]
 
+        ind_filter = inputs.get("indicator", "")
+
+        def _match(e):
+            return not ind_filter or ind_filter in e.get("condition", "")
+
         return {
             "total_tested": len(all_entries),
             "passed": len(passed_llm) + len(passed_grid),
             "saturated_indicators": saturated,
             "passed_conditions": [
                 {"condition": e.get("condition", ""), "hit_rate": e.get("hit_rate")}
-                for e in sorted(passed_llm, key=lambda x: -x.get("hit_rate", 0))[:top_n]
+                for e in sorted(filter(_match, passed_llm), key=lambda x: -x.get("hit_rate", 0))[:top_n]
             ],
             "grid_passed": [
                 {"condition": e.get("condition", ""), "hit_rate": e.get("hit_rate")}
-                for e in sorted(passed_grid, key=lambda x: -x.get("hit_rate", 0))[:top_n]
+                for e in sorted(filter(_match, passed_grid), key=lambda x: -x.get("hit_rate", 0))[:top_n]
             ],
-            "grid_summary": f"Grid Search 共測 {len(grid_entries)} 組，{len(passed_grid)} 組通過（hit>={pass_th:.2f}）",
+            "grid_summary": (
+                f"Grid Search 共測 {len(grid_entries)} 組，{len(passed_grid)} 組通過（hit>={pass_th:.2f}）"
+                + (f"，其中含 '{ind_filter}' 的通過條件：{sum(1 for e in passed_grid if ind_filter in e.get('condition',''))} 組" if ind_filter else "")
+            ),
         }
 
     if name == "analyze_signal":
@@ -770,7 +778,14 @@ def execute_tool(name: str, inputs: dict) -> dict:
         values = values[~pd.isnull(values)]
         n = len(values)
         if n < 20:
-            return {"error": f"樣本太少（{n} 筆）"}
+            # 樣本太少也記錄，讓稀疏指標計入飽和，避免 LLM 一直重試
+            _append_signal_log(
+                {"condition": condition, "hit_rate": -1, "sample_count": n,
+                 "hold_days": hold_days, "profit_target": profit_target,
+                 "date": datetime.now().strftime("%Y-%m-%d"), "note": "too_few_samples"},
+                target,
+            )
+            return {"error": f"樣本太少（{n} 筆），此指標組合觸發頻率極低，建議改用其他指標"}
         if label_type == "hit":
             hit_rate = float(np.mean(values.astype(float)))
             out = {
