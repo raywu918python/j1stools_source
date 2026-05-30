@@ -656,7 +656,11 @@ def execute_tool(name: str, inputs: dict) -> dict:
             except Exception:
                 pass
         all_entries.extend(_load_grid_log(target))
-        passed = [e for e in all_entries if e.get("hit_rate", 0) >= _pass_threshold(target)]
+        pass_th = _pass_threshold(target)
+        llm_entries = [e for e in all_entries if e.get("source") != "grid"]
+        grid_entries = [e for e in all_entries if e.get("source") == "grid"]
+        passed_llm = [e for e in llm_entries if e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100]
+        passed_grid = [e for e in grid_entries if e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100]
 
         ind_usage: dict = {}
         for e in all_entries:
@@ -666,12 +670,17 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
         return {
             "total_tested": len(all_entries),
-            "passed": len(passed),
+            "passed": len(passed_llm) + len(passed_grid),
             "saturated_indicators": saturated,
             "passed_conditions": [
                 {"condition": e.get("condition", ""), "hit_rate": e.get("hit_rate")}
-                for e in sorted(passed, key=lambda x: -x.get("hit_rate", 0))[:top_n]
+                for e in sorted(passed_llm, key=lambda x: -x.get("hit_rate", 0))[:top_n]
             ],
+            "grid_passed": [
+                {"condition": e.get("condition", ""), "hit_rate": e.get("hit_rate")}
+                for e in sorted(passed_grid, key=lambda x: -x.get("hit_rate", 0))[:top_n]
+            ],
+            "grid_summary": f"Grid Search 共測 {len(grid_entries)} 組，{len(passed_grid)} 組通過（hit>={pass_th:.2f}）",
         }
 
     if name == "analyze_signal":
@@ -786,32 +795,23 @@ def _build_system_prompt(target: dict) -> str:
 通過門檻：hit_rate >= {pass_th:.2f}，sample_count >= 100。
 
 ━━ 工作規則 ━━
-1. **第一步必須呼叫 check_history()**，查看已測試記錄（saturated_indicators、passed_conditions）
-2. **每次 analyze_signal 必須使用至少 3 個不同指標**（2 指標組合由 Grid Search 自動覆蓋，LLM 專注 3+ 指標）
-3. 可自由組合任何指標（技術、籌碼、量能、型態），無類別限制
-4. 呼叫 analyze_signal(condition="...")，hold_days/profit_target 系統自動使用目標設定
-5. 篩選標準：hit_rate >= {pass_th:.2f} 且 sample_count >= 100
-6. 每個指標最多出現 3 次（看 saturated_indicators），超過就換別的
+1. **第一步必須呼叫 check_history()**
+   - 看 grid_passed：Grid Search 已測好的 2 指標基礎組合，優先在這些上面加第 3 個指標延伸
+   - 看 passed_conditions：前幾次 session 已通過的條件，避免重複
+2. **每次 analyze_signal 使用至少 3 個不同指標**（2 指標由 Grid Search 覆蓋，你專注 3+ 指標）
+3. analyze_signal 的 condition 參數只列出**目前可用指標**，未列出的已飽和禁用，不要使用
+4. 篩選標準：hit_rate >= {pass_th:.2f} 且 sample_count >= 100
+5. sample_count 500~3000 最佳；> 5000 通常 hit_rate 偏低，應加嚴門檻
 
-━━ 探索提示 ━━
+━━ 探索策略 ━━
 {hint}
 
-━━ 可用指標（全部）━━
-{_build_all_indicators_text()}
-
 ━━ 關鍵技巧 ━━
-- sample_count > 5000 時 hit_rate 通常低，加嚴門檻縮小樣本（500~3000 最佳）
-- 多嘗試跨維度組合（技術 + 籌碼、型態 + 量能...）
+- Grid passed 的組合是好的起點：取其中 1~2 個指標，再加 1 個不同維度的指標
+- 多嘗試跨維度組合（技術 + 籌碼、型態 + 量能、均線 + 外資...）
 - 統計資料期間：{TRAIN_START} ~ {TRAIN_END}
 
 請用繁體中文回覆。"""
-
-
-def _build_all_indicators_text() -> str:
-    lines = []
-    for ind, desc in INDICATOR_DESCRIPTIONS.items():
-        lines.append(f"  - {ind}: {desc}")
-    return "\n".join(lines)
 
 
 # ── 訊息壓縮 ─────────────────────────────────────────────────────
