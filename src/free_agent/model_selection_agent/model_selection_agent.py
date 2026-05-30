@@ -715,9 +715,15 @@ def execute_tool(name: str, inputs: dict) -> dict:
             for _e in _all:
                 for _t in _condition_indicators(_e.get("condition", "")):
                     _iu[_t] = _iu.get(_t, 0) + 1
-            saturated_used = used_inds & {k for k, v in _iu.items() if v >= 3}
+            all_saturated = {k for k, v in _iu.items() if v >= 3}
+            saturated_used = used_inds & all_saturated
             if saturated_used:
-                return {"error": f"飽和指標 {sorted(saturated_used)} 已出現 3+ 次，請換其他指標。"}
+                available_now = sorted(set(AGENT_INDICATORS) - all_saturated)
+                return {
+                    "error": f"飽和指標 {sorted(saturated_used)} 已出現 3+ 次，不可再用。",
+                    "現在可用的指標": available_now,
+                    "建議": "請從上面的可用指標中，選擇尚未探索的維度（量能、籌碼、型態）重新組合。",
+                }
         try:
             ind, close = _get_indicators(TRAIN_START, TRAIN_END)
         except Exception as e:
