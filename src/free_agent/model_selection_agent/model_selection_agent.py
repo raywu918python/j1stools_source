@@ -1302,7 +1302,34 @@ def validate_and_train(hypothesis: str = "breakout"):
     passing = [
         e for e in _load_signal_log(hypothesis) if e.get("hit_rate", 0) >= 0.35 and e.get("sample_count", 0) >= 100
     ]
-    if not passing:
+
+    # 讀取上次 (bak)
+    prev_passing = []
+    bak_path = _signal_log_path(hypothesis) + ".bak"
+    if os.path.exists(bak_path):
+        with open(bak_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    e = json.loads(line.strip())
+                    if e.get("hit_rate", 0) >= 0.35 and e.get("sample_count", 0) >= 100:
+                        prev_passing.append(e)
+                except:
+                    pass
+
+    # 讀取歷史全部 (backtest_log)
+    hist_passing = []
+    bt_path = _backtest_log_path(hypothesis)
+    if os.path.exists(bt_path):
+        with open(bt_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    e = json.loads(line.strip())
+                    if e.get("hit_rate", 0) >= 0.35 and e.get("sample_count", 0) >= 100:
+                        hist_passing.append(e)
+                except:
+                    pass
+
+    if not passing and not hist_passing:
         print(f"[{hypothesis}] 沒有通過的條件，跳過驗證")
         return
 
@@ -1317,8 +1344,8 @@ def validate_and_train(hypothesis: str = "breakout"):
 
     if not new_pass:
         print(f"[{hypothesis}] 所有 {len(passing)} 個條件已回測，跳過回測，直接進入 RFC 訓練")
-
-    print(f"\n[{hypothesis}] 回測 {len(new_pass)} 個新條件（預測期：{PREDICT_START}~{SESSION_END}）...")
+    else:
+        print(f"\n[{hypothesis}] 回測 {len(new_pass)} 個新條件（預測期：{PREDICT_START}~{SESSION_END}）...")
     backtest_log = _backtest_log_path(hypothesis)
 
     # 預先載入預測期指標（計算 hit_rate_predict 用）
@@ -1394,21 +1421,33 @@ def validate_and_train(hypothesis: str = "breakout"):
 
         # 把通過條件加成 binary 特徵（ind 需要完整期間才能 eval）
         ind, _ = _build_indicators(stocks, TRAIN_START, SESSION_END)
-        added = []
-        for i, e in enumerate(sorted(passing, key=lambda x: x["hit_rate"], reverse=True)[:20]):
-            col = f"f_signal_{i}"
+
+        this_top20 = sorted(passing, key=lambda x: x["hit_rate"], reverse=True)[:20]
+        # 歷史前20 = 從 backtest_log 所有通過條件中取勝率最高的前 20
+        hist_top20 = sorted(hist_passing, key=lambda x: x["hit_rate"], reverse=True)[:20]
+
+        # 合併去重，一次性產生所有 binary 特徵
+        all_conds = {}
+        for e in this_top20 + hist_top20:
+            all_conds[e["condition"]] = e
+
+        cond_to_col = {}
+        for i, cond in enumerate(all_conds.keys()):
+            col = f"f_sig_{i}"
+            cond_to_col[cond] = col
             try:
-                sig = eval(e["condition"], {"__builtins__": {}}, ind)
+                sig = eval(cond, {"__builtins__": {}}, ind)
                 sig_long = sig.astype(float).stack().reset_index()
                 sig_long.columns = ["date", "stock_id", col]
                 feat_df = feat_df.merge(sig_long, on=["date", "stock_id"], how="left")
                 feat_df[col] = feat_df[col].fillna(0)
-                added.append(col)
             except Exception:
                 pass
 
-        tech_cols = [c for c in feat_df.columns if c.startswith("f_") and c not in added]
-        all_cols = tech_cols + added
+        this_cols = [cond_to_col[e["condition"]] for e in this_top20 if cond_to_col[e["condition"]] in feat_df.columns]
+        hist_cols = [cond_to_col[e["condition"]] for e in hist_top20 if cond_to_col[e["condition"]] in feat_df.columns]
+
+        tech_cols = [c for c in feat_df.columns if c.startswith("f_") and not c.startswith("f_sig_")]
         feat_df = feat_df.dropna(subset=tech_cols + ["target"])
 
         # 固定切點：2024-01-01
@@ -1443,7 +1482,8 @@ def validate_and_train(hypothesis: str = "breakout"):
                 return {"thresholds": thresholds, "top_features": top_feats, "model_path": model_path}
 
             rfc_a = _eval_rfc(tech_cols, "tech_only")
-            rfc_b = _eval_rfc(all_cols, "tech_signal")
+            rfc_b = _eval_rfc(tech_cols + this_cols, "tech_this20") if this_cols else {}
+            rfc_c = _eval_rfc(tech_cols + hist_cols, "tech_hist20") if hist_cols else {}
 
             rfc_result = {
                 "hypothesis": hypothesis,
@@ -1452,8 +1492,9 @@ def validate_and_train(hypothesis: str = "breakout"):
                 "test_size": len(test),
                 "train_period": f"{TRAIN_START} ~ {TRAIN_END}",
                 "test_period": f"{PREDICT_START} ~ {SESSION_END}",
-                "model_a": {"name": "技術指標", **rfc_a},
-                "model_b": {"name": f"技術指標+top{len(added)}信號", **rfc_b},
+                "model_a": {"name": "基礎技術指標", **rfc_a},
+                "model_b": {"name": f"基礎+本次前{len(this_cols)}", **rfc_b} if rfc_b else {},
+                "model_c": {"name": f"基礎+歷史前{len(hist_cols)}", **rfc_c} if rfc_c else {},
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
             rfc_path = os.path.join(_results_dir(hypothesis), "rfc_result.json")
@@ -1478,7 +1519,18 @@ def _generate_report(hypothesis: str):
         print(f"[報表] 無回測資料")
         return
 
-    rows = []
+    this_session_conds = set()
+    sig_path = _signal_log_path(hypothesis)
+    if os.path.exists(sig_path):
+        with open(sig_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    this_session_conds.add(json.loads(line.strip()).get("condition", ""))
+                except:
+                    pass
+
+    this_rows = []
+    hist_rows = []
     with open(backtest_log, encoding="utf-8") as f:
         for line in f:
             try:
@@ -1486,30 +1538,33 @@ def _generate_report(hypothesis: str):
                 bt = e.get("backtest", {})
                 if "error" in bt or bt.get("total_trades", 0) < 10:
                     continue
-                rows.append(
-                    {
-                        "condition": e["condition"],
-                        "hit_rate": e.get("hit_rate", 0),
-                        "hit_rate_predict": e.get("hit_rate_predict"),
-                        "sample_count": e.get("sample_count", 0),
-                        "trades": bt.get("total_trades"),
-                        "total_return": bt.get("total_return", 0),
-                        "sharpe": bt.get("sharpe", 0),
-                        "max_drawdown": bt.get("max_drawdown", 0),
-                        "win_rate": bt.get("win_rate", 0),
-                        "avg_win": bt.get("avg_win", 0),
-                        "avg_loss": bt.get("avg_loss", 0),
-                        "chart": bt.get("chart"),
-                    }
-                )
+                row_data = {
+                    "condition": e["condition"],
+                    "hit_rate": e.get("hit_rate", 0),
+                    "hit_rate_predict": e.get("hit_rate_predict"),
+                    "sample_count": e.get("sample_count", 0),
+                    "trades": bt.get("total_trades"),
+                    "total_return": bt.get("total_return", 0),
+                    "sharpe": bt.get("sharpe", 0),
+                    "max_drawdown": bt.get("max_drawdown", 0),
+                    "win_rate": bt.get("win_rate", 0),
+                    "avg_win": bt.get("avg_win", 0),
+                    "avg_loss": bt.get("avg_loss", 0),
+                    "chart": bt.get("chart"),
+                }
+                if e["condition"] in this_session_conds:
+                    this_rows.append(row_data)
+                else:
+                    hist_rows.append(row_data)
             except Exception:
                 continue
 
-    if not rows:
+    if not this_rows and not hist_rows:
         print("[報表] 無有效資料")
         return
 
-    rows.sort(key=lambda x: x["sharpe"], reverse=True)
+    this_rows.sort(key=lambda x: x["sharpe"], reverse=True)
+    hist_rows.sort(key=lambda x: x["sharpe"], reverse=True)
 
     def _sc(s):
         if s >= 2.0:
@@ -1522,31 +1577,35 @@ def _generate_report(hypothesis: str):
             return "#e67e22"
         return "#e74c3c"
 
-    rows_html = ""
-    for i, r in enumerate(rows):
-        chart_link = f'<a href="{r["chart"]}" target="_blank">📊</a>' if r.get("chart") else ""
-        dd_color = "#e74c3c" if r["max_drawdown"] < -0.15 else "#e67e22" if r["max_drawdown"] < -0.10 else "#2ecc71"
-        hr_pred = r.get("hit_rate_predict")
-        hr_pred_str = f"{hr_pred:.1%}" if hr_pred is not None else "—"
-        # 若訓練命中率大幅高於驗證命中率，標紅警示
-        hr_pred_color = ""
-        if hr_pred is not None and r["hit_rate"] - hr_pred > 0.10:
-            hr_pred_color = 'style="color:#e74c3c"'
-        rows_html += (
-            f"<tr>"
-            f'<td style="text-align:center">{i+1}</td>'
-            f'<td style="font-family:monospace;font-size:12px;white-space:nowrap">{r["condition"]}</td>'
-            f'<td style="text-align:center;color:{_sc(r["sharpe"])};font-weight:bold">{r["sharpe"]:.2f}</td>'
-            f'<td style="text-align:center">{r["win_rate"]:.1%}</td>'
-            f'<td style="text-align:center">{r["total_return"]:+.2%}</td>'
-            f'<td style="text-align:center;color:{dd_color}">{r["max_drawdown"]:.1%}</td>'
-            f'<td style="text-align:center">{r["trades"]}</td>'
-            f'<td style="text-align:center">{r["hit_rate"]:.1%}</td>'
-            f'<td style="text-align:center" {hr_pred_color}>{hr_pred_str}</td>'
-            f'<td style="text-align:center">{r["sample_count"]}</td>'
-            f'<td style="text-align:center">{chart_link}</td>'
-            f"</tr>"
-        )
+    def _build_table_rows(rows_list):
+        html_str = ""
+        for i, r in enumerate(rows_list):
+            chart_link = f'<a href="{r["chart"]}" target="_blank">📊</a>' if r.get("chart") else ""
+            dd_color = "#e74c3c" if r["max_drawdown"] < -0.15 else "#e67e22" if r["max_drawdown"] < -0.10 else "#2ecc71"
+            hr_pred = r.get("hit_rate_predict")
+            hr_pred_str = f"{hr_pred:.1%}" if hr_pred is not None else "—"
+            hr_pred_color = ""
+            if hr_pred is not None and r["hit_rate"] - hr_pred > 0.10:
+                hr_pred_color = 'style="color:#e74c3c"'
+            html_str += (
+                f"<tr>"
+                f'<td style="text-align:center">{i+1}</td>'
+                f'<td style="font-family:monospace;font-size:12px;white-space:nowrap">{r["condition"]}</td>'
+                f'<td style="text-align:center;color:{_sc(r["sharpe"])};font-weight:bold">{r["sharpe"]:.2f}</td>'
+                f'<td style="text-align:center">{r["win_rate"]:.1%}</td>'
+                f'<td style="text-align:center">{r["total_return"]:+.2%}</td>'
+                f'<td style="text-align:center;color:{dd_color}">{r["max_drawdown"]:.1%}</td>'
+                f'<td style="text-align:center">{r["trades"]}</td>'
+                f'<td style="text-align:center">{r["hit_rate"]:.1%}</td>'
+                f'<td style="text-align:center" {hr_pred_color}>{hr_pred_str}</td>'
+                f'<td style="text-align:center">{r["sample_count"]}</td>'
+                f'<td style="text-align:center">{chart_link}</td>'
+                f"</tr>"
+            )
+        return html_str
+
+    this_rows_html = _build_table_rows(this_rows)
+    hist_rows_html = _build_table_rows(hist_rows)
 
     # RFC 區塊
     rfc_html = ""
@@ -1558,7 +1617,7 @@ def _generate_report(hypothesis: str):
         test_p = rfc.get("test_period", "")
         base = rfc.get("base_rate", "?")
         rfc_html = f"<p>訓練期：{train_p}　驗證期：{test_p}　基礎命中率：{base:.1%}</p>"
-        for model_key in ["model_a", "model_b"]:
+        for model_key in ["model_a", "model_b", "model_c"]:
             m = rfc.get(model_key, {})
             if not m:
                 continue
@@ -1676,7 +1735,7 @@ def _generate_report(hypothesis: str):
 <h1>🎯 {hyp_name} — 專屬模型報表</h1>
 <p>假設：{cfg.get('description','')}</p>
 <p>統計期：{TRAIN_START} ~ {TRAIN_END}　回測期：{PREDICT_START} ~ {SESSION_END}</p>
-<p>Agent 共測試 <b>{total_tested}</b> 個條件，通過 <b>{passed_count}</b> 個（{passed_count/max(total_tested,1):.1%}），回測有效 <b>{len(rows)}</b> 個</p>
+<p>Agent 共測試 <b>{total_tested}</b> 個條件，通過 <b>{passed_count}</b> 個（{passed_count/max(total_tested,1):.1%}），回測有效 <b>{len(this_rows) + len(hist_rows)}</b> 個</p>
 
 <h2>類別覆蓋摘要</h2>
 <p style="color:#aaa;font-size:13px">✅ = 達標（≥2個通過條件）　⚠️ = 部分（1個）　⬜ = 未覆蓋</p>
@@ -1694,10 +1753,12 @@ def _generate_report(hypothesis: str):
 
 <h2>回測結果（2024-2026 out-of-sample）</h2>
 <p style="color:#aaa;font-size:13px">
-  <b>獲利率</b>＝回測中出場報酬 &gt; 0 的比例（含停損限制）
+  <b>獲利率</b>＝回測中出場報酬 > 0 的比例（含停損限制）
   <b>命中率</b>＝訓練期條件成立後 10 天最高點漲 15% 的比例（純統計，無停損）
 </p>
-<table>
+
+<h3>本次探索條件</h3>
+{f'''<table>
 <tr>
   <th>#</th><th>條件</th><th>Sharpe</th>
   <th title="回測出場報酬>0的比例（含停損）">獲利率<br><small>回測</small></th>
@@ -1707,8 +1768,22 @@ def _generate_report(hypothesis: str):
   <th title="驗證期：同樣統計方式（紅色=比訓練期低10%以上，可能過擬合）">命中率<br><small>驗證期</small></th>
   <th title="訓練期樣本數">樣本數</th><th>圖</th>
 </tr>
-{rows_html}
-</table>
+{this_rows_html}
+</table>''' if this_rows_html else '<p style="color:#888">本次無新增有效條件</p>'}
+
+<h3>歷史累積條件</h3>
+{f'''<table>
+<tr>
+  <th>#</th><th>條件</th><th>Sharpe</th>
+  <th title="回測出場報酬>0的比例（含停損）">獲利率<br><small>回測</small></th>
+  <th title="總累積報酬">總報酬</th>
+  <th>最大回撤</th><th>交易次數</th>
+  <th title="訓練期：條件成立後10天最高點漲15%的比例（純統計，無停損）">命中率<br><small>訓練期</small></th>
+  <th title="驗證期：同樣統計方式（紅色=比訓練期低10%以上，可能過擬合）">命中率<br><small>驗證期</small></th>
+  <th title="訓練期樣本數">樣本數</th><th>圖</th>
+</tr>
+{hist_rows_html}
+</table>''' if hist_rows_html else '<p style="color:#888">無歷史條件</p>'}
 
 <h2>RFC 快速驗證</h2>
 {rfc_html if rfc_html else '<p>尚未訓練</p>'}
@@ -1722,7 +1797,7 @@ def _generate_report(hypothesis: str):
     report_path = os.path.join(results_d, "report.html")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"\n[報表] 已存：{report_path}（{len(rows)} 筆條件）")
+    print(f"\n[報表] 已存：{report_path}（本次 {len(this_rows)} 筆，歷史 {len(hist_rows)} 筆）")
 
 
 # ── 入口 ─────────────────────────────────────────────────────────
