@@ -41,16 +41,9 @@ _gemini_client = OpenAI(
 )
 
 MODELS = [
-    ("qwen2.5:14b", _ollama_client),  # 免錢：本機
+    ("qwen3:14b", _ollama_client),  # 免錢：本機
     ("deepseek-v4-flash", _deepseek_client),  # 主力
     (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),  # 備用1：免費（每天20次）
-    # ("llama-3.3-70b-versatile", _groq_client),
-    # 停用原因：
-    # 1. Groq 免費配額有限，初期測試正常但很快用完（429）
-    # 2. 加入 check_history 後 tool schema 變複雜，llama 開始生成錯誤格式：
-    #    把 tool name 和 arguments 混在一起（如 <function=name,{args}>），
-    #    Groq API 直接拒絕（tool_use_failed）。tool 越多越不穩定。
-    # 潛在解法：減少 tool 數量或改用 text 輸出再 regex 解析，但成本太高不值得。
 ]
 _model_idx = 0
 
@@ -1423,8 +1416,9 @@ def validate_and_train(hypothesis: str = "breakout"):
         ind, _ = _build_indicators(stocks, TRAIN_START, SESSION_END)
 
         this_top20 = sorted(passing, key=lambda x: x["hit_rate"], reverse=True)[:20]
-        # 歷史前20 = 從 backtest_log 所有通過條件中取勝率最高的前 20
-        hist_top20 = sorted(hist_passing, key=lambda x: x["hit_rate"], reverse=True)[:20]
+        # 歷史前20 = backtest_log（累積回測）+ signal_log.bak（上次探索）合併取勝率前 20
+        hist_sources = hist_passing + prev_passing
+        hist_top20 = sorted(hist_sources, key=lambda x: x["hit_rate"], reverse=True)[:20]
 
         # 合併去重，一次性產生所有 binary 特徵
         all_conds = {}
@@ -1651,42 +1645,65 @@ def _generate_report(hypothesis: str):
                 f"<p>重要特徵：{feat_str}</p>"
             )
 
-    # ── 指標使用統計（from signal_log，含未通過的）────────────────
+    # ── 指標使用統計 ───────────────────────────────────────────
     import re as _re
 
-    all_entries = _load_signal_log(hypothesis, max_entries=9999)
-    ind_counter: dict = {}
-    for e in all_entries:
-        cond = e.get("condition", "")
-        for t in _re.findall(r"([a-z_]+)\s*[><!=]", cond):
-            ind_counter[t] = ind_counter.get(t, 0) + 1
-        for t in _re.findall(r"\(\s*([a-z_]+)\s*\)", cond):
-            ind_counter[t] = ind_counter.get(t, 0) + 1
-    ind_sorted = sorted(ind_counter.items(), key=lambda x: -x[1])
-    max_ind_cnt = ind_sorted[0][1] if ind_sorted else 1
-    total_tested = len(all_entries)
-    passed_count = len([e for e in all_entries if e.get("hit_rate", 0) >= 0.35])
+    def _build_ind_stats(entries):
+        counter: dict = {}
+        for e in entries:
+            cond = e.get("condition", "")
+            for t in _re.findall(r"([a-z_]+)\s*[><!=]", cond):
+                counter[t] = counter.get(t, 0) + 1
+            for t in _re.findall(r"\(\s*([a-z_]+)\s*\)", cond):
+                counter[t] = counter.get(t, 0) + 1
+        return counter, len(entries)
 
-    ind_rows_html = ""
+    # 本次 session（from signal_log）
+    this_entries = _load_signal_log(hypothesis, max_entries=9999)
+    this_ind_counter, this_tested = _build_ind_stats(this_entries)
+    this_passed = len([e for e in this_entries if e.get("hit_rate", 0) >= 0.35])
+
+    # 歷史累積（from backtest_log）
+    hist_ind_counter, hist_tested = {}, 0
+    if os.path.exists(backtest_log):
+        hist_all = []
+        with open(backtest_log, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    hist_all.append(json.loads(line.strip()))
+                except:
+                    pass
+        hist_ind_counter, hist_tested = _build_ind_stats(hist_all)
+    hist_passed = len([e for e in hist_all if e.get("hit_rate", 0) >= 0.35]) if hist_tested > 0 else 0
+
+    def _build_ind_table(ind_counter, key_inds):
+        if not ind_counter:
+            return '<tr><td colspan="3" style="color:#888;text-align:center">無資料</td></tr>'
+        max_cnt = max(ind_counter.values())
+        rows = ""
+        for ind_name, cnt in sorted(ind_counter.items(), key=lambda x: -x[1]):
+            pct = cnt / max_cnt * 100
+            is_key = ind_name in key_inds
+            color = "#4fc3f7" if is_key else "#aaa"
+            badge = ' <span style="font-size:10px;color:#f39c12">★重點</span>' if is_key else ""
+            desc = INDICATOR_DESCRIPTIONS.get(ind_name, "")
+            desc_html = f'<span style="color:#666;font-size:12px;margin-left:8px">{desc}</span>' if desc else ""
+            rows += (
+                f"<tr>"
+                f'<td style="font-family:monospace;color:{color}">{ind_name}{badge}{desc_html}</td>'
+                f'<td style="text-align:center">{cnt}</td>'
+                f'<td><div style="background:#3498db;height:12px;width:{pct:.0f}%;border-radius:3px;min-width:4px"></div></td>'
+                f"</tr>"
+            )
+        return rows
+
     key_inds = set(cfg.get("key_indicators", []))
-    for ind_name, cnt in ind_sorted:
-        pct = cnt / max_ind_cnt * 100
-        is_key = ind_name in key_inds
-        color = "#4fc3f7" if is_key else "#aaa"
-        badge = ' <span style="font-size:10px;color:#f39c12">★重點</span>' if is_key else ""
-        desc = INDICATOR_DESCRIPTIONS.get(ind_name, "")
-        desc_html = f'<span style="color:#666;font-size:12px;margin-left:8px">{desc}</span>' if desc else ""
-        ind_rows_html += (
-            f"<tr>"
-            f'<td style="font-family:monospace;color:{color}">{ind_name}{badge}{desc_html}</td>'
-            f'<td style="text-align:center">{cnt}</td>'
-            f'<td><div style="background:#3498db;height:12px;width:{pct:.0f}%;border-radius:3px;min-width:4px"></div></td>'
-            f"</tr>"
-        )
+    this_ind_html = _build_ind_table(this_ind_counter, key_inds)
+    hist_ind_html = _build_ind_table(hist_ind_counter, key_inds)
 
     # ── 類別覆蓋摘要（通過條件中各類別出現幾次）──────────────────
     categories = cfg.get("indicator_categories", {})
-    passing_entries = [e for e in all_entries if e.get("hit_rate", 0) >= 0.35]
+    passing_entries = [e for e in this_entries if e.get("hit_rate", 0) >= 0.35]
     cat_coverage: dict = {cat: 0 for cat in categories}
     for e in passing_entries:
         cond = e.get("condition", "")
@@ -1735,7 +1752,7 @@ def _generate_report(hypothesis: str):
 <h1>🎯 {hyp_name} — 專屬模型報表</h1>
 <p>假設：{cfg.get('description','')}</p>
 <p>統計期：{TRAIN_START} ~ {TRAIN_END}　回測期：{PREDICT_START} ~ {SESSION_END}</p>
-<p>Agent 共測試 <b>{total_tested}</b> 個條件，通過 <b>{passed_count}</b> 個（{passed_count/max(total_tested,1):.1%}），回測有效 <b>{len(this_rows) + len(hist_rows)}</b> 個</p>
+<p>本次：測試 <b>{this_tested}</b> 個條件，通過 <b>{this_passed}</b> 個（{this_passed/max(this_tested,1):.1%}）｜歷史累積：測試 <b>{hist_tested}</b> 個條件，通過 <b>{hist_passed}</b> 個（{hist_passed/max(hist_tested,1):.1%}）｜回測有效 <b>{len(this_rows) + len(hist_rows)}</b> 個</p>
 
 <h2>類別覆蓋摘要</h2>
 <p style="color:#aaa;font-size:13px">✅ = 達標（≥2個通過條件）　⚠️ = 部分（1個）　⬜ = 未覆蓋</p>
@@ -1744,11 +1761,19 @@ def _generate_report(hypothesis: str):
 {dim_rows_html}
 </table>
 
-<h2>指標使用統計（Agent 探索的指標）</h2>
-<p style="color:#aaa;font-size:13px">★重點 = 本假設的重點指標；統計含未通過的 {total_tested} 個測試條件</p>
+<h2>指標使用統計</h2>
+<p style="color:#aaa;font-size:13px">★重點 = 本假設的重點指標</p>
+
+<h3>本次探索（{this_tested} 個條件，{this_passed} 個通過）</h3>
 <table style="width:60%">
 <tr><th>指標</th><th>使用次數</th><th>頻率</th></tr>
-{ind_rows_html}
+{this_ind_html}
+</table>
+
+<h3>歷史累積（{hist_tested} 個條件，{hist_passed} 個通過）</h3>
+<table style="width:60%">
+<tr><th>指標</th><th>使用次數</th><th>頻率</th></tr>
+{hist_ind_html}
 </table>
 
 <h2>回測結果（2024-2026 out-of-sample）</h2>
@@ -1821,5 +1846,5 @@ if __name__ == "__main__":
     hyp = sys.argv[1] if len(sys.argv) > 1 else "free"
     model = sys.argv[2] if len(sys.argv) > 2 else "qwen"
     max_calls = int(sys.argv[3]) if len(sys.argv) > 3 else 0
-    max_calls = 10
+    max_calls = 50
     run_session(hyp, model=model, max_calls=max_calls)
