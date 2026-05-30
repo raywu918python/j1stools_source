@@ -44,6 +44,13 @@ MODELS = [
     ("qwen3:14b", _ollama_client),  # 免錢：本機
     ("deepseek-v4-flash", _deepseek_client),  # 主力
     (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),  # 備用1：免費（每天20次）
+    # ("llama-3.3-70b-versatile", _groq_client),
+    # 停用原因：
+    # 1. Groq 免費配額有限，初期測試正常但很快用完（429）
+    # 2. 加入 check_history 後 tool schema 變複雜，llama 開始生成錯誤格式：
+    #    把 tool name 和 arguments 混在一起（如 <function=name,{args}>），
+    #    Groq API 直接拒絕（tool_use_failed）。tool 越多越不穩定。
+    # 潛在解法：減少 tool 數量或改用 text 輸出再 regex 解析，但成本太高不值得。
 ]
 _model_idx = 0
 
@@ -1284,10 +1291,10 @@ def _load_backtested(hypothesis: str) -> set:
 
 def validate_and_train(hypothesis: str = "breakout"):
     """
-    回測 + RFC 快速驗證，使用 2024-2026 資料（out-of-sample）。
+    先訓練 RFC → 用模型信心度排序進場做回測。
 
     流程：
-      signal_log（訓練期統計通過） → 回測（預測期 2024~今）→ RFC 驗證 → 報表
+      signal_log（訓練期統計通過） → RFC 訓練 → 模型回測（預測期 2024~今）→ 報表
     """
     global _current_hypothesis
     _current_hypothesis = hypothesis
@@ -1326,83 +1333,18 @@ def validate_and_train(hypothesis: str = "breakout"):
         print(f"[{hypothesis}] 沒有通過的條件，跳過驗證")
         return
 
-    done = _load_backtested(hypothesis)
-    seen = set()
-    new_pass = []
-    for e in passing:
-        key = _canonical_condition(e.get("condition", ""))
-        if key not in done and key not in seen:
-            seen.add(key)
-            new_pass.append(e)
-
-    if not new_pass:
-        print(f"[{hypothesis}] 所有 {len(passing)} 個條件已回測，跳過回測，直接進入 RFC 訓練")
-    else:
-        print(f"\n[{hypothesis}] 回測 {len(new_pass)} 個新條件（預測期：{PREDICT_START}~{SESSION_END}）...")
-    backtest_log = _backtest_log_path(hypothesis)
-
-    # 預先載入預測期指標（計算 hit_rate_predict 用）
-    try:
-        ind_pred, close_pred = _get_indicators(PREDICT_START, SESSION_END)
-        future_high_pred = pd.concat([close_pred.shift(-i) for i in range(1, 11)], axis=0).groupby(level=0).max()
-    except Exception:
-        ind_pred, close_pred, future_high_pred = None, None, None
-
-    for entry in new_pass:
-        cond = entry["condition"]
-        print(f"\n→ 回測：{cond}")
-        bt = execute_tool(
-            "run_backtest",
-            {
-                "condition": cond,
-                "hold_days": 10,
-                "sl_stop": 0.08,
-                "tp_stop": 0.15,
-                "start": PREDICT_START,
-                "end": SESSION_END,
-            },
-        )
-        # 計算預測期 hit_rate（同訓練期邏輯，純統計無停損）
-        hit_rate_predict = None
-        if ind_pred is not None:
-            try:
-                sig = eval(cond, {"__builtins__": {}}, ind_pred)
-                mask = sig.fillna(False).astype(bool)
-                vals = ((future_high_pred / close_pred - 1) >= 0.15)[mask].values.flatten()
-                vals = vals[~pd.isnull(vals)]
-                if len(vals) >= 10:
-                    hit_rate_predict = round(float(np.mean(vals.astype(float))), 4)
-            except Exception:
-                pass
-        print(
-            f"  hit_predict={hit_rate_predict} {json.dumps({k: v for k, v in bt.items() if k != 'chart'}, ensure_ascii=False)}"
-        )
-        with open(backtest_log, "a", encoding="utf-8") as f:
-            f.write(
-                json.dumps(
-                    {
-                        "condition": cond,
-                        "hit_rate": entry.get("hit_rate"),
-                        "hit_rate_predict": hit_rate_predict,
-                        "sample_count": entry.get("sample_count"),
-                        "backtest": bt,
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-
-    # RFC 快速驗證
-    print(f"\n[{hypothesis}] 訓練 RFC（快速驗證用）...")
+    # ══════════════════════════════════════════════════════
+    # 直接訓練 RFC，不再對單一條件做回測
+    # ══════════════════════════════════════════════════════
+    print(f"\n[{hypothesis}] 訓練 RFC（用於模型回測）...")
     import random as _random
     from sklearn.ensemble import RandomForestClassifier
     import joblib
 
+    bt_result = None
     try:
         n_stocks = 200
         stocks = _random.sample(WATCH_STOCKS, min(n_stocks, len(WATCH_STOCKS)))
-        # 載完整資料（train+predict），才能做 train/test split
         feat_df = _build_rfc_features(stocks, TRAIN_START, SESSION_END)
 
         close_wide = feat_df.pivot(index="date", columns="stock_id", values="close")
@@ -1412,15 +1354,13 @@ def validate_and_train(hypothesis: str = "breakout"):
         target_long.columns = ["date", "stock_id", "target"]
         feat_df = feat_df.merge(target_long, on=["date", "stock_id"], how="left")
 
-        # 把通過條件加成 binary 特徵（ind 需要完整期間才能 eval）
+        # 把通過條件加成 binary 特徵
         ind, _ = _build_indicators(stocks, TRAIN_START, SESSION_END)
 
         this_top20 = sorted(passing, key=lambda x: x["hit_rate"], reverse=True)[:20]
-        # 歷史前20 = backtest_log（累積回測）+ signal_log.bak（上次探索）合併取勝率前 20
         hist_sources = hist_passing + prev_passing
         hist_top20 = sorted(hist_sources, key=lambda x: x["hit_rate"], reverse=True)[:20]
 
-        # 合併去重，一次性產生所有 binary 特徵
         all_conds = {}
         for e in this_top20 + hist_top20:
             all_conds[e["condition"]] = e
@@ -1444,7 +1384,6 @@ def validate_and_train(hypothesis: str = "breakout"):
         tech_cols = [c for c in feat_df.columns if c.startswith("f_") and not c.startswith("f_sig_")]
         feat_df = feat_df.dropna(subset=tech_cols + ["target"])
 
-        # 固定切點：2024-01-01
         cutoff = pd.Timestamp(PREDICT_START)
         train = feat_df[feat_df["date"] < cutoff]
         test = feat_df[feat_df["date"] >= cutoff]
@@ -1452,32 +1391,100 @@ def validate_and_train(hypothesis: str = "breakout"):
         if len(train) < 200 or len(test) < 50:
             print(f"  資料不足：train={len(train)}, test={len(test)}")
         else:
+            # ── 訓練單一 RFC（技術指標 + 本次前20 + 歷史前20） ──
+            all_feat_cols = list(dict.fromkeys(tech_cols + this_cols + hist_cols))  # 去重但保序
+            rfc = RandomForestClassifier(n_estimators=100, max_depth=6, n_jobs=-1, random_state=42)
+            rfc.fit(train[all_feat_cols], train["target"])
+
+            model_path = os.path.join(_results_dir(hypothesis), "rfc_model.joblib")
+            joblib.dump(rfc, model_path)
+
+            # ── 用模型生成 proba（預測期 2024~今） ──
+            test_proba = rfc.predict_proba(test[all_feat_cols])[:, 1]
+            test = test.copy()
+            test["proba"] = test_proba
+
+            proba_wide = test.pivot(index="date", columns="stock_id", values="proba").fillna(0)
+            close_wide_bt = test.pivot(index="date", columns="stock_id", values="close")
+
+            # ── 模型回測（用 proba 排序進場） ──
+            from j1stools.backtest_engine import backtest_engine
+
+            entries = proba_wide >= 0.5
+            exits = pd.Series(False, index=proba_wide.index)
+            stock_group_map = {s: "default" for s in proba_wide.columns}
+
+            try:
+                portfolio_value, trades_df, _ = backtest_engine(
+                    close=close_wide_bt,
+                    entries=entries,
+                    exits=exits,
+                    df_proba=proba_wide,
+                    stock_group=stock_group_map,
+                    hold_days=10,
+                    sl_stop=0.08,
+                    tp_stop=0.15,
+                    use_fixed_sl=True,
+                    use_fixed_tp=True,
+                    use_sl_trail=False,
+                    use_hold_days=True,
+                )
+
+                pv = portfolio_value.dropna()
+                rets = pv.pct_change(fill_method=None).dropna()
+                total_return = round(float(pv.iloc[-1] / pv.iloc[0] - 1), 4) if len(pv) > 1 else None
+                sharpe = round(float(rets.mean() / rets.std() * (252**0.5)) if rets.std() > 0 else 0, 2)
+                max_dd = round(float(((pv / pv.cummax()) - 1).min()), 4)
+                rp = trades_df.get("return_pct", pd.Series(dtype=float))
+                win_rate = round(float((rp > 0).mean()), 4) if len(rp) else None
+                avg_return = round(float(rp.mean()), 4) if len(rp) else None
+                avg_win = round(float(rp[rp > 0].mean()), 4) if (rp > 0).any() else 0
+                avg_loss = round(float(rp[rp < 0].mean()), 4) if (rp < 0).any() else 0
+
+                bt_result = {
+                    "type": "model_backtest",
+                    "period": f"{PREDICT_START}~{SESSION_END}",
+                    "total_trades": len(trades_df),
+                    "total_return": total_return,
+                    "sharpe": sharpe,
+                    "max_drawdown": max_dd,
+                    "win_rate": win_rate,
+                    "avg_return": avg_return,
+                    "avg_win": avg_win,
+                    "avg_loss": avg_loss,
+                }
+
+                backtest_log = _backtest_log_path(hypothesis)
+                with open(backtest_log, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(bt_result, ensure_ascii=False) + "\n")
+
+                print(
+                    f"\n  [模型回測] Sharpe={sharpe}  總報酬={total_return:+.2%}  "
+                    f"交易={len(trades_df)} 筆  獲利={win_rate:.1%}  "
+                    f"最大回撤={max_dd:.1%}"
+                )
+
+            except Exception as e:
+                print(f"  [模型回測] 失敗：{e}")
+                import traceback
+
+                traceback.print_exc()
+
+            # ── RFC 驗證統計 ──
             actual = test["target"].values
             base_rate = round(float(actual.mean()), 4)
+            thresholds = {}
+            for th in [0.5, 0.6, 0.7, 0.8, 0.9]:
+                mask = test_proba >= th
+                n = int(mask.sum())
+                thresholds[f"proba>={th}"] = (
+                    {"n": n, "hit_rate": round(float(actual[mask].mean()), 4)}
+                    if n >= 10
+                    else {"n": n, "note": "樣本不足"}
+                )
 
-            def _eval_rfc(feat_cols, model_name):
-                rfc = RandomForestClassifier(n_estimators=100, max_depth=6, n_jobs=-1, random_state=42)
-                rfc.fit(train[feat_cols], train["target"])
-                proba = rfc.predict_proba(test[feat_cols])[:, 1]
-                thresholds = {}
-                for th in [0.5, 0.6, 0.7, 0.8, 0.9]:
-                    mask = proba >= th
-                    n = int(mask.sum())
-                    thresholds[f"proba>={th}"] = (
-                        {"n": n, "hit_rate": round(float(actual[mask].mean()), 4)}
-                        if n >= 10
-                        else {"n": n, "note": "樣本不足"}
-                    )
-                importance = sorted(zip(feat_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
-                top_feats = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:10]]
-                model_path = os.path.join(_results_dir(hypothesis), f"rfc_{model_name}.joblib")
-                joblib.dump(rfc, model_path)
-                print(f"  [{model_name}] base={base_rate} {thresholds}")
-                return {"thresholds": thresholds, "top_features": top_feats, "model_path": model_path}
-
-            rfc_a = _eval_rfc(tech_cols, "tech_only")
-            rfc_b = _eval_rfc(tech_cols + this_cols, "tech_this20") if this_cols else {}
-            rfc_c = _eval_rfc(tech_cols + hist_cols, "tech_hist20") if hist_cols else {}
+            importance = sorted(zip(all_feat_cols, rfc.feature_importances_), key=lambda x: x[1], reverse=True)
+            top_feats = [{"feature": f, "importance": round(float(v), 4)} for f, v in importance[:15]]
 
             rfc_result = {
                 "hypothesis": hypothesis,
@@ -1486,9 +1493,13 @@ def validate_and_train(hypothesis: str = "breakout"):
                 "test_size": len(test),
                 "train_period": f"{TRAIN_START} ~ {TRAIN_END}",
                 "test_period": f"{PREDICT_START} ~ {SESSION_END}",
-                "model_a": {"name": "基礎技術指標", **rfc_a},
-                "model_b": {"name": f"基礎+本次前{len(this_cols)}", **rfc_b} if rfc_b else {},
-                "model_c": {"name": f"基礎+歷史前{len(hist_cols)}", **rfc_c} if rfc_c else {},
+                "n_conditions": len(all_conds),
+                "n_tech_features": len(tech_cols),
+                "n_signal_features": len(this_cols) + len(hist_cols),
+                "thresholds": thresholds,
+                "top_features": top_feats,
+                "backtest": bt_result,
+                "model_path": model_path,
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
             rfc_path = os.path.join(_results_dir(hypothesis), "rfc_result.json")
@@ -1498,6 +1509,9 @@ def validate_and_train(hypothesis: str = "breakout"):
 
     except Exception as e:
         print(f"  RFC 訓練失敗：{e}")
+        import traceback
+
+        traceback.print_exc()
 
     _generate_report(hypothesis)
 
@@ -1509,12 +1523,8 @@ def _generate_report(hypothesis: str):
     cfg = HYPOTHESIS_CONFIGS.get(hypothesis, {})
     hyp_name = cfg.get("name", hypothesis)
 
-    if not os.path.exists(backtest_log):
-        print(f"[報表] 無回測資料")
-        return
-
-    this_session_conds = set()
     sig_path = _signal_log_path(hypothesis)
+    this_session_conds = set()
     if os.path.exists(sig_path):
         with open(sig_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -1523,43 +1533,21 @@ def _generate_report(hypothesis: str):
                 except:
                     pass
 
-    this_rows = []
-    hist_rows = []
-    with open(backtest_log, encoding="utf-8") as f:
-        for line in f:
-            try:
-                e = json.loads(line)
-                bt = e.get("backtest", {})
-                if "error" in bt or bt.get("total_trades", 0) < 10:
-                    continue
-                row_data = {
-                    "condition": e["condition"],
-                    "hit_rate": e.get("hit_rate", 0),
-                    "hit_rate_predict": e.get("hit_rate_predict"),
-                    "sample_count": e.get("sample_count", 0),
-                    "trades": bt.get("total_trades"),
-                    "total_return": bt.get("total_return", 0),
-                    "sharpe": bt.get("sharpe", 0),
-                    "max_drawdown": bt.get("max_drawdown", 0),
-                    "win_rate": bt.get("win_rate", 0),
-                    "avg_win": bt.get("avg_win", 0),
-                    "avg_loss": bt.get("avg_loss", 0),
-                    "chart": bt.get("chart"),
-                }
-                if e["condition"] in this_session_conds:
-                    this_rows.append(row_data)
-                else:
-                    hist_rows.append(row_data)
-            except Exception:
-                continue
-
-    if not this_rows and not hist_rows:
-        print("[報表] 無有效資料")
+    # ── 讀取 RFC 結果 ──
+    rfc_path = os.path.join(results_d, "rfc_result.json")
+    if not os.path.exists(rfc_path):
+        print(f"[報表] 無 RFC 結果")
         return
 
-    this_rows.sort(key=lambda x: x["sharpe"], reverse=True)
-    hist_rows.sort(key=lambda x: x["sharpe"], reverse=True)
+    with open(rfc_path, encoding="utf-8") as f:
+        rfc = json.load(f)
 
+    backtest = rfc.get("backtest") or {}
+    thresholds = rfc.get("thresholds", {})
+    top_feats = rfc.get("top_features", [])
+    n_conds = rfc.get("n_conditions", 0)
+
+    # ── 模型回測摘要 ──
     def _sc(s):
         if s >= 2.0:
             return "#1a7a3a"
@@ -1571,79 +1559,78 @@ def _generate_report(hypothesis: str):
             return "#e67e22"
         return "#e74c3c"
 
-    def _build_table_rows(rows_list):
-        html_str = ""
-        for i, r in enumerate(rows_list):
-            chart_link = f'<a href="{r["chart"]}" target="_blank">📊</a>' if r.get("chart") else ""
-            dd_color = "#e74c3c" if r["max_drawdown"] < -0.15 else "#e67e22" if r["max_drawdown"] < -0.10 else "#2ecc71"
-            hr_pred = r.get("hit_rate_predict")
-            hr_pred_str = f"{hr_pred:.1%}" if hr_pred is not None else "—"
-            hr_pred_color = ""
-            if hr_pred is not None and r["hit_rate"] - hr_pred > 0.10:
-                hr_pred_color = 'style="color:#e74c3c"'
-            html_str += (
+    bt_html = ""
+    if backtest:
+        trades = backtest.get("total_trades", 0)
+        sharpe = backtest.get("sharpe", 0)
+        total_ret = backtest.get("total_return", 0)
+        mdd = backtest.get("max_drawdown", 0)
+        wr = backtest.get("win_rate", 0)
+        avg_r = backtest.get("avg_return", 0)
+        avg_w = backtest.get("avg_win", 0)
+        avg_l = backtest.get("avg_loss", 0)
+        sharpe_color = _sc(sharpe)
+        dd_color = "#e74c3c" if mdd < -0.15 else "#e67e22" if mdd < -0.10 else "#2ecc71"
+        bt_html = f"""
+        <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+        <tr>
+          <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">交易次數</th>
+          <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center;color:{sharpe_color}">Sharpe</th>
+          <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">總報酬</th>
+          <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center;color:{dd_color}">最大回撤</th>
+          <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">獲利率</th>
+          <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">平均報酬</th>
+          <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">平均贏</th>
+          <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">平均輸</th>
+        </tr>
+        <tr>
+          <td style="text-align:center;border:1px solid #333;padding:6px">{trades}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px;font-weight:bold;color:{sharpe_color}">{sharpe:.2f}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px">{total_ret:+.2%}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px;color:{dd_color}">{mdd:.1%}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px">{wr:.1%}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px">{avg_r:+.2%}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px;color:#2ecc71">{avg_w:+.2%}</td>
+          <td style="text-align:center;border:1px solid #333;padding:6px;color:#e74c3c">{avg_l:+.2%}</td>
+        </tr>
+        </table>
+        """
+
+    # ── RFC 門檻命中率 ──
+    th_rows = ""
+    for th_name, v in thresholds.items():
+        n = v.get("n", 0)
+        if "hit_rate" in v:
+            hr = v["hit_rate"]
+            hr_color = "#2ecc71" if hr >= 0.5 else "#f39c12" if hr >= 0.35 else "#e74c3c"
+            th_rows += (
                 f"<tr>"
-                f'<td style="text-align:center">{i+1}</td>'
-                f'<td style="font-family:monospace;font-size:12px;white-space:nowrap">{r["condition"]}</td>'
-                f'<td style="text-align:center;color:{_sc(r["sharpe"])};font-weight:bold">{r["sharpe"]:.2f}</td>'
-                f'<td style="text-align:center">{r["win_rate"]:.1%}</td>'
-                f'<td style="text-align:center">{r["total_return"]:+.2%}</td>'
-                f'<td style="text-align:center;color:{dd_color}">{r["max_drawdown"]:.1%}</td>'
-                f'<td style="text-align:center">{r["trades"]}</td>'
-                f'<td style="text-align:center">{r["hit_rate"]:.1%}</td>'
-                f'<td style="text-align:center" {hr_pred_color}>{hr_pred_str}</td>'
-                f'<td style="text-align:center">{r["sample_count"]}</td>'
-                f'<td style="text-align:center">{chart_link}</td>'
+                f'<td style="text-align:center;border:1px solid #333;padding:6px">{th_name}</td>'
+                f'<td style="text-align:center;border:1px solid #333;padding:6px">{n}</td>'
+                f'<td style="text-align:center;border:1px solid #333;padding:6px;color:{hr_color};font-weight:bold">{hr:.1%}</td>'
                 f"</tr>"
             )
-        return html_str
-
-    this_rows_html = _build_table_rows(this_rows)
-    hist_rows_html = _build_table_rows(hist_rows)
-
-    # RFC 區塊
-    rfc_html = ""
-    rfc_path = os.path.join(results_d, "rfc_result.json")
-    if os.path.exists(rfc_path):
-        with open(rfc_path, encoding="utf-8") as f:
-            rfc = json.load(f)
-        train_p = rfc.get("train_period", "")
-        test_p = rfc.get("test_period", "")
-        base = rfc.get("base_rate", "?")
-        rfc_html = f"<p>訓練期：{train_p}　驗證期：{test_p}　基礎命中率：{base:.1%}</p>"
-        for model_key in ["model_a", "model_b", "model_c"]:
-            m = rfc.get(model_key, {})
-            if not m:
-                continue
-            th_rows = ""
-            for th, v in m.get("thresholds", {}).items():
-                n = v.get("n", 0)
-                if "hit_rate" in v:
-                    hr = v["hit_rate"]
-                    hr_color = "#2ecc71" if hr >= 0.5 else "#f39c12" if hr >= 0.35 else "#e74c3c"
-                    th_rows += (
-                        f"<tr>"
-                        f'<td style="text-align:center">{th}</td>'
-                        f'<td style="text-align:center">{n}</td>'
-                        f'<td style="text-align:center;color:{hr_color};font-weight:bold">{hr:.1%}</td>'
-                        f"</tr>"
-                    )
-                else:
-                    th_rows += (
-                        f"<tr>"
-                        f'<td style="text-align:center">{th}</td>'
-                        f'<td style="text-align:center;color:#555">{n}</td>'
-                        f'<td style="text-align:center;color:#555">樣本不足</td>'
-                        f"</tr>"
-                    )
-            feat_str = ", ".join(f["feature"] for f in m.get("top_features", [])[:5])
-            rfc_html += (
-                f'<h4>{m.get("name","")}</h4>'
-                f'<table border="1" cellpadding="4" style="width:300px">'
-                f"<tr><th>門檻</th><th>樣本數</th><th>命中率</th></tr>"
-                f"{th_rows}</table>"
-                f"<p>重要特徵：{feat_str}</p>"
+        else:
+            th_rows += (
+                f"<tr>"
+                f'<td style="text-align:center;border:1px solid #333;padding:6px">{th_name}</td>'
+                f'<td style="text-align:center;border:1px solid #333;padding:6px;color:#555">{n}</td>'
+                f'<td style="text-align:center;border:1px solid #333;padding:6px;color:#555">樣本不足</td>'
+                f"</tr>"
             )
+
+    # ── 重要特徵排名 ──
+    feat_rows = ""
+    for i, ft in enumerate(top_feats):
+        bar_w = min(int(ft["importance"] * 100), 100)
+        feat_rows += (
+            f"<tr>"
+            f'<td style="text-align:center;border:1px solid #333;padding:6px">{i+1}</td>'
+            f'<td style="font-family:monospace;font-size:12px;border:1px solid #333;padding:6px">{ft["feature"]}</td>'
+            f'<td style="text-align:center;border:1px solid #333;padding:6px">{ft["importance"]:.4f}</td>'
+            f'<td style="border:1px solid #333;padding:6px"><div style="background:#4fc3f7;height:12px;width:{bar_w}%;border-radius:3px;min-width:4px"></div></td>'
+            f"</tr>"
+        )
 
     # ── 指標使用統計 ───────────────────────────────────────────
     import re as _re
@@ -1752,7 +1739,7 @@ def _generate_report(hypothesis: str):
 <h1>🎯 {hyp_name} — 專屬模型報表</h1>
 <p>假設：{cfg.get('description','')}</p>
 <p>統計期：{TRAIN_START} ~ {TRAIN_END}　回測期：{PREDICT_START} ~ {SESSION_END}</p>
-<p>本次：測試 <b>{this_tested}</b> 個條件，通過 <b>{this_passed}</b> 個（{this_passed/max(this_tested,1):.1%}）｜歷史累積：測試 <b>{hist_tested}</b> 個條件，通過 <b>{hist_passed}</b> 個（{hist_passed/max(hist_tested,1):.1%}）｜回測有效 <b>{len(this_rows) + len(hist_rows)}</b> 個</p>
+<p>本次：測試 <b>{this_tested}</b> 個條件，通過 <b>{this_passed}</b> 個（{this_passed/max(this_tested,1):.1%}）</p>
 
 <h2>類別覆蓋摘要</h2>
 <p style="color:#aaa;font-size:13px">✅ = 達標（≥2個通過條件）　⚠️ = 部分（1個）　⬜ = 未覆蓋</p>
@@ -1770,48 +1757,26 @@ def _generate_report(hypothesis: str):
 {this_ind_html}
 </table>
 
-<h3>歷史累積（{hist_tested} 個條件，{hist_passed} 個通過）</h3>
-<table style="width:60%">
-<tr><th>指標</th><th>使用次數</th><th>頻率</th></tr>
-{hist_ind_html}
+<h2>模型回測結果（2024-2026 out-of-sample）</h2>
+<p style="color:#aaa;font-size:13px">
+  用 RFC 模型（{n_conds} 個條件 + 技術指標）的 proba 排序進場。
+  進場門檻 proba >= 0.5，持有 10 天 / 停利 15% / 停損 8%。
+  回測時依 proba 高低決定進場順序（越高越優先），最多同時持有 10 檔。
+</p>
+{bt_html}
+
+<h2>RFC 門檻命中率（驗證期）</h2>
+<p style="color:#aaa;font-size:13px">基礎命中率 = {rfc["base_rate"]:.1%}（test set label 平均值）</p>
+<table style="width:40%">
+<tr><th>門檻</th><th>樣本數</th><th>命中率</th></tr>
+{th_rows}
 </table>
 
-<h2>回測結果（2024-2026 out-of-sample）</h2>
-<p style="color:#aaa;font-size:13px">
-  <b>獲利率</b>＝回測中出場報酬 > 0 的比例（含停損限制）
-  <b>命中率</b>＝訓練期條件成立後 10 天最高點漲 15% 的比例（純統計，無停損）
-</p>
-
-<h3>本次探索條件</h3>
-{f'''<table>
-<tr>
-  <th>#</th><th>條件</th><th>Sharpe</th>
-  <th title="回測出場報酬>0的比例（含停損）">獲利率<br><small>回測</small></th>
-  <th title="總累積報酬">總報酬</th>
-  <th>最大回撤</th><th>交易次數</th>
-  <th title="訓練期：條件成立後10天最高點漲15%的比例（純統計，無停損）">命中率<br><small>訓練期</small></th>
-  <th title="驗證期：同樣統計方式（紅色=比訓練期低10%以上，可能過擬合）">命中率<br><small>驗證期</small></th>
-  <th title="訓練期樣本數">樣本數</th><th>圖</th>
-</tr>
-{this_rows_html}
-</table>''' if this_rows_html else '<p style="color:#888">本次無新增有效條件</p>'}
-
-<h3>歷史累積條件</h3>
-{f'''<table>
-<tr>
-  <th>#</th><th>條件</th><th>Sharpe</th>
-  <th title="回測出場報酬>0的比例（含停損）">獲利率<br><small>回測</small></th>
-  <th title="總累積報酬">總報酬</th>
-  <th>最大回撤</th><th>交易次數</th>
-  <th title="訓練期：條件成立後10天最高點漲15%的比例（純統計，無停損）">命中率<br><small>訓練期</small></th>
-  <th title="驗證期：同樣統計方式（紅色=比訓練期低10%以上，可能過擬合）">命中率<br><small>驗證期</small></th>
-  <th title="訓練期樣本數">樣本數</th><th>圖</th>
-</tr>
-{hist_rows_html}
-</table>''' if hist_rows_html else '<p style="color:#888">無歷史條件</p>'}
-
-<h2>RFC 快速驗證</h2>
-{rfc_html if rfc_html else '<p>尚未訓練</p>'}
+<h2>重要特徵排名（Feature Importance）</h2>
+<table style="width:80%">
+<tr><th>#</th><th>特徵</th><th>重要性</th><th>視覺化</th></tr>
+{feat_rows}
+</table>
 
 <h2>Agent 探索報告</h2>
 {agent_report_html if agent_report_html else '<p style="color:#666">無文字報告</p>'}
@@ -1822,7 +1787,7 @@ def _generate_report(hypothesis: str):
     report_path = os.path.join(results_d, "report.html")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"\n[報表] 已存：{report_path}（本次 {len(this_rows)} 筆，歷史 {len(hist_rows)} 筆）")
+    print(f"\n[報表] 已存：{report_path}")
 
 
 # ── 入口 ─────────────────────────────────────────────────────────
