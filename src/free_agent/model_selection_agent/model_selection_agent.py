@@ -171,6 +171,7 @@ _GRID_THRESHOLDS: dict[str, list[float]] = {
     "triangle_score": [0.5, 0.65, 0.8],
 }
 
+
 def _condition_indicators(condition: str) -> set[str]:
     tokens = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", condition or ""))
     return tokens & set(AGENT_INDICATORS)
@@ -585,9 +586,7 @@ def _run_grid_search(target: dict, force: bool = False):
     ind_cache, close_cache = _get_indicators(TRAIN_START, TRAIN_END)
     hd = target["hold_days"]
     pt = target["profit_target"]
-    future_high = pd.concat(
-        [close_cache.shift(-i) for i in range(1, hd + 1)], axis=0
-    ).groupby(level=0).max()
+    future_high = pd.concat([close_cache.shift(-i) for i in range(1, hd + 1)], axis=0).groupby(level=0).max()
 
     for ind_a, th_a, ind_b, th_b in all_combos:
         if ind_a not in ind_cache or ind_b not in ind_cache:
@@ -1081,14 +1080,12 @@ def validate_and_train(target: dict):
         return
 
     print(f"\n[{tgt_name}] 訓練 RFC（用於模型回測）...")
-    import random as _random
     from sklearn.ensemble import RandomForestClassifier
     import joblib
 
     bt_result = None
     try:
-        n_stocks = 200
-        stocks = _random.sample(WATCH_STOCKS, min(n_stocks, len(WATCH_STOCKS)))
+        stocks = WATCH_STOCKS
         feat_df = _build_rfc_features(stocks, TRAIN_START, SESSION_END)
 
         close_wide = feat_df.pivot(index="date", columns="stock_id", values="close")
@@ -1469,7 +1466,7 @@ def run_session(
         f"\n{'=' * 60}\n開始目標 {tgt_name}：持有 {hold_days} 天 / 目標 {profit_target:.0%} / 停損 {sl_stop:.0%}\n{'=' * 60}"
     )
 
-    _run_grid_search(target)   # 第一次跑完後永久快取，之後直接跳過
+    _run_grid_search(target)  # 第一次跑完後永久快取，之後直接跳過
     run_agent(target, max_calls=max_calls, model_override=model)
     validate_and_train(target)
 
@@ -1483,5 +1480,5 @@ if __name__ == "__main__":
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
     model = "ollama"
-    max_calls = 10
+    max_calls = 100
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
