@@ -47,12 +47,23 @@ MODELS = [
 _model_idx = 0
 
 # ── 目前目標參數（session 全域） ──────────────────────────────────
-_current_target: dict = {"hold_days": 10, "profit_target": 0.15, "sl_stop": 0.08}
+_current_target: dict = {"task": "return", "hold_days": 10, "threshold": 0.15, "sl_stop": 0.08}
+
+# task 說明
+TASK_DEFS = {
+    "return":        "未來 {hold_days} 天內最高漲幅 >= {threshold:.0%}",
+    "breakout":      "未來 {hold_days} 天突破近 {lookback} 天高點",
+    "consolidation": "未來 {hold_days} 天振幅 < {threshold:.0%}（盤整）",
+    "trend_up":      "持有 {hold_days} 天後漲幅 >= {threshold:.0%}（期末報酬）",
+    "trend_down":    "持有 {hold_days} 天後跌幅 >= {threshold:.0%}（做空）",
+}
 
 
 def _target_name(tgt: dict) -> str:
-    """例如 10d_15p"""
-    return f'{tgt["hold_days"]}d_{int(tgt["profit_target"] * 100)}p'
+    task = tgt.get("task", "return")
+    hd = tgt["hold_days"]
+    th = int(tgt.get("threshold", tgt.get("profit_target", 0.15)) * 100)
+    return f'{hd}d_{task}_{th}'
 
 
 def _current_model() -> str:
@@ -761,7 +772,13 @@ def execute_tool(name: str, inputs: dict) -> dict:
                 "技術面": ["adx", "rsi", "macdh", "bb_width", "atr_rank", "ma5_x_ma10", "ma10_x_ma60"],
                 "量能面": ["vol_ratio", "vol_trend", "obv"],
                 "籌碼面": ["net_foreign", "net_inst", "inst_rank", "foreign_rank", "short_chg", "short_ratio_rank"],
-                "型態面": ["f_n_structure_score", "f_n_ab_gain", "f_n_d_breakout_strength", "triangle_score", "human_only"],
+                "型態面": [
+                    "f_n_structure_score",
+                    "f_n_ab_gain",
+                    "f_n_d_breakout_strength",
+                    "triangle_score",
+                    "human_only",
+                ],
             }
             all_passed = sorted(passed_llm + passed_grid, key=lambda x: -x.get("hit_rate", 0))
             for dim, keywords in _dim_map.items():
@@ -770,10 +787,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
                     for e in all_passed
                     if any(k in e.get("condition", "") for k in keywords)
                 ][:3]
-                dim_done = any(
-                    any(k in e.get("condition", "") for k in keywords)
-                    for e in passed_llm
-                )
+                dim_done = any(any(k in e.get("condition", "") for k in keywords) for e in passed_llm)
                 dimension_summary[dim] = {"top3": top, "llm_found": dim_done}
 
         return {
@@ -854,8 +868,22 @@ def execute_tool(name: str, inputs: dict) -> dict:
             return {"error": "條件必須回傳 DataFrame"}
         mask = signal.astype("boolean").fillna(False).astype(bool)
         future_high = pd.concat([close.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).max()
-        if label_type == "hit":
-            labels = (future_high / close - 1) >= profit_target
+        future_low = pd.concat([close.shift(-i) for i in range(1, hold_days + 1)], axis=0).groupby(level=0).min()
+        task = target.get("task", "return")
+        threshold = target.get("threshold", target.get("profit_target", 0.15))
+
+        if task == "return":
+            labels = (future_high / close - 1) >= threshold
+        elif task == "breakout":
+            lookback = target.get("lookback", 60)
+            rolling_high = close.rolling(lookback, min_periods=lookback // 2).max()
+            labels = future_high > rolling_high
+        elif task == "consolidation":
+            labels = (future_high - future_low) / (close + 1e-9) < threshold
+        elif task == "trend_up":
+            labels = (close.shift(-hold_days) / close - 1) >= threshold
+        elif task == "trend_down":
+            labels = (close / close.shift(-hold_days) - 1) >= threshold
         elif label_type == "max_return":
             labels = future_high / close - 1
         else:
@@ -907,20 +935,23 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
 
 def _pass_threshold(target: dict) -> float:
-    """根據 target 動態調整通過門檻。短天期門檻降低，長天期門檻維持。"""
     hd = target["hold_days"]
-    pt = target["profit_target"]
+    task = target.get("task", "return")
+    if task == "consolidation":
+        return 0.50  # 盤整任務：一半以上時間維持低波動才算
     if hd <= 3:
-        return max(0.30, pt * 2.0)  # 短線目標，hold_days 少，容許低一點
-    return 0.35  # 預設
+        return 0.30
+    return 0.35
 
 
 # ── 系統 Prompt（根據 target 動態生成）────────────────────────────
 def _build_system_prompt(target: dict) -> str:
     name = _target_name(target)
     hd = target["hold_days"]
-    pt = target["profit_target"]
-    sl = target["sl_stop"]
+    task = target.get("task", "return")
+    threshold = target.get("threshold", target.get("profit_target", 0.15))
+    sl = target.get("sl_stop", 0.08)
+    task_desc = TASK_DEFS.get(task, task).format(**{**target, "threshold": threshold})
 
     # 根據目標時長給予提示
     if hd <= 3:
@@ -953,7 +984,9 @@ def _build_system_prompt(target: dict) -> str:
     return f"""你是台灣股票量化研究助理。
 
 ━━ 本次任務 ━━
-為目標「{name}」（持有 {hd} 天 / 報酬 {pt:.0%} / 停損 {sl:.0%}）
+目標代號：{name}
+預測任務：{task_desc}
+持有天數：{hd} 天　停損：{sl:.0%}
 建立一組**來自不同維度**的特徵候選條件，供後續 RFC 模型使用。
 
 **完成標準：量能、籌碼、型態三個維度各至少 1 個通過條件（技術面自然會有，不算在完成條件內）。**
@@ -1653,21 +1686,34 @@ def _generate_report(target: dict):
 
 # ── 入口 ─────────────────────────────────────────────────────────
 def run_session(
-    hold_days: int = 10, profit_target: float = 0.15, sl_stop: float = 0.08, model: str = "", max_calls: int = 0
+    task: str = "return",
+    hold_days: int = 10,
+    threshold: float = 0.15,
+    sl_stop: float = 0.08,
+    lookback: int = 60,
+    model: str = "",
+    max_calls: int = 0,
 ):
     """
-    跑一個 target 的完整 session：Agent 探索 → Grid Search → 驗證 → 訓練 → 報表
-
-    hold_days: 持有天數（預設 10）
-    profit_target: 目標報酬（預設 0.15）
-    sl_stop: 停損幅度（預設 0.08）
+    task: return / breakout / consolidation / trend_up / trend_down
+    hold_days: 持有天數
+    threshold: 任務門檻（return=漲幅, consolidation=振幅, trend_up/down=漲跌幅）
+    sl_stop: 停損幅度
+    lookback: breakout 任務用的回看天數（預設 60）
     model: 指定模型（"deepseek"、"gemini"、"qwen"，空字串 = 預設第一個）
-    max_calls: 測試模式最多幾次工具呼叫（0 = 不限並執行完整驗證）
+    max_calls: 測試模式最多幾次工具呼叫（0 = 不限）
     """
-    target = {"hold_days": hold_days, "profit_target": profit_target, "sl_stop": sl_stop}
+    target = {
+        "task": task,
+        "hold_days": hold_days,
+        "threshold": threshold,
+        "sl_stop": sl_stop,
+        "lookback": lookback,
+    }
     tgt_name = _target_name(target)
+    task_desc = TASK_DEFS.get(task, task).format(**target)
     print(
-        f"\n{'=' * 60}\n開始目標 {tgt_name}：持有 {hold_days} 天 / 目標 {profit_target:.0%} / 停損 {sl_stop:.0%}\n{'=' * 60}"
+        f"\n{'=' * 60}\n開始目標 {tgt_name}：{task_desc}\n{'=' * 60}"
     )
 
     _run_grid_search(target)  # 第一次跑完後永久快取，之後直接跳過
@@ -1684,5 +1730,5 @@ if __name__ == "__main__":
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
     model = "qwen"
-    max_calls = 100
+    max_calls = 30
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
