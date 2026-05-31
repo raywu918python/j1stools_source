@@ -783,36 +783,10 @@ def execute_tool(name: str, inputs: dict) -> dict:
         def _match(e):
             return not ind_filter or ind_filter in e.get("condition", "")
 
-        # 無 indicator 篩選時，補充分維度摘要（避免 LLM 反覆查詢）
-        dimension_summary = {}
-        if not ind_filter:
-            _dim_map = {
-                "技術面": ["adx", "rsi", "macdh", "bb_width", "atr_rank", "ma5_x_ma10", "ma10_x_ma60"],
-                "量能面": ["vol_ratio", "vol_trend", "obv"],
-                "籌碼面": ["net_foreign", "net_inst", "inst_rank", "foreign_rank", "short_chg", "short_ratio_rank"],
-                "型態面": [
-                    "f_n_structure_score",
-                    "f_n_ab_gain",
-                    "f_n_d_breakout_strength",
-                    "triangle_score",
-                    "human_only",
-                ],
-            }
-            all_passed = sorted(passed_llm + passed_grid, key=lambda x: -x.get("hit_rate", 0))
-            for dim, keywords in _dim_map.items():
-                top = [
-                    {"condition": e["condition"], "hit_rate": e["hit_rate"]}
-                    for e in all_passed
-                    if any(k in e.get("condition", "") for k in keywords)
-                ][:3]
-                dim_done = any(any(k in e.get("condition", "") for k in keywords) for e in passed_llm)
-                dimension_summary[dim] = {"top3": top, "llm_found": dim_done}
-
         return {
             "total_tested": len(session_entries) + len(bak_entries) + len(grid_entries),
             "passed": len(passed_llm) + len(passed_grid),
             "saturated_indicators": saturated,
-            "dimension_summary": dimension_summary,  # 各維度 top3（無 indicator 時才有）
             "passed_conditions": [
                 {"condition": e.get("condition", ""), "hit_rate": e.get("hit_rate")}
                 for e in sorted(filter(_match, passed_llm), key=lambda x: -x.get("hit_rate", 0))[:top_n]
@@ -994,24 +968,15 @@ def _build_system_prompt(target: dict) -> str:
 目標代號：{name}
 預測任務：{task_desc}
 持有天數：{hd} 天　停損：{sl:.0%}
-建立一組**來自不同維度**的特徵候選條件，供後續 RFC 模型使用。
 
-**完成標準：量能、籌碼、型態三個維度各至少 1 個通過條件（技術面自然會有，不算在完成條件內）。**
-- 量能 / 籌碼 / 型態各維度找到 1~2 個即可，找到後立刻換下一個維度
-- 技術面可自由探索，但不應成為唯一重心
-- 通過門檻：hit_rate >= {pass_th:.2f}，sample_count >= 100
+**目標：找出能預測上述任務的指標組合，hit_rate >= {pass_th:.2f}，sample_count >= 100。**
+- 技術、量能、籌碼、型態指標皆可自由組合，找到什麼有效就用什麼
+- 每個指標最多使用 5 次（condition 參數的可用指標清單會即時更新）
 
 ━━ 工作流程 ━━
-1. 先呼叫 check_history()，看 grid_passed（2指標基礎）和 passed_conditions（已通過條件）
-2. 確認量能 / 籌碼 / 型態哪個維度還沒有通過條件，優先去那個維度探索
-3. 取 grid_passed 裡好的組合，加入目標維度的指標，測試 3+ 指標條件
-4. condition 參數的可用指標清單已即時更新，只能使用清單內的指標
-
-━━ 四個維度 ━━
-- 技術面：adx, rsi, macdh, bb_width, atr_rank, ma5_x_ma10, ma10_x_ma60
-- 量能面：vol_ratio, vol_trend, obv, obv_ma
-- 籌碼面：net_foreign, net_inst, inst_rank, foreign_rank, short_chg, short_ratio_rank
-- 型態面：f_n_structure_score, f_n_ab_gain, triangle_score, human_only
+1. 先呼叫 check_history()，看 grid_passed（Grid Search 已測好的 2 指標基礎）和 passed_conditions（已通過條件）
+2. 取 grid_passed 裡 hit_rate 高的組合，加入第 3 個指標延伸測試
+3. 找到通過條件後，繼續嘗試不同組合，避免只在同一個指標上變體
 
 ━━ 探索提示 ━━
 {hint}
@@ -1039,18 +1004,10 @@ def _compress_result(fn_name: str, result: dict) -> str:
             f"saturated={result.get('saturated_indicators',[])}",
             f"grid_summary={result.get('grid_summary','')}",
         ]
-        dim = result.get("dimension_summary", {})
-        if dim:
-            for d_name, d_info in dim.items():
-                done = "✅已有LLM條件" if d_info.get("llm_found") else "❌尚未找到"
-                lines.append(f"  [{d_name}] {done}")
-                for e in d_info.get("top3", []):
-                    lines.append(f"    hit={e['hit_rate']} {e['condition']}")
-        else:
-            for e in result.get("grid_passed", [])[:10]:
-                lines.append(f"  grid✅ hit={e['hit_rate']} {e['condition']}")
-            for e in result.get("passed_conditions", [])[:10]:
-                lines.append(f"  llm✅  hit={e['hit_rate']} {e['condition']}")
+        for e in result.get("grid_passed", [])[:10]:
+            lines.append(f"  grid✅ hit={e['hit_rate']} {e['condition']}")
+        for e in result.get("passed_conditions", [])[:10]:
+            lines.append(f"  llm✅  hit={e['hit_rate']} {e['condition']}")
         return "\n".join(lines)
     if fn_name == "run_backtest":
         return (
