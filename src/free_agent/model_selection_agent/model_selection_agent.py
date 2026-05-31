@@ -51,11 +51,11 @@ _current_target: dict = {"task": "return", "hold_days": 10, "threshold": 0.15, "
 
 # task 說明
 TASK_DEFS = {
-    "return":        "未來 {hold_days} 天內最高漲幅 >= {threshold:.0%}",
-    "breakout":      "未來 {hold_days} 天突破近 {lookback} 天高點",
+    "return": "未來 {hold_days} 天內最高漲幅 >= {threshold:.0%}",
+    "breakout": "未來 {hold_days} 天突破近 {lookback} 天高點",
     "consolidation": "未來 {hold_days} 天振幅 < {threshold:.0%}（盤整）",
-    "trend_up":      "持有 {hold_days} 天後漲幅 >= {threshold:.0%}（期末報酬）",
-    "trend_down":    "持有 {hold_days} 天後跌幅 >= {threshold:.0%}（做空）",
+    "trend_up": "持有 {hold_days} 天後漲幅 >= {threshold:.0%}（期末報酬）",
+    "trend_down": "持有 {hold_days} 天後跌幅 >= {threshold:.0%}（做空）",
 }
 
 
@@ -63,7 +63,7 @@ def _target_name(tgt: dict) -> str:
     task = tgt.get("task", "return")
     hd = tgt["hold_days"]
     th = int(tgt.get("threshold", tgt.get("profit_target", 0.15)) * 100)
-    return f'{hd}d_{task}_{th}'
+    return f"{hd}d_{task}_{th}"
 
 
 def _current_model() -> str:
@@ -1712,9 +1712,7 @@ def run_session(
     }
     tgt_name = _target_name(target)
     task_desc = TASK_DEFS.get(task, task).format(**target)
-    print(
-        f"\n{'=' * 60}\n開始目標 {tgt_name}：{task_desc}\n{'=' * 60}"
-    )
+    print(f"\n{'=' * 60}\n開始目標 {tgt_name}：{task_desc}\n{'=' * 60}")
 
     _run_grid_search(target)  # 第一次跑完後永久快取，之後直接跳過
     run_agent(target, max_calls=max_calls, model_override=model)
@@ -1724,11 +1722,11 @@ def run_session(
 if __name__ == "__main__":
     import sys
 
-    hold_days = int(sys.argv[1]) if len(sys.argv) > 1 else 10
-    profit_target = float(sys.argv[2]) if len(sys.argv) > 2 else 0.15
-    sl_stop = float(sys.argv[3]) if len(sys.argv) > 3 else 0.08
-    model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
-    max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
-    model = "qwen"
-    max_calls = 30
-    run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
+    task = sys.argv[1] if len(sys.argv) > 1 else "return"
+    hold_days = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.15
+    sl_stop = float(sys.argv[4]) if len(sys.argv) > 4 else 0.08
+    model = sys.argv[5] if len(sys.argv) > 5 else "qwen"
+    max_calls = int(sys.argv[6]) if len(sys.argv) > 6 else 30
+
+    run_session(task=task, hold_days=hold_days, threshold=threshold, sl_stop=sl_stop, model=model, max_calls=max_calls)
