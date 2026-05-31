@@ -720,7 +720,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
         pass
 
     if name == "check_history":
-        top_n = inputs.get("top_n", 10)
+        top_n = inputs.get("top_n", 20)
         ind_limit = 5
         # 合併：本 session + .bak + grid_log（永久）
         all_entries = _load_signal_log(target, max_entries=9999)
