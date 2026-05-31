@@ -34,8 +34,8 @@ def plot_performance(portfolio_value, trades_df, initial_cash=1_000_000, is_web=
     strategy_value = portfolio_value.copy()
 
     strategy_value.index = pd.to_datetime(strategy_value.index)
-    st = strategy_value.index.min()
-    end = strategy_value.index.max()
+    st  = strategy_value.index.min().strftime("%Y-%m-%d")
+    end = strategy_value.index.max().strftime("%Y-%m-%d")
 
     # ── 2. 0050 基準 ──────────────────────────────────────
     df0050 = parquet_db.query_price(["0050"], st, end)
@@ -47,11 +47,14 @@ def plot_performance(portfolio_value, trades_df, initial_cash=1_000_000, is_web=
 
     # ── 3. 對齊資料 ───────────────────────────────────────
     strategy_value, benchmark_value = strategy_value.align(benchmark_value, join="outer")
+    # 統一 index 精度，避免 timestamp[s] vs datetime64[ns] 型別衝突
+    strategy_value.index = strategy_value.index.astype("datetime64[ns]")
+    benchmark_value.index = benchmark_value.index.astype("datetime64[ns]")
     # ── 4. 對齊買賣點到策略價值 ───────────────────────────
     if not trades_df.empty:
         trades_df = trades_df.copy()
-        trades_df["entry_date"] = pd.to_datetime(trades_df["entry_date"])
-        trades_df["exit_date"] = pd.to_datetime(trades_df["exit_date"])
+        trades_df["entry_date"] = pd.to_datetime(trades_df["entry_date"]).astype("datetime64[ns]")
+        trades_df["exit_date"] = pd.to_datetime(trades_df["exit_date"]).astype("datetime64[ns]")
         trades_df["entry_value"] = trades_df["entry_date"].apply(lambda x: strategy_value.asof(x))
         trades_df["exit_value"] = trades_df["exit_date"].apply(lambda x: strategy_value.asof(x))
     # ── 5. 建立圖表 ───────────────────────────────────────
@@ -114,8 +117,8 @@ def plot_performance(portfolio_value, trades_df, initial_cash=1_000_000, is_web=
                         trades_df["stock_id"],
                         trades_df["exit_date"].dt.strftime("%Y-%m-%d"),
                         trades_df["exit_price"].round(2),
-                        trades_df["pnl"].round(0).astype(int),
-                        trades_df["return_pct"].round(0).astype(int),
+                        trades_df["pnl"].replace([np.inf, -np.inf], np.nan).fillna(0).round(0).astype(int),
+                        trades_df["return_pct"].replace([np.inf, -np.inf], np.nan).fillna(0).round(0).astype(int),
                     ],
                     axis=1,
                 ),
