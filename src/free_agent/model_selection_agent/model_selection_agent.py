@@ -1113,7 +1113,9 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
         print(f"  [session] 舊 signal_log 已備份為 .bak，重新開始記錄")
 
     tgt_name = _target_name(target)
-    task_desc = TASK_DEFS.get(target.get("task", "return"), "return").format(**{**target, "threshold": target.get("threshold", 0.15)})
+    task_desc = TASK_DEFS.get(target.get("task", "return"), "return").format(
+        **{**target, "threshold": target.get("threshold", 0.15)}
+    )
     user_task = (
         f"為目標「{tgt_name}」蒐集特徵候選條件。\n"
         f"任務：{task_desc}\n"
@@ -1309,7 +1311,7 @@ def validate_and_train(target: dict):
                 except:
                     pass
 
-    if not passing and not hist_passing:
+    if not passing and not prev_passing and not hist_passing:
         print(f"[{tgt_name}] 沒有通過的條件，跳過驗證")
         return
 
@@ -1743,5 +1745,5 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[4]) if len(sys.argv) > 4 else 0.08
     model = sys.argv[5] if len(sys.argv) > 5 else "qwen"
     max_calls = int(sys.argv[6]) if len(sys.argv) > 6 else 30
-    max_calls = 10
+    max_calls = 100
     run_session(task=task, hold_days=hold_days, threshold=threshold, sl_stop=sl_stop, model=model, max_calls=max_calls)
