@@ -674,8 +674,10 @@ def _run_grid_search(target: dict, force: bool = False):
     print(f"\n  [Grid Search] {name}: exhaustive 測試 {len(all_combos)} 組組合...")
     ind_cache, close_cache = _get_indicators(TRAIN_START, TRAIN_END)
     hd = target["hold_days"]
-    pt = target["profit_target"]
+    pt = target.get("threshold", target.get("profit_target", 0.15))
     future_high = pd.concat([close_cache.shift(-i) for i in range(1, hd + 1)], axis=0).groupby(level=0).max()
+    future_low = pd.concat([close_cache.shift(-i) for i in range(1, hd + 1)], axis=0).groupby(level=0).min()
+    task = target.get("task", "return")
 
     for ind_a, th_a, ind_b, th_b in all_combos:
         if ind_a not in ind_cache or ind_b not in ind_cache:
@@ -686,7 +688,18 @@ def _run_grid_search(target: dict, force: bool = False):
         try:
             signal = eval(condition, {"__builtins__": {}}, ind_cache)
             mask = signal.astype("boolean").fillna(False).astype(bool)
-            labels = (future_high / close_cache - 1) >= pt
+            if task == "breakout":
+                lookback = target.get("lookback", 60)
+                rolling_high = close_cache.rolling(lookback, min_periods=lookback // 2).max()
+                labels = future_high > rolling_high
+            elif task == "consolidation":
+                labels = (future_high - future_low) / (close_cache + 1e-9) < pt
+            elif task == "trend_up":
+                labels = (close_cache.shift(-hd) / close_cache - 1) >= pt
+            elif task == "trend_down":
+                labels = (close_cache / close_cache.shift(-hd) - 1) >= pt
+            else:
+                labels = (future_high / close_cache - 1) >= pt
             values = labels[mask].values.flatten()
             values = values[~pd.isnull(values)].astype(float)
             combos_tested += 1
@@ -699,7 +712,8 @@ def _run_grid_search(target: dict, force: bool = False):
                 "hit_rate": hr,
                 "sample_count": n,
                 "hold_days": hd,
-                "profit_target": pt,
+                "threshold": pt,
+                "task": task,
                 "source": "grid",
                 "date": datetime.now().strftime("%Y-%m-%d"),
             }
@@ -1728,5 +1742,5 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[4]) if len(sys.argv) > 4 else 0.08
     model = sys.argv[5] if len(sys.argv) > 5 else "qwen"
     max_calls = int(sys.argv[6]) if len(sys.argv) > 6 else 30
-
+    max_calls = 10
     run_session(task=task, hold_days=hold_days, threshold=threshold, sl_stop=sl_stop, model=model, max_calls=max_calls)
