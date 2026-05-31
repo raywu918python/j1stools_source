@@ -1637,6 +1637,51 @@ def _generate_report(target: dict):
         f.write(html)
     print(f"\n[報表] 已存：{report_path}")
 
+    # 產生 index.html（iframe 切換所有歷史報表）
+    _generate_index(results_d)
+
+
+def _generate_index(results_d: str):
+    """產生 index.html，左側標籤切換所有歷史報表（iframe）。"""
+    import glob
+    reports = [("最新", "report.html")] + [
+        (os.path.basename(p).replace("report_", "").replace(".html", ""), os.path.basename(p))
+        for p in sorted(glob.glob(os.path.join(results_d, "report_*.html")), reverse=True)[:20]
+    ]
+    tabs = "\n".join(
+        f'<div class="tab" onclick="load(\'{fn}\')">{label}</div>'
+        for label, fn in reports
+    )
+    index_html = f"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head><meta charset="UTF-8"><title>報表導覽</title>
+<style>
+  body{{margin:0;display:flex;height:100vh;background:#1a1a2e;color:#e0e0e0;font-family:sans-serif}}
+  #sidebar{{width:160px;min-width:160px;background:#0d1b2a;padding:10px;overflow-y:auto}}
+  #sidebar h3{{color:#4fc3f7;font-size:13px;margin:0 0 10px}}
+  .tab{{padding:8px 10px;cursor:pointer;border-radius:4px;font-size:12px;margin-bottom:4px;color:#ccc}}
+  .tab:hover,.tab.active{{background:#0d47a1;color:#fff}}
+  iframe{{flex:1;border:none;height:100vh}}
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <h3>歷史報表</h3>
+  {tabs}
+</div>
+<iframe id="frame" src="report.html"></iframe>
+<script>
+  function load(fn){{
+    document.getElementById('frame').src = fn;
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    event.target.classList.add('active');
+  }}
+  document.querySelector('.tab').classList.add('active');
+</script>
+</body></html>"""
+    with open(os.path.join(results_d, "index.html"), "w", encoding="utf-8") as f:
+        f.write(index_html)
+
 
 # ── 入口 ─────────────────────────────────────────────────────────
 def run_session(
