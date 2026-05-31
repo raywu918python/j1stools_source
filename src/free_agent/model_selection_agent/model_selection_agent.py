@@ -176,9 +176,19 @@ _GRID_THRESHOLDS: dict[str, list[float]] = {
 
 # 純比較基準，不計入飽和（不代表任何市場信號）
 _SATURATE_EXEMPT = {
-    "close", "high", "low", "open",
-    "ma5", "ma10", "ma20", "ma60", "ma120",
-    "bb_upper", "bb_lower", "bb_mid", "obv_ma",
+    "close",
+    "high",
+    "low",
+    "open",
+    "ma5",
+    "ma10",
+    "ma20",
+    "ma60",
+    "ma120",
+    "bb_upper",
+    "bb_lower",
+    "bb_mid",
+    "obv_ma",
 }
 
 
@@ -467,11 +477,7 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
             ("Investment_Trust", "f_net_trust", "f_trust_rank"),
             ("Dealer_self", "f_net_dealer", "f_dealer_rank"),
         ]:
-            sub = (
-                df_ib[df_ib["name"] == src]
-                .pivot(index="date", columns="stock_id", values="net")
-                .fillna(0)
-            )
+            sub = df_ib[df_ib["name"] == src].pivot(index="date", columns="stock_id", values="net").fillna(0)
             nets.append(sub)
             rank = sub.rolling(60, min_periods=10).rank(pct=True).stack().reset_index()
             rank.columns = ["date", "stock_id", rank_col]
@@ -481,7 +487,9 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
         inst_rank.columns = ["date", "stock_id", "f_inst_rank"]
         feat_df = feat_df.merge(inst_rank, on=["date", "stock_id"], how="left")
         # 法人買超 / 成交量（標準化，跨股票可比）
-        vol_wide = feat_df.pivot(index="date", columns="stock_id", values="volume") if "volume" in feat_df.columns else None
+        vol_wide = (
+            feat_df.pivot(index="date", columns="stock_id", values="volume") if "volume" in feat_df.columns else None
+        )
         if vol_wide is not None:
             vol_ma30 = vol_wide.rolling(30, min_periods=10).mean()
             for src_net, pct_col in zip(nets + [inst], ["f_foreign_pct", "f_trust_pct", "f_dealer_pct", "f_inst_pct"]):
@@ -746,10 +754,33 @@ def execute_tool(name: str, inputs: dict) -> dict:
         def _match(e):
             return not ind_filter or ind_filter in e.get("condition", "")
 
+        # 無 indicator 篩選時，補充分維度摘要（避免 LLM 反覆查詢）
+        dimension_summary = {}
+        if not ind_filter:
+            _dim_map = {
+                "技術面": ["adx", "rsi", "macdh", "bb_width", "atr_rank", "ma5_x_ma10", "ma10_x_ma60"],
+                "量能面": ["vol_ratio", "vol_trend", "obv"],
+                "籌碼面": ["net_foreign", "net_inst", "inst_rank", "foreign_rank", "short_chg", "short_ratio_rank"],
+                "型態面": ["f_n_structure_score", "f_n_ab_gain", "f_n_d_breakout_strength", "triangle_score", "human_only"],
+            }
+            all_passed = sorted(passed_llm + passed_grid, key=lambda x: -x.get("hit_rate", 0))
+            for dim, keywords in _dim_map.items():
+                top = [
+                    {"condition": e["condition"], "hit_rate": e["hit_rate"]}
+                    for e in all_passed
+                    if any(k in e.get("condition", "") for k in keywords)
+                ][:3]
+                dim_done = any(
+                    any(k in e.get("condition", "") for k in keywords)
+                    for e in passed_llm
+                )
+                dimension_summary[dim] = {"top3": top, "llm_found": dim_done}
+
         return {
             "total_tested": len(all_entries),
             "passed": len(passed_llm) + len(passed_grid),
             "saturated_indicators": saturated,
+            "dimension_summary": dimension_summary,  # 各維度 top3（無 indicator 時才有）
             "passed_conditions": [
                 {"condition": e.get("condition", ""), "hit_rate": e.get("hit_rate")}
                 for e in sorted(filter(_match, passed_llm), key=lambda x: -x.get("hit_rate", 0))[:top_n]
@@ -760,7 +791,11 @@ def execute_tool(name: str, inputs: dict) -> dict:
             ],
             "grid_summary": (
                 f"Grid Search 共測 {len(grid_entries)} 組，{len(passed_grid)} 組通過（hit>={pass_th:.2f}）"
-                + (f"，其中含 '{ind_filter}' 的通過條件：{sum(1 for e in passed_grid if ind_filter in e.get('condition',''))} 組" if ind_filter else "")
+                + (
+                    f"，其中含 '{ind_filter}' 的通過條件：{sum(1 for e in passed_grid if ind_filter in e.get('condition',''))} 組"
+                    if ind_filter
+                    else ""
+                )
             ),
         }
 
@@ -831,9 +866,15 @@ def execute_tool(name: str, inputs: dict) -> dict:
         if n < 20:
             # 樣本太少也記錄，讓稀疏指標計入飽和，避免 LLM 一直重試
             _append_signal_log(
-                {"condition": condition, "hit_rate": -1, "sample_count": n,
-                 "hold_days": hold_days, "profit_target": profit_target,
-                 "date": datetime.now().strftime("%Y-%m-%d"), "note": "too_few_samples"},
+                {
+                    "condition": condition,
+                    "hit_rate": -1,
+                    "sample_count": n,
+                    "hold_days": hold_days,
+                    "profit_target": profit_target,
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "note": "too_few_samples",
+                },
                 target,
             )
             return {"error": f"樣本太少（{n} 筆），此指標組合觸發頻率極低，建議改用其他指標"}
@@ -958,10 +999,18 @@ def _compress_result(fn_name: str, result: dict) -> str:
             f"saturated={result.get('saturated_indicators',[])}",
             f"grid_summary={result.get('grid_summary','')}",
         ]
-        for e in result.get("grid_passed", [])[:10]:
-            lines.append(f"  grid✅ hit={e['hit_rate']} {e['condition']}")
-        for e in result.get("passed_conditions", [])[:10]:
-            lines.append(f"  llm✅  hit={e['hit_rate']} {e['condition']}")
+        dim = result.get("dimension_summary", {})
+        if dim:
+            for d_name, d_info in dim.items():
+                done = "✅已有LLM條件" if d_info.get("llm_found") else "❌尚未找到"
+                lines.append(f"  [{d_name}] {done}")
+                for e in d_info.get("top3", []):
+                    lines.append(f"    hit={e['hit_rate']} {e['condition']}")
+        else:
+            for e in result.get("grid_passed", [])[:10]:
+                lines.append(f"  grid✅ hit={e['hit_rate']} {e['condition']}")
+            for e in result.get("passed_conditions", [])[:10]:
+                lines.append(f"  llm✅  hit={e['hit_rate']} {e['condition']}")
         return "\n".join(lines)
     if fn_name == "run_backtest":
         return (
@@ -1389,7 +1438,9 @@ def validate_and_train(target: dict):
                 "n_llm_features": len(llm_feat_cols),
                 "llm_features": llm_feat_cols,
                 "model_a": {"name": "技術指標（基準線）", **_json_safe(model_a)},
-                "model_new": {"name": f"LLM選指標（{len(llm_feat_cols)}個）", **_json_safe(model_new)} if model_new else {},
+                "model_new": (
+                    {"name": f"LLM選指標（{len(llm_feat_cols)}個）", **_json_safe(model_new)} if model_new else {}
+                ),
                 "backtest": bt_result,
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
@@ -1528,6 +1579,7 @@ def _generate_report(target: dict):
 
     # 歷史報表導覽
     import glob
+
     archive_files = sorted(glob.glob(os.path.join(results_d, "report_*.html")), reverse=True)
     nav_links = " | ".join(
         f'<a href="{os.path.basename(p)}" style="color:#4fc3f7">{os.path.basename(p).replace("report_","").replace(".html","")}</a>'
@@ -1589,6 +1641,7 @@ def _generate_report(target: dict):
     # 備份舊報表（帶時間戳），保留歷史
     if os.path.exists(report_path):
         import shutil
+
         ts = datetime.fromtimestamp(os.path.getmtime(report_path)).strftime("%Y%m%d_%H%M")
         archive_path = os.path.join(results_d, f"report_{ts}.html")
         shutil.copy2(report_path, archive_path)
@@ -1630,6 +1683,6 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[3]) if len(sys.argv) > 3 else 0.08
     model = sys.argv[4] if len(sys.argv) > 4 else "qwen"
     max_calls = int(sys.argv[5]) if len(sys.argv) > 5 else 10
-    model = "deepseek"
+    model = "qwen"
     max_calls = 100
     run_session(hold_days=hold_days, profit_target=profit_target, sl_stop=sl_stop, model=model, max_calls=max_calls)
