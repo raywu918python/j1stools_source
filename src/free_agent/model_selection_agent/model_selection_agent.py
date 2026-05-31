@@ -829,7 +829,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
     if name == "analyze_signal":
         hold_days = target["hold_days"]
-        profit_target = target["profit_target"]
+        profit_target = target.get("threshold", target.get("profit_target", 0.15))
         condition = _normalize_condition(inputs["condition"])
         label_type = inputs.get("label_type", "hit")
         used_inds = _condition_indicators(condition)
@@ -1275,7 +1275,7 @@ def validate_and_train(target: dict):
     tgt_name = _target_name(target)
     pass_th = _pass_threshold(target)
     hd = target["hold_days"]
-    pt = target["profit_target"]
+    pt = target.get("threshold", target.get("profit_target", 0.15))
     sl = target["sl_stop"]
 
     passing = [
@@ -1513,7 +1513,7 @@ def _generate_report(target: dict):
     results_d = _results_dir(target)
     tgt_name = _target_name(target)
     hd = target["hold_days"]
-    pt = target["profit_target"]
+    pt = target.get("threshold", target.get("profit_target", 0.15))
 
     rfc_path = os.path.join(results_d, "rfc_result.json")
     if not os.path.exists(rfc_path):
