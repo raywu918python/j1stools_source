@@ -1234,31 +1234,37 @@ def validate_and_train(target: dict):
 
         ind, _ = _build_indicators(stocks, TRAIN_START, SESSION_END)
 
-        this_top20 = sorted(passing, key=lambda x: x["hit_rate"], reverse=True)[:20]
-        hist_sources = hist_passing + prev_passing
-        hist_top20 = sorted(hist_sources, key=lambda x: x["hit_rate"], reverse=True)[:20]
+        all_sources = passing + prev_passing + hist_passing
+        all_conds = {e["condition"]: e for e in sorted(all_sources, key=lambda x: -x.get("hit_rate", 0))}
 
-        all_conds = {}
-        for e in this_top20 + hist_top20:
-            all_conds[e["condition"]] = e
+        # 從所有通過條件提取唯一信號指標（去重，排除純比較基準）
+        used_inds: set[str] = set()
+        for cond in all_conds:
+            used_inds |= _saturable_indicators(cond)
 
-        cond_to_col = {}
-        for i, cond in enumerate(all_conds.keys()):
-            col = f"f_sig_{i}"
-            cond_to_col[cond] = col
-            try:
-                sig = eval(cond, {"__builtins__": {}}, ind)
-                sig_long = sig.astype(float).stack().reset_index()
-                sig_long.columns = ["date", "stock_id", col]
-                feat_df = feat_df.merge(sig_long, on=["date", "stock_id"], how="left")
-                feat_df[col] = feat_df[col].fillna(0)
-            except Exception as e:
-                print(f"  [條件建構失敗] {col}: {e}")
+        # 把指標連續值從 ind 合併進 feat_df
+        llm_feat_cols: list[str] = []
+        for ind_name in sorted(used_inds):
+            f_col = f"f_{ind_name}"
+            if f_col in feat_df.columns:
+                llm_feat_cols.append(f_col)
+            elif ind_name in feat_df.columns:
+                llm_feat_cols.append(ind_name)
+            elif ind_name in ind:
+                try:
+                    wide = ind[ind_name]
+                    if isinstance(wide, pd.DataFrame):
+                        long = wide.astype(float).stack().reset_index()
+                        long.columns = ["date", "stock_id", f_col]
+                        feat_df = feat_df.merge(long, on=["date", "stock_id"], how="left")
+                        feat_df[f_col] = feat_df[f_col].fillna(0)
+                        llm_feat_cols.append(f_col)
+                except Exception as _e:
+                    print(f"  [指標合併失敗] {ind_name}: {_e}")
 
-        this_cols = [cond_to_col[e["condition"]] for e in this_top20 if cond_to_col[e["condition"]] in feat_df.columns]
-        hist_cols = [cond_to_col[e["condition"]] for e in hist_top20 if cond_to_col[e["condition"]] in feat_df.columns]
-        tech_cols = [c for c in feat_df.columns if c.startswith("f_") and not c.startswith("f_sig_")]
+        tech_cols = [c for c in feat_df.columns if c.startswith("f_") and c not in llm_feat_cols]
         feat_df = feat_df.dropna(subset=tech_cols + ["target"])
+        print(f"  LLM 選出指標（{len(llm_feat_cols)} 個）：{llm_feat_cols}")
 
         cutoff = pd.Timestamp(PREDICT_START)
         train = feat_df[feat_df["date"] < cutoff]
@@ -1291,13 +1297,12 @@ def validate_and_train(target: dict):
                 return {"thresholds": thresholds, "top_features": top_feats, "model_path": model_path, "rfc": rfc}
 
             model_a = _train_rfc(tech_cols, "tech_only")
-            model_b = _train_rfc(hist_cols, "hist_only") if hist_cols else {}
-            model_c = _train_rfc(this_cols, "this_only") if this_cols else {}
+            model_new = _train_rfc(llm_feat_cols, "llm_selected") if llm_feat_cols else {}
 
             bt_result = None
-            if model_c:
-                rfc_c = model_c["rfc"]
-                test_proba = rfc_c.predict_proba(test[this_cols])[:, 1]
+            if model_new:
+                rfc_new = model_new["rfc"]
+                test_proba = rfc_new.predict_proba(test[llm_feat_cols])[:, 1]
                 test_c = test.copy()
                 test_c["proba"] = test_proba
                 proba_wide = test_c.pivot(index="date", columns="stock_id", values="proba").fillna(0)
@@ -1368,9 +1373,6 @@ def validate_and_train(target: dict):
             def _json_safe(m: dict) -> dict:
                 return {k: v for k, v in m.items() if k != "rfc"}
 
-            # f_sig_* → 原始條件對照表（供報表顯示）
-            col_to_cond = {v: k for k, v in cond_to_col.items()}
-
             rfc_result = {
                 "target": tgt_name,
                 "hold_days": hd,
@@ -1384,13 +1386,10 @@ def validate_and_train(target: dict):
                 "test_period": f"{PREDICT_START} ~ {SESSION_END}",
                 "n_conditions": len(all_conds),
                 "n_tech_features": len(tech_cols),
-                "n_this_features": len(this_cols),
-                "n_hist_features": len(hist_cols),
-                "n_signal_features": len(this_cols) + len(hist_cols),
-                "col_to_cond": col_to_cond,
-                "model_a": {"name": "技術指標(無條件)", **_json_safe(model_a)},
-                "model_b": {"name": f"歷史條件({len(hist_cols)})", **_json_safe(model_b)} if model_b else {},
-                "model_c": {"name": f"本次條件({len(this_cols)})", **_json_safe(model_c)} if model_c else {},
+                "n_llm_features": len(llm_feat_cols),
+                "llm_features": llm_feat_cols,
+                "model_a": {"name": "技術指標（基準線）", **_json_safe(model_a)},
+                "model_new": {"name": f"LLM選指標（{len(llm_feat_cols)}個）", **_json_safe(model_new)} if model_new else {},
                 "backtest": bt_result,
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
@@ -1432,8 +1431,7 @@ def _generate_report(target: dict):
 
     backtest = rfc.get("backtest") or {}
     ma = rfc.get("model_a", {})
-    mb = rfc.get("model_b", {})
-    mc = rfc.get("model_c", {})
+    mn = rfc.get("model_new", {})
 
     def _sc(s):
         if s >= 2.0:
@@ -1475,9 +1473,8 @@ def _generate_report(target: dict):
       <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.8</th>
       <th style="background:#0d47a1;color:#fff;padding:8px;text-align:center">proba>=0.9</th>
     </tr>
-    {_row_html(ma, "技術指標(無條件)", rfc.get("n_tech_features", 0))}
-    {_row_html(mb, "歷史條件", rfc.get("n_hist_features", 0))}
-    {_row_html(mc, "本次條件", rfc.get("n_this_features", 0))}
+    {_row_html(ma, "技術指標（基準線）", rfc.get("n_tech_features", 0))}
+    {_row_html(mn, f"LLM選指標（{rfc.get('n_llm_features', 0)}個）", rfc.get("n_llm_features", 0))}
     </table>"""
 
     bt_html = ""
@@ -1518,16 +1515,13 @@ def _generate_report(target: dict):
         </tr>
         </table>"""
 
-    col_to_cond = rfc.get("col_to_cond", {})
     feat_rows = ""
-    if mc:
-        for i, ft in enumerate(mc.get("top_features", [])[:15]):
+    if mn:
+        for i, ft in enumerate(mn.get("top_features", [])[:15]):
             bar_w = min(int(ft["importance"] * 100), 100)
-            feat_name = ft["feature"]
-            label = col_to_cond.get(feat_name, feat_name)  # f_sig_0 → 原始條件；技術指標保持原名
             feat_rows += (
                 f"<tr><td style='text-align:center;border:1px solid #333;padding:6px'>{i+1}</td>"
-                f"<td style='font-family:monospace;font-size:11px;border:1px solid #333;padding:6px;word-break:break-all'>{label}</td>"
+                f"<td style='font-family:monospace;font-size:11px;border:1px solid #333;padding:6px'>{ft['feature']}</td>"
                 f"<td style='text-align:center;border:1px solid #333;padding:6px'>{ft['importance']:.4f}</td>"
                 f"<td style='border:1px solid #333;padding:6px'><div style='background:#4fc3f7;height:12px;width:{bar_w}%;border-radius:3px;min-width:4px'></div></td></tr>"
             )
