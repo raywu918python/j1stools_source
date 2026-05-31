@@ -426,6 +426,32 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
         atr = tr.rolling(14).mean()
         g["f_atr_norm"] = atr / (c + 1e-9)
         g["f_vol_ratio"] = v / (v.rolling(20).mean() + 1e-9)
+        g["f_vol_trend"] = v.rolling(20).mean() / (v.rolling(60).mean() + 1e-9)
+        # ADX
+        h_diff = h.diff()
+        l_diff = -l.diff()
+        plus_dm = h_diff.where((h_diff > l_diff) & (h_diff > 0), 0.0)
+        minus_dm = l_diff.where((l_diff > h_diff) & (l_diff > 0), 0.0)
+        atr14 = tr.rolling(14).mean()
+        plus_di = 100 * plus_dm.rolling(14).mean() / (atr14 + 1e-9)
+        minus_di = 100 * minus_dm.rolling(14).mean() / (atr14 + 1e-9)
+        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9)
+        g["f_adx"] = dx.rolling(14).mean()
+        g["f_plus_di_ratio"] = plus_di / (plus_di + minus_di + 1e-9)  # 多空方向比例
+        # ATR 百分位
+        g["f_atr_rank"] = atr.rolling(60, min_periods=20).rank(pct=True)
+        # OBV 動能（相對 MA）
+        direction = c.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+        obv = (v * direction).cumsum()
+        obv_ma20 = obv.rolling(20).mean()
+        g["f_obv_above_ma"] = (obv > obv_ma20).astype(float)
+        # 均線排列
+        ma5 = c.rolling(5).mean()
+        ma10 = c.rolling(10).mean()
+        ma60 = c.rolling(60).mean()
+        g["f_ma5_x_ma10"] = (ma5 > ma10).astype(float)
+        g["f_ma10_x_ma60"] = (ma10 > ma60).astype(float)
+        g["f_close_vs_ma60"] = (c - ma60) / (ma60 + 1e-9)  # 股價偏離 MA60 百分比
         g["stock_id"] = sid
         rows.append(g.reset_index())
 
@@ -435,20 +461,36 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
         df_ib = parquet_db.query_ib(stocks, start, end)
         df_ib["date"] = pd.to_datetime(df_ib["date"])
         df_ib["net"] = df_ib["buy"] - df_ib["sell"]
-        for src, col in [("Foreign_Investor", "f_foreign_rank"), ("Investment_Trust", "f_trust_rank")]:
+        nets = []
+        for src, col, rank_col in [
+            ("Foreign_Investor", "f_net_foreign", "f_foreign_rank"),
+            ("Investment_Trust", "f_net_trust", "f_trust_rank"),
+            ("Dealer_self", "f_net_dealer", "f_dealer_rank"),
+        ]:
             sub = (
                 df_ib[df_ib["name"] == src]
                 .pivot(index="date", columns="stock_id", values="net")
-                .rolling(60, min_periods=10)
-                .rank(pct=True)
-                .stack()
-                .reset_index()
+                .fillna(0)
             )
-            sub.columns = ["date", "stock_id", col]
-            feat_df = feat_df.merge(sub, on=["date", "stock_id"], how="left")
+            nets.append(sub)
+            rank = sub.rolling(60, min_periods=10).rank(pct=True).stack().reset_index()
+            rank.columns = ["date", "stock_id", rank_col]
+            feat_df = feat_df.merge(rank, on=["date", "stock_id"], how="left")
+        inst = sum(nets)
+        inst_rank = inst.rolling(60, min_periods=10).rank(pct=True).stack().reset_index()
+        inst_rank.columns = ["date", "stock_id", "f_inst_rank"]
+        feat_df = feat_df.merge(inst_rank, on=["date", "stock_id"], how="left")
+        # 法人買超 / 成交量（標準化，跨股票可比）
+        vol_wide = feat_df.pivot(index="date", columns="stock_id", values="volume") if "volume" in feat_df.columns else None
+        if vol_wide is not None:
+            vol_ma30 = vol_wide.rolling(30, min_periods=10).mean()
+            for src_net, pct_col in zip(nets + [inst], ["f_foreign_pct", "f_trust_pct", "f_dealer_pct", "f_inst_pct"]):
+                pct = (src_net / (vol_ma30 + 1e-9)).stack().reset_index()
+                pct.columns = ["date", "stock_id", pct_col]
+                feat_df = feat_df.merge(pct, on=["date", "stock_id"], how="left")
     except Exception:
-        feat_df["f_foreign_rank"] = np.nan
-        feat_df["f_trust_rank"] = np.nan
+        for col in ["f_foreign_rank", "f_trust_rank", "f_dealer_rank", "f_inst_rank"]:
+            feat_df[col] = np.nan
 
     try:
         df_m = parquet_db.query_margin(stocks, start, end)
@@ -456,11 +498,20 @@ def _build_rfc_features(stocks: list, start: str, end: str) -> pd.DataFrame:
         margin = df_m.pivot(index="date", columns="stock_id", values="margin_purchase_today_balance")
         short = df_m.pivot(index="date", columns="stock_id", values="short_sale_today_balance")
         ratio = short / (margin + 1e-9)
-        ratio_rank = ratio.rolling(60, min_periods=10).rank(pct=True).stack().reset_index()
-        ratio_rank.columns = ["date", "stock_id", "f_short_ratio_rank"]
-        feat_df = feat_df.merge(ratio_rank, on=["date", "stock_id"], how="left")
+        margin_chg = margin.pct_change().clip(-1, 1)
+        short_chg = short.pct_change().clip(-1, 1)
+        for ser, col in [
+            (ratio.rolling(60, min_periods=10).rank(pct=True), "f_short_ratio_rank"),
+            (margin_chg.rolling(60, min_periods=10).rank(pct=True), "f_margin_chg_rank"),
+            (short_chg, "f_short_chg"),
+            (margin_chg, "f_margin_chg"),
+        ]:
+            stacked = ser.stack().reset_index()
+            stacked.columns = ["date", "stock_id", col]
+            feat_df = feat_df.merge(stacked, on=["date", "stock_id"], how="left")
     except Exception:
-        feat_df["f_short_ratio_rank"] = np.nan
+        for col in ["f_short_ratio_rank", "f_margin_chg_rank", "f_short_chg", "f_margin_chg"]:
+            feat_df[col] = np.nan
 
     return feat_df
 
