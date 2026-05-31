@@ -1113,9 +1113,10 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
         print(f"  [session] 舊 signal_log 已備份為 .bak，重新開始記錄")
 
     tgt_name = _target_name(target)
-    task = (
+    task_desc = TASK_DEFS.get(target.get("task", "return"), "return").format(**{**target, "threshold": target.get("threshold", 0.15)})
+    user_task = (
         f"為目標「{tgt_name}」蒐集特徵候選條件。\n"
-        f"目標：持有 {target['hold_days']} 天，報酬 {target['profit_target']:.0%}。\n"
+        f"任務：{task_desc}\n"
         f"門檻：hit_rate >= {_pass_threshold(target):.2f}，sample_count >= 100（{TRAIN_START}~{TRAIN_END}）。\n"
         f"{'（你必須做滿 ' + str(max_calls) + ' 次工具呼叫才能停止，不要提早結束）' if max_calls else ''}\n"
         f"提示：可先呼叫 check_history() 查看已測試記錄，避免重複。"
@@ -1123,7 +1124,7 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
 
     messages = [
         {"role": "system", "content": _build_system_prompt(target)},
-        {"role": "user", "content": task},
+        {"role": "user", "content": user_task},
     ]
     final_text = ""
     _rate_limit_count = 0
