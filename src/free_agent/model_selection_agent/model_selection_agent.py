@@ -747,31 +747,35 @@ def execute_tool(name: str, inputs: dict) -> dict:
     if name == "check_history":
         top_n = inputs.get("top_n", 20)
         ind_limit = 5
-        # 合併：本 session + .bak + grid_log（永久）
-        all_entries = _load_signal_log(target, max_entries=9999)
+        # 當次 session（用於飽和計數）
+        session_entries = _load_signal_log(target, max_entries=9999)
+        # 歷史 bak（僅供參考，不計入飽和）
+        bak_entries = []
         bak_path = _signal_log_path(target) + ".bak"
         if os.path.exists(bak_path):
             try:
                 with open(bak_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                for line in lines[-300:]:
-                    try:
-                        all_entries.append(json.loads(line.strip()))
-                    except Exception:
-                        pass
+                    for line in f.readlines()[-300:]:
+                        try:
+                            bak_entries.append(json.loads(line.strip()))
+                        except Exception:
+                            pass
             except Exception:
                 pass
-        all_entries.extend(_load_grid_log(target))
+        grid_entries = _load_grid_log(target)
+        # passed_llm 合併 session + bak（參考用）
         pass_th = _pass_threshold(target)
-        llm_entries = [e for e in all_entries if e.get("source") != "grid"]
-        grid_entries = [e for e in all_entries if e.get("source") == "grid"]
-        passed_llm = [e for e in llm_entries if e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100]
+        all_llm = session_entries + bak_entries
+        passed_llm = [e for e in all_llm if e.get("source") != "grid"
+                      and e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100]
         passed_grid = [e for e in grid_entries if e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100]
 
+        # 飽和計數只用當次 session（不含 bak，讓 LLM 每次探索自由）
         ind_usage: dict = {}
-        for e in llm_entries:  # grid 條目不計入飽和
-            for t in _saturable_indicators(e.get("condition", "")):
-                ind_usage[t] = ind_usage.get(t, 0) + 1
+        for e in session_entries:
+            if e.get("source") != "grid":
+                for t in _saturable_indicators(e.get("condition", "")):
+                    ind_usage[t] = ind_usage.get(t, 0) + 1
         saturated = [k for k, v in ind_usage.items() if v >= ind_limit]
 
         ind_filter = inputs.get("indicator", "")
@@ -843,22 +847,11 @@ def execute_tool(name: str, inputs: dict) -> dict:
             }
         # 飽和硬擋：合併 session + bak + grid_log 計算，防止 LLM 靠記憶繞過 tool description
         if not inputs.get("_bypass_min_indicators"):
+            # 飽和只計當次 session（不含 bak，每次 session 自由探索）
             _all = _load_signal_log(target, max_entries=9999)
-            _bak = _signal_log_path(target) + ".bak"
-            if os.path.exists(_bak):
-                try:
-                    with open(_bak, encoding="utf-8") as _f:
-                        for _l in _f:
-                            try:
-                                _all.append(json.loads(_l.strip()))
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-            _all.extend(_load_grid_log(target))
             _iu: dict = {}
             for _e in _all:
-                if _e.get("source") != "grid":  # grid 條目不計入飽和
+                if _e.get("source") != "grid":
                     for _t in _saturable_indicators(_e.get("condition", "")):
                         _iu[_t] = _iu.get(_t, 0) + 1
             all_saturated = {k for k, v in _iu.items() if v >= 5}
@@ -1140,26 +1133,13 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
         n_tested = len(sig_entries)
         n_passed = len([e for e in sig_entries if e.get("hit_rate", 0) >= _pass_threshold(target)])
 
-        # 計算歷史（含 bak + grid_log）飽和指標
-        all_entries = list(sig_entries)
-        _bak = _signal_log_path(target) + ".bak"
-        if os.path.exists(_bak):
-            try:
-                with open(_bak, encoding="utf-8") as _bf:
-                    for _line in _bf:
-                        try:
-                            all_entries.append(json.loads(_line.strip()))
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-        # grid 條目不計入飽和，只計算 LLM 生成的條目
+        # 飽和計數只用當次 session（不含 bak，讓每次 session 自由探索）
         _ind_usage: dict = {}
-        for _e in all_entries:
+        for _e in sig_entries:
             if _e.get("source") != "grid":
                 for _t in _saturable_indicators(_e.get("condition", "")):
                     _ind_usage[_t] = _ind_usage.get(_t, 0) + 1
-        saturated = sorted(k for k, v in _ind_usage.items() if v >= 3)
+        saturated = sorted(k for k, v in _ind_usage.items() if v >= 5)
 
         available = sorted(set(AGENT_INDICATORS) - set(saturated))
 
@@ -1745,5 +1725,6 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[4]) if len(sys.argv) > 4 else 0.08
     model = sys.argv[5] if len(sys.argv) > 5 else "qwen"
     max_calls = int(sys.argv[6]) if len(sys.argv) > 6 else 30
+    model = "qwen"
     max_calls = 100
     run_session(task=task, hold_days=hold_days, threshold=threshold, sl_stop=sl_stop, model=model, max_calls=max_calls)
