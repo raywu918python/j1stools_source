@@ -1532,6 +1532,18 @@ def _generate_report(target: dict):
                 f"<td style='border:1px solid #333;padding:6px'><div style='background:#4fc3f7;height:12px;width:{bar_w}%;border-radius:3px;min-width:4px'></div></td></tr>"
             )
 
+    # 歷史報表導覽
+    import glob
+    archive_files = sorted(glob.glob(os.path.join(results_d, "report_*.html")), reverse=True)
+    nav_links = " | ".join(
+        f'<a href="{os.path.basename(p)}" style="color:#4fc3f7">{os.path.basename(p).replace("report_","").replace(".html","")}</a>'
+        for p in archive_files[:10]
+    )
+    nav_html = (
+        f'<div style="background:#0d1b2a;padding:10px;border-radius:6px;margin-bottom:20px;font-size:13px">'
+        f'歷史報表：{nav_links if nav_links else "（尚無歷史）"}</div>'
+    )
+
     # Agent 報告
     agent_report_html = ""
     agent_report_path = os.path.join(results_d, "agent_report.txt")
@@ -1558,7 +1570,7 @@ def _generate_report(target: dict):
 <h1>🎯 目標 {tgt_name} — 專屬模型報表</h1>
 <p>持有 {hd} 天，目標報酬 {pt:.0%}，停損 {target['sl_stop']:.0%}</p>
 <p>統計期：{TRAIN_START} ~ {TRAIN_END}　回測期：{PREDICT_START} ~ {SESSION_END}</p>
-
+{nav_html}
 <h2>三個 RFC 模型比較</h2>
 <p style="color:#aaa;font-size:13px">驗證期不同 proba 門檻的命中率比較</p>
 {comparison_html}
@@ -1579,6 +1591,14 @@ def _generate_report(target: dict):
 </body></html>"""
 
     report_path = os.path.join(results_d, "report.html")
+
+    # 備份舊報表（帶時間戳），保留歷史
+    if os.path.exists(report_path):
+        import shutil
+        ts = datetime.fromtimestamp(os.path.getmtime(report_path)).strftime("%Y%m%d_%H%M")
+        archive_path = os.path.join(results_d, f"report_{ts}.html")
+        shutil.copy2(report_path, archive_path)
+
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"\n[報表] 已存：{report_path}")
