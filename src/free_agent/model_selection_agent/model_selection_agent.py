@@ -809,7 +809,7 @@ def execute_tool(name: str, inputs: dict) -> dict:
                 dimension_summary[dim] = {"top3": top, "llm_found": dim_done}
 
         return {
-            "total_tested": len(all_entries),
+            "total_tested": len(session_entries) + len(bak_entries) + len(grid_entries),
             "passed": len(passed_llm) + len(passed_grid),
             "saturated_indicators": saturated,
             "dimension_summary": dimension_summary,  # 各維度 top3（無 indicator 時才有）
