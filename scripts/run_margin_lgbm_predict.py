@@ -1,8 +1,6 @@
 import os, sys
 from datetime import datetime, timedelta, timezone
 
-from release_model.ma60_lgbm import margin_lgbm_main
-
 _TW = timezone(timedelta(hours=8))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -11,6 +9,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from j1stools import hf_sync
 
 hf_sync.pull(["db/price", "db/ib", "db/margin", "db/active_stocks", "db/feature_cols", "models"])
+
+from release.ma60_lgbm import margin_lgbm_main
+
 
 from j1stools import parquet_db
 
