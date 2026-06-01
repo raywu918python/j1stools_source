@@ -94,7 +94,10 @@ def update_ib(start_date: str = None):
         except Exception as e:
             print(f"{stock_id} 失敗: {e}")
 
-    print(f"全部完成: {file_path}，共 {len(pd.read_parquet(file_path))} 筆")
+    if os.path.exists(file_path):
+        print(f"全部完成: {file_path}，共 {len(pd.read_parquet(file_path))} 筆")
+    else:
+        print(f"全部完成: {file_path}，今日尚無資料（FinMind 尚未發布）")
 
 
 if __name__ == "__main__":
