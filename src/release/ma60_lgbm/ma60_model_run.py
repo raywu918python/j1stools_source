@@ -4,7 +4,7 @@ from j1stools.django_orm import *
 import pandas as pd
 
 from j1stools import momentum_backtest, momentum_stats, parquet_db, triangle_stats
-from release_model.ma60_lgbm import margin_lgbm_main
+from release.ma60_lgbm import margin_lgbm_main
 
 
 def _etf_rows(equity_df, df_market, init_capital=1_000_000, min_pct=0.02, max_positions=3):
