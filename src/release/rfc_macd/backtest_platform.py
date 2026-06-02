@@ -163,7 +163,7 @@ def prepare_data_backtest(
 
     print(f"回測時間: {time() - st:.2f} 秒")
 
-    final_value = portfolio_value.iloc[-1]
+    final_value = portfolio_value["total"].iloc[-1]
     total_return = (final_value / 1_000_000 - 1) * 100
     print(f"最終資產：{final_value:,.0f}")
     print(f"總報酬率：{total_return:.2f}%")
@@ -197,15 +197,15 @@ def main(
     )
 
     # 大盤對比（0050）
-    eq_dates = portfolio_value.index.normalize()
+    eq_dates = pd.to_datetime(portfolio_value["date"]).dt.normalize()
     mkt = parquet_db.query_price(["0050"], st, end)
     mkt["date"] = pd.to_datetime(mkt["date"]).dt.normalize()
     mkt = mkt[mkt["date"].isin(eq_dates)].reset_index(drop=True)
     if mkt.empty:
         mkt = parquet_db.query_price(["0050"], st, end)
         mkt["date"] = pd.to_datetime(mkt["date"]).dt.normalize()
-        mkt = mkt[mkt["date"] >= eq_dates[0]].reset_index(drop=True)
-    start_val = portfolio_value.iloc[0]
+        mkt = mkt[mkt["date"] >= eq_dates.iloc[0]].reset_index(drop=True)
+    start_val = portfolio_value["total"].iloc[0]
     mkt["total"] = (mkt["close"] / mkt["close"].iloc[0] * start_val).round(2)
     market_df = mkt[["date", "total"]]
 

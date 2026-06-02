@@ -29,7 +29,7 @@ def backtest_engine(
     dates = close.index
     cash = float(init_cash)
     positions = {}
-    portfolio_value = []
+    portfolio_records = []
     trades = []
 
     # ✅ 按機率排序
@@ -151,16 +151,16 @@ def backtest_engine(
 
         # ── 每日資產價值 ──────────────────────────────────
         pos_value = sum(close.loc[dt, sid] * pos["shares"] for sid, pos in positions.items() if sid in close.columns)
-        portfolio_value.append(cash + pos_value)
+        portfolio_records.append({"date": dt, "cash": round(cash, 2), "market_value": round(pos_value, 2), "total": round(cash + pos_value, 2)})
 
     _COLS = [
         "stock_id", "entry_date", "entry_price", "stop", "target",
         "exit_date", "exit_price", "exit_reason", "highest",
         "cost", "pnl", "pnl_pct", "return_pct", "hold_days",
     ]
-    portfolio_value = pd.Series(portfolio_value, index=dates)
+    portfolio_df = pd.DataFrame(portfolio_records)
     trades_df = pd.DataFrame(trades) if trades else pd.DataFrame(columns=_COLS)
-    return portfolio_value, trades_df, positions
+    return portfolio_df, trades_df, positions
 
 
 def get_proba_multiplier(proba):
