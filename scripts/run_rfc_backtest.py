@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from j1stools import hf_sync
 
-hf_sync.pull(["db/price", "db/active_stocks", "db/feature_cols", "db/stock_group", "models"])
+hf_sync.pull(["db/price", "db/active_stocks", "db/feature_cols", "db/info", "models"])
 
 from release.rfc_macd import backtest_platform
 

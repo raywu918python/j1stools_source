@@ -42,7 +42,8 @@ class PrepareDate:
         self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
         self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
         self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
-        self.stock_group = parquet_db.query_stock2group_dict()
+        info = parquet_db.query_stock_info()
+        self.stock_group = info.set_index("stock_id")["group"].to_dict()
 
         self.market_danger = check_market(self.close)
         self.my_filter = gen_filter(self.close, self.high, self.low)
