@@ -103,5 +103,5 @@ def model_release():
 
 
 if __name__ == "__main__":
-    stocks = parquet_db.query_stocks_ids_list()
+    stocks = parquet_db.activate_stocks()
     predict(stocks, "2026-01-01", "2099-01-01")

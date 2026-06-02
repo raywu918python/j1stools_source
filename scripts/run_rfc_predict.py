@@ -13,7 +13,7 @@ hf_sync.pull(["db/price", "db/active_stocks", "db/feature_cols", "models"])
 from release.rfc_macd import rfc_main
 from j1stools import parquet_db
 
-stocks = parquet_db.query_stocks_ids_list()
+stocks = parquet_db.activate_stocks()
 stocks = list(set(stocks) - {"0050", "0052", "0056"})
 
 today = datetime.now(_TW).strftime("%Y-%m-%d")
