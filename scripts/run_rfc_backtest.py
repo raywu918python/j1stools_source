@@ -25,7 +25,16 @@ equity_df.to_parquet(f"{out_dir}/equity_{today}.parquet", index=False)
 trades_df.to_parquet(f"{out_dir}/trades_{today}.parquet", index=False)
 market_df.to_parquet(f"{out_dir}/market_{today}.parquet", index=False)
 if open_df:
-    open_positions = pd.DataFrame([{"stock_id": sid, **pos} for sid, pos in open_df.items()])
+    last_price = close_df.iloc[-1]
+    open_positions = pd.DataFrame([
+        {
+            "stock_id": sid,
+            **{k: v for k, v in pos.items() if k != "entry_bar"},
+            "last_date": close_df.index[-1],
+            "pnl_pct": round((last_price.get(sid, pos["entry_price"]) / pos["entry_price"] - 1) * 100, 2),
+        }
+        for sid, pos in open_df.items()
+    ])
     open_positions.to_parquet(f"{out_dir}/open_{today}.parquet", index=False)
 
 print(f"saved backtest → {out_dir}/ ({today})")
