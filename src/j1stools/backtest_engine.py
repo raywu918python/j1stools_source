@@ -92,8 +92,10 @@ def backtest_engine(
                     {
                         "stock_id": sid,
                         "entry_date": pos["entry_date"],
-                        "exit_date": dt,
                         "entry_price": pos["entry_price"],
+                        "stop": pos["stop"],
+                        "target": pos["target"],
+                        "exit_date": dt,
                         "exit_price": price,
                         "exit_reason": reason,
                         "highest": pos["highest"],
@@ -142,6 +144,8 @@ def backtest_engine(
                             "entry_bar": i,
                             "highest": price,
                             "cost": cost,
+                            "stop": round(price * (1 - sl_stop), 4) if use_fixed_sl else None,
+                            "target": round(price * (1 + tp_stop), 4) if use_fixed_tp else None,
                         }
 
         # ── 每日資產價值 ──────────────────────────────────
