@@ -18,7 +18,9 @@ out_dir = f"db/backtest/{MODEL_NAME}"
 portfolio_value, trades_df, open_df, close_df = backtest_platform.main(st="2024-01-01")
 
 os.makedirs(out_dir, exist_ok=True)
-portfolio_value.to_parquet(f"{out_dir}/equity_{today}.parquet", index=False)
+equity_df = portfolio_value.reset_index()
+equity_df.columns = ["date", "total"]
+equity_df.to_parquet(f"{out_dir}/equity_{today}.parquet", index=False)
 trades_df.to_parquet(f"{out_dir}/trades_{today}.parquet", index=False)
 if len(open_df):
     open_df.to_parquet(f"{out_dir}/open_{today}.parquet", index=False)
