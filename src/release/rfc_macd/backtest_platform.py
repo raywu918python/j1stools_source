@@ -181,7 +181,7 @@ def main(
 ):
     stocks = parquet_db.query_stocks_no_etf()
     signal = rfc_main.predict(stocks, st, end)
-    return prepare_data_backtest(
+    portfolio_value, trades_df, positions, close_df = prepare_data_backtest(
         signal,
         top_n=5,
         threshold=0.6,
@@ -195,6 +195,21 @@ def main(
         hold_days=10,
         group_limit=2,
     )
+
+    # 大盤對比（0050）
+    eq_dates = portfolio_value.index.normalize()
+    mkt = parquet_db.query_price(["0050"], st, end)
+    mkt["date"] = pd.to_datetime(mkt["date"]).dt.normalize()
+    mkt = mkt[mkt["date"].isin(eq_dates)].reset_index(drop=True)
+    if mkt.empty:
+        mkt = parquet_db.query_price(["0050"], st, end)
+        mkt["date"] = pd.to_datetime(mkt["date"]).dt.normalize()
+        mkt = mkt[mkt["date"] >= eq_dates[0]].reset_index(drop=True)
+    start_val = portfolio_value.iloc[0]
+    mkt["total"] = (mkt["close"] / mkt["close"].iloc[0] * start_val).round(2)
+    market_df = mkt[["date", "total"]]
+
+    return portfolio_value, trades_df, positions, close_df, market_df
 
 
 if __name__ == "__main__":
