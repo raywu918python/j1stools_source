@@ -26,12 +26,14 @@ trades_df.to_parquet(f"{out_dir}/trades_{today}.parquet", index=False)
 market_df.to_parquet(f"{out_dir}/market_{today}.parquet", index=False)
 if open_df:
     last_price = close_df.iloc[-1]
+    total_value = float(portfolio_value.iloc[-1])
     open_positions = pd.DataFrame([
         {
             "stock_id": sid,
             **{k: v for k, v in pos.items() if k != "entry_bar"},
             "last_date": close_df.index[-1],
             "pnl_pct": round((last_price.get(sid, pos["entry_price"]) / pos["entry_price"] - 1) * 100, 2),
+            "weight": round(pos["cost"] / total_value, 4),
         }
         for sid, pos in open_df.items()
     ])
