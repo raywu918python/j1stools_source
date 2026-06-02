@@ -101,6 +101,7 @@ def backtest_engine(
                         "highest": pos["highest"],
                         "cost": pos["cost"],
                         "pnl": pnl,
+                        "pnl_pct": (price - pos["entry_price"]) / pos["entry_price"] * 100,
                         "return_pct": pnl / pos["cost"] * 100,
                         "hold_days": i - pos["entry_bar"],
                     }
@@ -155,7 +156,7 @@ def backtest_engine(
     _COLS = [
         "stock_id", "entry_date", "entry_price", "stop", "target",
         "exit_date", "exit_price", "exit_reason", "highest",
-        "cost", "pnl", "return_pct", "hold_days",
+        "cost", "pnl", "pnl_pct", "return_pct", "hold_days",
     ]
     portfolio_value = pd.Series(portfolio_value, index=dates)
     trades_df = pd.DataFrame(trades) if trades else pd.DataFrame(columns=_COLS)
