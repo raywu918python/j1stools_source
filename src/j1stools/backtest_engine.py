@@ -152,8 +152,13 @@ def backtest_engine(
         pos_value = sum(close.loc[dt, sid] * pos["shares"] for sid, pos in positions.items() if sid in close.columns)
         portfolio_value.append(cash + pos_value)
 
+    _COLS = [
+        "stock_id", "entry_date", "entry_price", "stop", "target",
+        "exit_date", "exit_price", "exit_reason", "highest",
+        "cost", "pnl", "return_pct", "hold_days",
+    ]
     portfolio_value = pd.Series(portfolio_value, index=dates)
-    trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
+    trades_df = pd.DataFrame(trades) if trades else pd.DataFrame(columns=_COLS)
     return portfolio_value, trades_df, positions
 
 
