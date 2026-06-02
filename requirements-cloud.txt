@@ -18,3 +18,4 @@ websockets
 patsy
 xgboost
 plotly
+vectorbt
