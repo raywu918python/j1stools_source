@@ -1,6 +1,8 @@
 import random
 from time import time
 
+import pandas as pd
+
 from sklearn.preprocessing import label_binarize
 from sklearn.metrics import precision_score
 import pandas as pd
@@ -43,13 +45,17 @@ def prepare_data(stocks, st, end):
 
 def predict(stocks, st, end):
     model = joblib.load("models/rfc_macd_6xx.joblib")
-    df = prepare_data(stocks, st, end)
+    # MACD divergence 需要足夠歷史，往前多抓 120 天暖機
+    warmup_st = (pd.Timestamp(st) - pd.DateOffset(days=120)).strftime("%Y-%m-%d")
+    df = prepare_data(stocks, warmup_st, end)
     _, x, _, y = rfc_split_date(df, is_gen_test=True, is_gen_train=False, trainging_idx=0)
     x = x[[col for col in x.columns if col.startswith("f_")]] if x is not None else None
     x, y = drop_na_inf(x, y)
     expected_features = model.feature_names_in_
     x = x[expected_features]
-    return batter_predict(model, x, y)
+    result = batter_predict(model, x, y)
+    result["date"] = pd.to_datetime(result["date"])
+    return result[result["date"] >= pd.Timestamp(st)].reset_index(drop=True)
 
 
 def train(
