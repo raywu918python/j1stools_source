@@ -1,4 +1,5 @@
 import os, sys
+import pandas as pd
 from datetime import datetime, timezone, timedelta
 
 _TW = timezone(timedelta(hours=8))
@@ -22,8 +23,9 @@ equity_df = portfolio_value.reset_index()
 equity_df.columns = ["date", "total"]
 equity_df.to_parquet(f"{out_dir}/equity_{today}.parquet", index=False)
 trades_df.to_parquet(f"{out_dir}/trades_{today}.parquet", index=False)
-if len(open_df):
-    open_df.to_parquet(f"{out_dir}/open_{today}.parquet", index=False)
+if open_df:
+    open_positions = pd.DataFrame([{"stock_id": sid, **pos} for sid, pos in open_df.items()])
+    open_positions.to_parquet(f"{out_dir}/open_{today}.parquet", index=False)
 
 print(f"saved backtest → {out_dir}/ ({today})")
 hf_sync.push([f"db/backtest/{MODEL_NAME}"])
