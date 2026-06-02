@@ -21,7 +21,7 @@ st = (datetime.now(_TW) - timedelta(days=10)).strftime("%Y-%m-%d")
 
 df = rfc_main.predict(stocks, st, "2099-01-01")
 
-MODEL_NAME = "rfc_macd"
+MODEL_NAME = "rfc_macd_6xx"
 
 if df is not None and not df.empty:
     out_dir = f"db/predictions/{MODEL_NAME}"

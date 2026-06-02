@@ -175,8 +175,8 @@ def trigger_margin_lgbm(token: str = Query(default="")):
     return {"ok": ok}
 
 
-@app.get("/trigger/rfc-macd")
-def trigger_rfc_macd(token: str = Query(default="")):
+@app.get("/trigger/rfc-macd-6xx")
+def trigger_rfc_macd_6xx(token: str = Query(default="")):
     if token != _API_KEY:
         raise HTTPException(status_code=403, detail="Invalid key")
     ok = _trigger_workflow("rfc_macd.yml")
@@ -189,7 +189,7 @@ def trigger_predict_all(token: str = Query(default="")):
         raise HTTPException(status_code=403, detail="Invalid key")
     results = {
         "margin_lgbm": _trigger_workflow("margin_lgbm.yml"),
-        "rfc_macd": _trigger_workflow("rfc_macd.yml"),
+        "rfc_macd_6xx": _trigger_workflow("rfc_macd.yml"),
     }
     return {"ok": all(results.values()), "results": results}
 

@@ -12,7 +12,7 @@ hf_sync.pull(["db/price", "db/active_stocks", "db/feature_cols", "db/info", "mod
 
 from release.rfc_macd import backtest_platform
 
-MODEL_NAME = "rfc_macd"
+MODEL_NAME = "rfc_macd_6xx"
 today = datetime.now(_TW).strftime("%Y-%m-%d")
 out_dir = f"db/backtest/{MODEL_NAME}"
 
