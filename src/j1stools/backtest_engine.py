@@ -73,6 +73,19 @@ def backtest_engine(
                 else:
                     sell_value = price * pos["shares"] * (1 - fee)
 
+                if is_danger:
+                    reason = "market_exit"
+                elif use_fixed_tp and price >= pos["entry_price"] * (1 + tp_stop):
+                    reason = "tp_stop"
+                elif use_fixed_sl and price <= pos["entry_price"] * (1 - sl_stop):
+                    reason = "sl_stop"
+                elif use_sl_trail and price <= pos["highest"] * (1 - sl_trail):
+                    reason = "sl_trail"
+                elif use_hold_days and (i - pos["entry_bar"]) >= hold_days:
+                    reason = "hold_days"
+                else:
+                    reason = "exit"
+
                 pnl = sell_value - pos["cost"]
                 cash += sell_value
                 trades.append(
@@ -82,9 +95,12 @@ def backtest_engine(
                         "exit_date": dt,
                         "entry_price": pos["entry_price"],
                         "exit_price": price,
+                        "exit_reason": reason,
+                        "highest": pos["highest"],
+                        "cost": pos["cost"],
                         "pnl": pnl,
-                        "size": pos["shares"],
                         "return_pct": pnl / pos["cost"] * 100,
+                        "hold_days": i - pos["entry_bar"],
                     }
                 )
                 del positions[sid]
