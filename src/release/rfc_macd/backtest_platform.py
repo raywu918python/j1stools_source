@@ -47,7 +47,8 @@ class PrepareDate:
 
         self.market_danger = check_market(self.close)
         self.my_filter = gen_filter(self.close, self.high, self.low)
-        self.entries = gen_entries(self.my_filter, self.proba, top_n, threshold)
+        # shift(1)：收盤訊號只能在下一個交易日成交
+        self.entries = gen_entries(self.my_filter, self.proba, top_n, threshold).shift(1).fillna(False)
         self.exits = gen_exits(self.market_danger, self.proba)
 
         print(f"前處理時間: {time() - t1:.2f} 秒")
