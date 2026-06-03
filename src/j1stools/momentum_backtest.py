@@ -281,11 +281,19 @@ def run_backtest(
                 "cost": cost,
             }
 
-        # 每日資產
+        # 每日資產（當天沒資料時用最後已知收盤價，避免競態條件造成市值歸零）
+        def _last_price(sid, date):
+            stock = price_map[sid]
+            today = stock[stock["date"] == date]
+            if len(today) > 0:
+                return today.iloc[0]["close"]
+            prev = stock[stock["date"] < date]
+            return prev.iloc[-1]["close"] if len(prev) > 0 else pos["entry_price"]
+
         market_value = sum(
-            pos["size"] * price_map[sid][price_map[sid]["date"] == date].iloc[0]["close"]
+            pos["size"] * _last_price(sid, date)
             for sid, pos in positions.items()
-            if sid in price_map and len(price_map[sid][price_map[sid]["date"] == date]) > 0
+            if sid in price_map
         )
         equity_curve.append(
             {
