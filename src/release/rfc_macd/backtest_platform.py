@@ -25,7 +25,7 @@ class PrepareDate:
         stocks = signal["stock_id"].unique().tolist()
         date = signal["date"]
         st = pd.to_datetime(date.min()).strftime("%Y-%m-%d")
-        end = pd.to_datetime(date.max()).strftime("%Y-%m-%d")
+        end = (pd.to_datetime(date.max()) + pd.DateOffset(days=1)).strftime("%Y-%m-%d")
 
         full_df = parquet_db.query_price(stocks, st, end)
         full_df["date"] = pd.to_datetime(full_df["date"])
