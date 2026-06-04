@@ -19,3 +19,6 @@ curl https://raywu918python-j1s-api.hf.space/predictions/
 ollama serve
 
 aider --model ollama/qwen2.5-coder:14b src/free_agent/free_agent.py
+
+python model_selection_agent.py return 10 0.15 0.08 deepseek 100
+python model_selection_agent.py breakout 5 0.05 0.08 gemini 50
