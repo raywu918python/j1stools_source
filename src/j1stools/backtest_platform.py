@@ -116,6 +116,8 @@ def calc_adx(high, low, close, cache_path="db/adx/adx.parquet", is_using_cache=F
 
     print("計算 ADX...")
     adx = vbt.pandas_ta("ADX").run(high, low, close, length=14).adx
+    if isinstance(adx.columns, pd.MultiIndex):
+        adx.columns = adx.columns.get_level_values(-1)
     adx.columns = adx.columns.astype(str)
     adx.to_parquet(cache_path)
 
