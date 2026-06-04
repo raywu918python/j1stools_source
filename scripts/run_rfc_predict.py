@@ -11,7 +11,6 @@ import pandas as pd
 from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE
 from j1stools.j1s_split_date import rfc_split_date
 from j1stools.model_utils import drop_na_inf
-from j1stools.train_flow import batter_predict
 from j1stools import data_filter, feature_builder, hf_sync, label_builder, parquet_db
 
 
@@ -27,6 +26,14 @@ def prepare_data(stocks, st, end):
     return df
 
 
+def batter_predict(model, xtest):
+    yproba = model.predict_proba(xtest)
+    dfyproba = pd.DataFrame(yproba, index=xtest.index)
+    dfyproba.reset_index(drop=False, inplace=True)
+    dfyproba.columns = dfyproba.columns.astype(str)
+    return dfyproba
+
+
 def predict(stocks, st, end):
     model = joblib.load("models/rfc_macd_6xx.joblib")
     warmup_st = (pd.Timestamp(st) - pd.DateOffset(days=120)).strftime("%Y-%m-%d")
@@ -36,7 +43,7 @@ def predict(stocks, st, end):
     x, y = drop_na_inf(x, y)
     expected_features = model.feature_names_in_
     x = x[expected_features]
-    result = batter_predict(model, x, y)
+    result = batter_predict(model, x)
     result["date"] = pd.to_datetime(result["date"])
     return result[result["date"] >= pd.Timestamp(st)].reset_index(drop=True)
 
