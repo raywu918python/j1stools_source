@@ -5,18 +5,55 @@ from datetime import datetime, timezone, timedelta
 _TW = timezone(timedelta(hours=8))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.dirname(__file__))  # 讓 scripts/ 可被 import
 
-from j1stools import hf_sync
+from j1stools import hf_sync, parquet_db
+from release.rfc_macd import backtest_platform
+from run_rfc_predict import predict
 
 hf_sync.pull(["db/price", "db/active_stocks", "db/feature_cols", "db/info", "models"])
-
-from release.rfc_macd import backtest_platform
 
 MODEL_NAME = "rfc_macd_6xx"
 today = datetime.now(_TW).strftime("%Y-%m-%d")
 out_dir = f"db/backtest/{MODEL_NAME}"
 
-portfolio_value, trades_df, open_df, close_df, market_df = backtest_platform.main(st="2024-01-01")
+
+def backtest(st="2024-01-01", end="2099-01-01"):
+    stocks = parquet_db.query_stocks_no_etf()
+    signal = predict(stocks, st, end)
+
+    portfolio_value, trades_df, positions, close_df = backtest_platform.prepare_data_backtest(
+        signal,
+        top_n=5,
+        threshold=0.6,
+        max_positions=5,
+        use_sl_trail=False,
+        use_fixed_sl=True,
+        sl_stop=0.10,
+        use_fixed_tp=True,
+        tp_stop=0.10,
+        use_hold_days=True,
+        hold_days=10,
+        group_limit=2,
+    )
+
+    # 大盤對比（0050）
+    eq_dates = pd.to_datetime(portfolio_value["date"]).dt.normalize()
+    mkt = parquet_db.query_price(["0050"], st, end)
+    mkt["date"] = pd.to_datetime(mkt["date"]).dt.normalize()
+    mkt = mkt[mkt["date"].isin(eq_dates)].reset_index(drop=True)
+    if mkt.empty:
+        mkt = parquet_db.query_price(["0050"], st, end)
+        mkt["date"] = pd.to_datetime(mkt["date"]).dt.normalize()
+        mkt = mkt[mkt["date"] >= eq_dates.iloc[0]].reset_index(drop=True)
+    start_val = portfolio_value["total"].iloc[0]
+    mkt["total"] = (mkt["close"] / mkt["close"].iloc[0] * start_val).round(2)
+    market_df = mkt[["date", "total"]]
+
+    return portfolio_value, trades_df, positions, close_df, market_df
+
+
+portfolio_value, trades_df, open_df, close_df, market_df = backtest(st="2024-01-01")
 
 os.makedirs(out_dir, exist_ok=True)
 portfolio_value.to_parquet(f"{out_dir}/equity_{today}.parquet", index=False)
