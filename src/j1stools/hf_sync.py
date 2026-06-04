@@ -1,4 +1,5 @@
 import os
+import time
 from huggingface_hub import HfApi, snapshot_download
 
 _REPO_ID = os.environ.get("HF_REPO_ID", "raywu918python/j1s-data")
@@ -7,14 +8,23 @@ _REPO_ID = os.environ.get("HF_REPO_ID", "raywu918python/j1s-data")
 def pull(folders: list, local_dir="."):
     token = os.environ.get("HF_TOKEN")
     for folder in folders:
-        snapshot_download(
-            repo_id=_REPO_ID,
-            repo_type="dataset",
-            local_dir=local_dir,
-            allow_patterns=f"{folder}/**",
-            token=token,
-        )
-        print(f"[hf_sync] pulled: {folder}")
+        for attempt in range(3):
+            snapshot_download(
+                repo_id=_REPO_ID,
+                repo_type="dataset",
+                local_dir=local_dir,
+                allow_patterns=f"{folder}/**",
+                token=token,
+            )
+            expected = os.path.join(local_dir, folder)
+            if os.path.isdir(expected):
+                print(f"[hf_sync] pulled: {folder}")
+                break
+            if attempt == 2:
+                raise RuntimeError(f"[hf_sync] pull failed after 3 attempts: {folder}")
+            wait = 30 * (attempt + 1)
+            print(f"[hf_sync] {folder} not found after pull, retry in {wait}s...")
+            time.sleep(wait)
 
 
 def push(folders: list, local_dir="."):
