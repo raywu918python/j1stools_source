@@ -1,13 +1,13 @@
 huggingface_hub
-pandas
-pyarrow
+pandas~=2.3
+pyarrow~=24.0
 yfinance
 requests
 python-dotenv
 lightgbm
 joblib
-numpy
-scikit-learn
+numpy~=2.2
+scikit-learn~=1.8
 pandas_ta
 sympy
 scipy

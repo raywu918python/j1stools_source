@@ -60,13 +60,13 @@ MY_SCHEMA = pa.schema(
 
 def query_price(stocks: list, st="2015-01-01", end="2099-01-01", is_include_end=False):
     dataset = ds.dataset("db/price/", format="parquet")
-    st_ts = pd.Timestamp(st)
-    end_ts = pd.Timestamp(end)
+    st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
 
     if is_include_end:
-        condition = (ds.field("date") >= st_ts) & (ds.field("date") <= end_ts) & (ds.field("stock_id").isin(stocks))
+        condition = (ds.field("date") >= st_str) & (ds.field("date") <= end_str) & (ds.field("stock_id").isin(stocks))
     else:
-        condition = (ds.field("date") >= st_ts) & (ds.field("date") < end_ts) & (ds.field("stock_id").isin(stocks))
+        condition = (ds.field("date") >= st_str) & (ds.field("date") < end_str) & (ds.field("stock_id").isin(stocks))
 
     table = dataset.to_table(
         filter=condition, columns=["date", "stock_id", "close", "volume", "high", "low", "open"]
@@ -225,7 +225,9 @@ def activate_stocks():
 
 def query_ib(stocks: list, st="2015-01-01", end="2099-01-01"):
     dataset = ds.dataset("db/ib/", format="parquet")
-    condition = (ds.field("date") >= pd.Timestamp(st)) & (ds.field("date") < pd.Timestamp(end)) & (ds.field("stock_id").isin(stocks))
+    st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+    condition = (ds.field("date") >= st_str) & (ds.field("date") < end_str) & (ds.field("stock_id").isin(stocks))
     df = dataset.to_table(filter=condition).to_pandas()
     df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     df.sort_values(["date", "stock_id", "name"], inplace=True)
@@ -235,7 +237,9 @@ def query_ib(stocks: list, st="2015-01-01", end="2099-01-01"):
 
 def query_margin(stocks: list, st="2015-01-01", end="2099-01-01"):
     dataset = ds.dataset("db/margin/", format="parquet")
-    condition = (ds.field("date") >= pd.Timestamp(st)) & (ds.field("date") < pd.Timestamp(end)) & (ds.field("stock_id").isin(stocks))
+    st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+    condition = (ds.field("date") >= st_str) & (ds.field("date") < end_str) & (ds.field("stock_id").isin(stocks))
     df = dataset.to_table(filter=condition).to_pandas()
     df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     df.sort_values(["date", "stock_id"], inplace=True)
