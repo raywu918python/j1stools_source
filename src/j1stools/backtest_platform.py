@@ -231,7 +231,7 @@ def prepare_data_backtest(
     print(f"回測時間: {time() - st:.2f} 秒")
 
     # 結果
-    final_value = portfolio_value.iloc[-1]
+    final_value = portfolio_value["total"].iloc[-1]
     total_return = (final_value / 1_000_000 - 1) * 100
     print(f"最終資產：{final_value:,.0f}")
     print(f"總報酬率：{total_return:.2f}%")
@@ -320,7 +320,7 @@ def optimize(signal):
         if trades_df.empty:
             continue
 
-        final_value = portfolio_value.iloc[-1]
+        final_value = portfolio_value["total"].iloc[-1]
         total_return = (final_value / 1_000_000 - 1) * 100
         win_rate = (trades_df["pnl"] > 0).mean() * 100
         avg_return = trades_df["return_pct"].mean()
@@ -450,7 +450,7 @@ def main(
     print(f"回測時間: {time() - t1:.2f} 秒")
 
     #############################################################
-    final_value = portfolio_value.iloc[-1]
+    final_value = portfolio_value["total"].iloc[-1]
     total_return = (final_value / 1_000_000 - 1) * 100
     print(f"最終資產：{final_value:,.0f}")
     print(f"總報酬率：{total_return:.2f}%")
