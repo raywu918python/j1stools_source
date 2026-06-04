@@ -65,6 +65,7 @@ if __name__ == "__main__":
         out_dir = f"db/predictions/{MODEL_NAME}"
         os.makedirs(out_dir, exist_ok=True)
         out_path = f"{out_dir}/pred_{today}.parquet"
+        df["date"] = df["date"].dt.strftime("%Y-%m-%d")
         df.to_parquet(out_path, index=False)
         print(f"saved {len(df)} rows → {out_path}")
         hf_sync.push([f"db/predictions/{MODEL_NAME}"])
