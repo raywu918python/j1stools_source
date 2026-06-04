@@ -73,6 +73,8 @@ if open_df:
         for sid, pos in open_df.items()
     ])
     open_positions.to_parquet(f"{out_dir}/open_{today}.parquet", index=False)
+    print("=== 目前持倉 ===")
+    print(open_positions.to_string(index=False))
 
 print(f"saved backtest → {out_dir}/ ({today})")
 hf_sync.push([f"db/backtest/{MODEL_NAME}"])
