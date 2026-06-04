@@ -12,7 +12,6 @@ import pandas as pd
 from requests import head
 from sklearn.model_selection import train_test_split
 from sympy import rf
-from torch import mode
 from websockets import Data
 
 from j1stools import feature_builder, label_builder
@@ -213,8 +212,8 @@ def train_best_model(
         stocks = parquet_db.query_stocks_no_etf()
 
     print("=" * 60, "prepare data")
-    df = prepare_data(stocks, st, end)
-    # df = prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_and_del_)
+    # df = prepare_data(stocks, st, end, FILTER_TYPE.add_and_del)
+    df = prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_and_del)
     xtrain, xtest, ytrain, ytest = rfc_split_date(df, True, True, trainging_idx)
     xtrain, ytrain = drop_na_inf(xtrain, ytrain)
     xtest, ytest = drop_na_inf(xtest, ytest)
