@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.dirname(__file__))  # 讓 scripts/ 可被 import
 
 from j1stools import hf_sync, parquet_db
-from release.rfc_macd import backtest_platform
+from j1stools import backtest_platform
 from run_rfc_predict import predict
 
 hf_sync.pull(["db/price", "db/active_stocks", "db/feature_cols", "db/info", "models"])

@@ -129,12 +129,12 @@ def optimize():
     )
 
 
-def prepare_data(stocks, st, end):
+def prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_):
     df = parquet_db.query_price(stocks, st, end)
     print("filter.before:", df.shape)
     df = feature_builder.gen_feature(df, FEATURE_TYPE.macd)
     df = label_builder.profit_label(df)
-    df = data_filter.filter(df, True, FILTER_TYPE.none_, FILTER_TYPE.add_)
+    df = data_filter.filter(df, True, FILTER_TYPE.none_, atr_filter_type)
     print("filter.after:", df.shape)
     # 資料在這裡刪
     df.set_index(["date", "stock_id"], inplace=True)
@@ -179,6 +179,135 @@ def train(
     print_ft_important(model)
 
 
+def train_best_model(
+    stocks=None,
+    st="2015-01-01",
+    end="2099-01-01",
+    trainging_idx=0.8,
+    cv=3,
+):
+    """
+    Pipeline 架構 — 每個模型包在 Pipeline([("clf", model)]) 裡，未來可以直接在前面插入 scaler 或 feature selector
+    四個模型 — RFC、LightGBM、GradientBoosting、XGBoost（如果沒裝 xgboost 會自動跳過）
+    GridSearchCV — cv=3（可調）、scoring="f1_weighted"（適合多分類不平衡資料），每個模型各有獨立的 param_grid
+    結果比較 — 全部跑完後印出比較表，找出最高 cv_score 的 winner
+    自動存檔 — winner pipeline 存到 model/best_{name}_時間戳.joblib
+    holdout 評估 — 用既有的 batter_predict 跑測試集
+    """
+    import numpy as np
+    import joblib as _joblib
+    from sklearn.pipeline import Pipeline
+    from sklearn.model_selection import GridSearchCV
+    from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+    from lightgbm import LGBMClassifier
+
+    try:
+        from xgboost import XGBClassifier
+
+        _has_xgb = True
+    except ImportError:
+        _has_xgb = False
+        print("xgboost 未安裝，跳過 XGB")
+
+    if stocks is None:
+        stocks = parquet_db.query_stocks_no_etf()
+
+    print("=" * 60, "prepare data")
+    df = prepare_data(stocks, st, end)
+    # df = prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_and_del_)
+    xtrain, xtest, ytrain, ytest = rfc_split_date(df, True, True, trainging_idx)
+    xtrain, ytrain = drop_na_inf(xtrain, ytrain)
+    xtest, ytest = drop_na_inf(xtest, ytest)
+
+    f_cols = [col for col in xtrain.columns if col.startswith("f_")]
+    xtrain, xtest = xtrain[f_cols], xtest[f_cols]
+    print(f"features: {len(f_cols)}, train: {len(xtrain)}, test: {len(xtest)}")
+
+    pipelines = {
+        "rfc": Pipeline([("clf", RandomForestClassifier(random_state=42, n_jobs=-1, class_weight="balanced"))]),
+        "lgbm": Pipeline([("clf", LGBMClassifier(random_state=42, n_jobs=1, class_weight="balanced", verbose=-1))]),
+        "gbm": Pipeline([("clf", GradientBoostingClassifier(random_state=42))]),
+    }
+    if _has_xgb:
+        pipelines["xgb"] = Pipeline(
+            [
+                ("clf", XGBClassifier(random_state=42, n_jobs=-1, eval_metric="mlogloss", use_label_encoder=False)),
+            ]
+        )
+
+    param_grids = {
+        "rfc": {
+            "clf__n_estimators": [300, 600],
+            "clf__max_depth": [8, 12],
+            "clf__min_samples_leaf": [10, 20],
+            "clf__max_features": [0.2, 0.4],
+        },
+        "lgbm": {
+            "clf__n_estimators": [300, 600],
+            "clf__num_leaves": [31, 63],
+            "clf__max_depth": [6, 10],
+            "clf__learning_rate": [0.05, 0.1],
+        },
+        "gbm": {
+            "clf__n_estimators": [200, 400],
+            "clf__max_depth": [4, 6],
+            "clf__learning_rate": [0.05, 0.1],
+            "clf__min_samples_leaf": [10, 20],
+        },
+        "xgb": {
+            "clf__n_estimators": [300, 600],
+            "clf__max_depth": [4, 6],
+            "clf__learning_rate": [0.05, 0.1],
+            "clf__min_child_weight": [5, 10],
+        },
+    }
+
+    best_score = -np.inf
+    best_name = None
+    best_pipeline = None
+    results = {}
+
+    for name, pipeline in pipelines.items():
+        print(f"\n{'='*60} GridSearch: {name}")
+        gs = GridSearchCV(
+            pipeline,
+            param_grids[name],
+            cv=cv,
+            scoring="f1_weighted",
+            n_jobs=1,
+            verbose=1,
+            refit=True,
+        )
+        try:
+            with _joblib.parallel_backend("threading"):
+                gs.fit(xtrain, ytrain)
+        except Exception as e:
+            print(f"  [SKIP] {name} 訓練失敗: {e}")
+            continue
+        results[name] = {"best_params": gs.best_params_, "cv_score": gs.best_score_}
+        print(f"  best_params: {gs.best_params_}")
+        print(f"  cv_score:    {gs.best_score_:.4f}")
+        if gs.best_score_ > best_score:
+            best_score = gs.best_score_
+            best_name = name
+            best_pipeline = gs.best_estimator_
+
+    print(f"\n{'='*60} 結果比較")
+    for name, r in results.items():
+        mark = " <-- winner" if name == best_name else ""
+        print(f"  {name}: {r['cv_score']:.4f}  {r['best_params']}{mark}")
+
+    save_path = get_full_name(f"best_{best_name}")
+    joblib.dump(best_pipeline, save_path)
+    print(f"\nsaved: {save_path}")
+
+    print("=" * 60, "test on holdout")
+    dfyproba = batter_predict(best_pipeline, xtest, ytest)
+    print(dfyproba.head())
+
+    return best_pipeline, best_name, results
+
+
 def predict(stocks, st, end):
 
     model = joblib.load("models/rfc_macd_6xx.joblib")
@@ -202,6 +331,16 @@ def model_release():
     model = gen_rfc_model()
     model.fit(x, y)
     joblib.dump(model, "models/rfc_macd_6xx.joblib")
+
+
+if __name__ == "__main__":
+    from j1stools.rfc_main import train_best_model
+
+    pipeline, best_name, results = train_best_model(
+        st="2023-01-01",
+        end="2024-01-01",
+        cv=3,
+    )
 
 
 # predict_today()
