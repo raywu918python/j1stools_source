@@ -35,10 +35,8 @@ class LgbmPrepareDate:
         stocks = signal["stock_id"].unique().tolist()
         date = signal["date"]
         st = date.min()
-        end = date.max()
         # st = "2026-03-01"
-        # end = "2029-01-01"
-        full_df = parquet_db.query_price(stocks, st, end)
+        full_df = parquet_db.query_price(stocks, st, "2099-01-01")
         full_df["date"] = pd.to_datetime(full_df["date"])
         input = pd.merge(
             full_df,
@@ -74,10 +72,8 @@ class PrepareDate:
         stocks = signal["stock_id"].unique().tolist()
         date = signal["date"]
         st = date.min()
-        end = date.max()
         # st = "2026-03-01"
-        # end = "2029-01-01"
-        full_df = parquet_db.query_price(stocks, st, end)
+        full_df = parquet_db.query_price(stocks, st, "2099-01-01")
         full_df["date"] = pd.to_datetime(full_df["date"])
         input = pd.merge(
             full_df,
