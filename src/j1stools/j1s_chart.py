@@ -175,7 +175,7 @@ def chart_gantt(trades_df):
     df_plot["entry_date"] = pd.to_datetime(df_plot["entry_date"])
     df_plot["exit_date"] = pd.to_datetime(df_plot["exit_date"])
 
-    stock_dict = parquet_db.query_group_by_ids(df_plot["stock_id"])
+    stock_dict = parquet_db.query_stock_info().set_index("stock_id")[["name", "group"]].to_dict(orient="index")
     df_plot["name"] = df_plot["stock_id"].map(lambda x: stock_dict.get(x, {}).get("name"))
     df_plot["group"] = df_plot["stock_id"].map(lambda x: stock_dict.get(x, {}).get("group"))
     df_plot["merge_name"] = df_plot["stock_id"] + "|" + df_plot["name"] + "|" + df_plot["group"]

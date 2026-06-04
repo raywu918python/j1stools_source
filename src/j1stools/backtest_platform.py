@@ -53,7 +53,7 @@ class LgbmPrepareDate:
         self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
         self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
         self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
-        self.stock_group = parquet_db.query_stock2group_dict()
+        self.stock_group = parquet_db.query_stock_info().set_index("stock_id")["group"].to_dict()
 
         # 前處理（向量化）
         self.market_danger = check_market(self.close)
@@ -92,7 +92,7 @@ class PrepareDate:
         self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
         self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
         self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
-        self.stock_group = parquet_db.query_stock2group_dict()
+        self.stock_group = parquet_db.query_stock_info().set_index("stock_id")["group"].to_dict()
 
         # 前處理（向量化）
         self.market_danger = check_market(self.close)

@@ -197,16 +197,22 @@ def train_best_model(
     import joblib as _joblib
     from sklearn.pipeline import Pipeline
     from sklearn.model_selection import GridSearchCV
-    from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+    from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, RandomForestClassifier
     from lightgbm import LGBMClassifier
 
     try:
         from xgboost import XGBClassifier
-
         _has_xgb = True
     except ImportError:
         _has_xgb = False
         print("xgboost 未安裝，跳過 XGB")
+
+    try:
+        from catboost import CatBoostClassifier
+        _has_cat = True
+    except ImportError:
+        _has_cat = False
+        print("catboost 未安裝，跳過 CatBoost")
 
     if stocks is None:
         stocks = parquet_db.query_stocks_no_etf()
@@ -222,17 +228,27 @@ def train_best_model(
     xtrain, xtest = xtrain[f_cols], xtest[f_cols]
     print(f"features: {len(f_cols)}, train: {len(xtrain)}, test: {len(xtest)}")
 
+    # CatBoost 專用：加入股票類別欄位（來源：db/info/info.parquet）
+    stock2group = parquet_db.query_stock_info().set_index("stock_id")["group"].to_dict()
+    xtrain_cat = xtrain.copy()
+    xtest_cat = xtest.copy()
+    xtrain_cat["f_group"] = xtrain.index.get_level_values("stock_id").map(stock2group).fillna("XX").values
+    xtest_cat["f_group"] = xtest.index.get_level_values("stock_id").map(stock2group).fillna("XX").values
+
     pipelines = {
         "rfc": Pipeline([("clf", RandomForestClassifier(random_state=42, n_jobs=-1, class_weight="balanced"))]),
+        "etc": Pipeline([("clf", ExtraTreesClassifier(random_state=42, n_jobs=-1, class_weight="balanced"))]),
         "lgbm": Pipeline([("clf", LGBMClassifier(random_state=42, n_jobs=1, class_weight="balanced", verbose=-1))]),
         "gbm": Pipeline([("clf", GradientBoostingClassifier(random_state=42))]),
     }
     if _has_xgb:
-        pipelines["xgb"] = Pipeline(
-            [
-                ("clf", XGBClassifier(random_state=42, n_jobs=-1, eval_metric="mlogloss", use_label_encoder=False)),
-            ]
-        )
+        pipelines["xgb"] = Pipeline([
+            ("clf", XGBClassifier(random_state=42, n_jobs=1, eval_metric="mlogloss")),
+        ])
+    if _has_cat:
+        pipelines["cat"] = Pipeline([
+            ("clf", CatBoostClassifier(random_state=42, thread_count=1, verbose=0, auto_class_weights="Balanced", cat_features=["f_group"])),
+        ])
 
     param_grids = {
         "rfc": {
@@ -259,6 +275,18 @@ def train_best_model(
             "clf__learning_rate": [0.05, 0.1],
             "clf__min_child_weight": [5, 10],
         },
+        "etc": {
+            "clf__n_estimators": [300, 600],
+            "clf__max_depth": [8, 12, None],
+            "clf__min_samples_leaf": [10, 20],
+            "clf__max_features": [0.2, 0.4],
+        },
+        "cat": {
+            "clf__iterations": [300, 600],
+            "clf__depth": [4, 6, 8],
+            "clf__learning_rate": [0.05, 0.1],
+            "clf__l2_leaf_reg": [1, 3],
+        },
     }
 
     best_score = -np.inf
@@ -277,9 +305,10 @@ def train_best_model(
             verbose=1,
             refit=True,
         )
+        x_fit = xtrain_cat if name == "cat" else xtrain
         try:
             with _joblib.parallel_backend("threading"):
-                gs.fit(xtrain, ytrain)
+                gs.fit(x_fit, ytrain)
         except Exception as e:
             print(f"  [SKIP] {name} 訓練失敗: {e}")
             continue
@@ -301,7 +330,8 @@ def train_best_model(
     print(f"\nsaved: {save_path}")
 
     print("=" * 60, "test on holdout")
-    dfyproba = batter_predict(best_pipeline, xtest, ytest)
+    x_eval = xtest_cat if best_name == "cat" else xtest
+    dfyproba = batter_predict(best_pipeline, x_eval, ytest)
     print(dfyproba.head())
 
     return best_pipeline, best_name, results
