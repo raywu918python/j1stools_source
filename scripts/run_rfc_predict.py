@@ -12,7 +12,6 @@ from j1stools.TYPE import FEATURE_TYPE, FILTER_TYPE
 from j1stools.j1s_split_date import rfc_split_date
 from j1stools.model_utils import drop_na_inf
 from j1stools import data_filter, feature_builder, hf_sync, label_builder, parquet_db
-from j1stools.rfc_main import _add_ib_features
 
 
 def prepare_data(stocks, st, end, use_ib=False):
@@ -20,6 +19,7 @@ def prepare_data(stocks, st, end, use_ib=False):
     print("filter.before:", df.shape)
     df = feature_builder.gen_feature(df, FEATURE_TYPE.macd)
     if use_ib:
+        from j1stools.rfc_main import _add_ib_features
         df = _add_ib_features(df, stocks, st, end)
     df = label_builder.profit_label(df)
     df = data_filter.filter(df, True, FILTER_TYPE.none_, FILTER_TYPE.add_)
