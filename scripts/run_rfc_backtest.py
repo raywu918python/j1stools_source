@@ -9,11 +9,12 @@ sys.path.insert(0, os.path.dirname(__file__))  # 讓 scripts/ 可被 import
 
 from j1stools import hf_sync, parquet_db
 from j1stools import backtest_platform
-from run_rfc_predict import predict
+from run_rfc_predict import MODEL_NAME, USE_IB_FEATURES, predict
 
-hf_sync.pull(["db/price", "db/active_stocks", "db/feature_cols", "db/info", "models"])
-
-MODEL_NAME = "rfc_macd_6xx"
+pull_dirs = ["db/price", "db/active_stocks", "db/feature_cols", "db/info", "models"]
+if USE_IB_FEATURES:
+    pull_dirs.append("db/ib")
+hf_sync.pull(pull_dirs)
 today = datetime.now(_TW).strftime("%Y-%m-%d")
 out_dir = f"db/backtest/{MODEL_NAME}"
 
@@ -62,16 +63,18 @@ market_df.to_parquet(f"{out_dir}/market_{today}.parquet", index=False)
 if open_df:
     last_price = close_df.iloc[-1]
     total_value = float(portfolio_value["total"].iloc[-1])
-    open_positions = pd.DataFrame([
-        {
-            "stock_id": sid,
-            **{k: v for k, v in pos.items() if k != "entry_bar"},
-            "last_date": close_df.index[-1],
-            "pnl_pct": round((last_price.get(sid, pos["entry_price"]) / pos["entry_price"] - 1) * 100, 2),
-            "weight": round(pos["cost"] / total_value, 4),
-        }
-        for sid, pos in open_df.items()
-    ])
+    open_positions = pd.DataFrame(
+        [
+            {
+                "stock_id": sid,
+                **{k: v for k, v in pos.items() if k != "entry_bar"},
+                "last_date": close_df.index[-1],
+                "pnl_pct": round((last_price.get(sid, pos["entry_price"]) / pos["entry_price"] - 1) * 100, 2),
+                "weight": round(pos["cost"] / total_value, 4),
+            }
+            for sid, pos in open_df.items()
+        ]
+    )
     open_positions.to_parquet(f"{out_dir}/open_{today}.parquet", index=False)
     print("=== 目前持倉 ===")
     print(open_positions.to_string(index=False))

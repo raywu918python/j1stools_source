@@ -190,6 +190,7 @@ def trigger_predict_all(token: str = Query(default="")):
     results = {
         "margin_lgbm": _trigger_workflow("margin_lgbm.yml"),
         "rfc_macd_6xx": _trigger_workflow("rfc_macd.yml"),
+        "rfc_macd_ib_6xx": _trigger_workflow("rfc_ib_macd.yml"),
     }
     return {"ok": all(results.values()), "results": results}
 
