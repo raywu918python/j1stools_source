@@ -40,6 +40,8 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO_ID: raywu918python/j1s-data
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INFO_PARQUET_PATH: db/info/info.parquet
           PYTHONUNBUFFERED: "1"
         run: python scripts/run_rfc_predict.py
       - name: Run backtest
