@@ -93,30 +93,23 @@ def rank_stocks_by_news(stocks):
     return json.loads(text)
 
 
-def rank_stocks(stock_ids: list[str], company_names: dict[str, str] | None = None) -> pd.DataFrame:
+_INFO_PATH = "/Users/wumingrui/Library/CloudStorage/Dropbox/自學/量化交易/db/info/info.parquet"
+_info = pd.read_parquet(_INFO_PATH).set_index("stock_id")["name"]
+
+
+def rank_stocks(stock_ids: list[str]) -> pd.DataFrame:
     """
-    Input:
-        stock_ids: e.g. ["2330", "3406", "6806"]
-        company_names: optional mapping {stock_id: name}, e.g. {"2330": "台積電"}
-    Output:
-        DataFrame sorted by rank, columns: rank, stock_id, company, score, summary
+    Input:  stock_ids — e.g. ["2330", "3406", "6806"]
+    Output: DataFrame sorted by rank
+            columns: rank, stock_id, company, score, summary, positive_factors, negative_factors
     """
-    names = company_names or {}
-    stocks = [{"id": sid, "name": names.get(sid, "")} for sid in stock_ids]
+    stocks = [{"id": sid, "name": _info.get(sid, "")} for sid in stock_ids]
     result = rank_stocks_by_news(stocks)
     df = pd.DataFrame(result["ranking"]).sort_values("rank").reset_index(drop=True)
     return df[["rank", "stock_id", "company", "score", "summary", "positive_factors", "negative_factors"]]
 
 
 if __name__ == "__main__":
-    INFO_PATH = "/Users/wumingrui/Library/CloudStorage/Dropbox/自學/量化交易/db/info/info.parquet"
-
-    info = pd.read_parquet(INFO_PATH).set_index("stock_id")["name"]
-
-    stock_ids = ["3406", "6806", "2330"]
-    company_names = {sid: info[sid] for sid in stock_ids if sid in info}
-
-    df = rank_stocks(stock_ids, company_names=company_names)
+    df = rank_stocks(["3406", "6806", "2330"])
     print(df[["rank", "stock_id", "company", "score", "summary"]])
-
     df.to_csv("stock_news_ranking.csv", index=False, encoding="utf-8-sig")
