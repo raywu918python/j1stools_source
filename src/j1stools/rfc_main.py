@@ -177,12 +177,14 @@ def prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_, use_ib=USE_I
 
 
 def train(
-    stocks=parquet_db.query_stocks_no_etf(),
+    stocks=None,
     st="2015-01-01",
     end="2024-01-01",
     trainging_idx=0.8,
     pick_import_feature=False,
 ):
+    if stocks is None:
+        stocks = parquet_db.query_stocks_no_etf()
     print(f"=" * 60, "rfc start")
     keep_latest_ten_files("./model")
     model = gen_rfc_model()
