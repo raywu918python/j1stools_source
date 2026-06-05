@@ -11,25 +11,25 @@ load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
+
 def fetch_google_news(stock_id, company_name="", days=30, max_items=10):
-    query = f'{stock_id} {company_name} 股票 OR 股價 OR 營收 OR 法說 OR 展望 when:{days}d'
+    query = f"{stock_id} {company_name} 股票 OR 股價 OR 營收 OR 法說 OR 展望 when:{days}d"
     encoded = urllib.parse.quote(query)
 
-    url = (
-        "https://news.google.com/rss/search?"
-        f"q={encoded}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-    )
+    url = "https://news.google.com/rss/search?" f"q={encoded}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
 
     feed = feedparser.parse(url)
 
     news = []
     for entry in feed.entries[:max_items]:
-        news.append({
-            "title": entry.get("title", ""),
-            "published": entry.get("published", ""),
-            "link": entry.get("link", ""),
-            "summary": entry.get("summary", "")
-        })
+        news.append(
+            {
+                "title": entry.get("title", ""),
+                "published": entry.get("published", ""),
+                "link": entry.get("link", ""),
+                "summary": entry.get("summary", ""),
+            }
+        )
 
     return news
 
@@ -41,10 +41,7 @@ def rank_stocks_by_news(stocks):
         stock_id = stock["id"]
         company = stock.get("name", "")
         news = fetch_google_news(stock_id, company)
-        all_news[stock_id] = {
-            "company": company,
-            "news": news
-        }
+        all_news[stock_id] = {"company": company, "news": news}
         time.sleep(1)
 
     prompt = f"""
@@ -86,10 +83,7 @@ def rank_stocks_by_news(stocks):
 {json.dumps(all_news, ensure_ascii=False)}
 """
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-    )
+    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
 
     text = response.text.strip()
 
@@ -99,16 +93,30 @@ def rank_stocks_by_news(stocks):
     return json.loads(text)
 
 
-if __name__ == "__main__":
-    stocks = [
-        {"id": "3406", "name": "玉晶光"},
-        {"id": "6806", "name": "森崴能源"},
-        {"id": "2330", "name": "台積電"}
-    ]
-
+def rank_stocks(stock_ids: list[str], company_names: dict[str, str] | None = None) -> pd.DataFrame:
+    """
+    Input:
+        stock_ids: e.g. ["2330", "3406", "6806"]
+        company_names: optional mapping {stock_id: name}, e.g. {"2330": "台積電"}
+    Output:
+        DataFrame sorted by rank, columns: rank, stock_id, company, score, summary
+    """
+    names = company_names or {}
+    stocks = [{"id": sid, "name": names.get(sid, "")} for sid in stock_ids]
     result = rank_stocks_by_news(stocks)
+    df = pd.DataFrame(result["ranking"]).sort_values("rank").reset_index(drop=True)
+    return df[["rank", "stock_id", "company", "score", "summary", "positive_factors", "negative_factors"]]
 
-    df = pd.DataFrame(result["ranking"])
+
+if __name__ == "__main__":
+    INFO_PATH = "/Users/wumingrui/Library/CloudStorage/Dropbox/自學/量化交易/db/info/info.parquet"
+
+    info = pd.read_parquet(INFO_PATH).set_index("stock_id")["name"]
+
+    stock_ids = ["3406", "6806", "2330"]
+    company_names = {sid: info[sid] for sid in stock_ids if sid in info}
+
+    df = rank_stocks(stock_ids, company_names=company_names)
     print(df[["rank", "stock_id", "company", "score", "summary"]])
 
     df.to_csv("stock_news_ranking.csv", index=False, encoding="utf-8-sig")
