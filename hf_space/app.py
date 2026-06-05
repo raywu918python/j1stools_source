@@ -1,5 +1,7 @@
 import os
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
+
+_TW = timezone(timedelta(hours=8))
 from typing import Optional
 
 import numpy as np
@@ -61,7 +63,7 @@ def _read_parquet(url: str) -> pd.DataFrame:
 
 def _load_latest_pred(model: str):
     for delta in range(7):
-        d = (date.today() - timedelta(days=delta)).strftime("%Y-%m-%d")
+        d = (datetime.now(_TW).date() - timedelta(days=delta)).strftime("%Y-%m-%d")
         try:
             return _read_parquet(_pred_url(d, model)), d
         except Exception:
@@ -71,7 +73,7 @@ def _load_latest_pred(model: str):
 
 def _load_latest_backtest(model: str):
     for delta in range(7):
-        d = (date.today() - timedelta(days=delta)).strftime("%Y-%m-%d")
+        d = (datetime.now(_TW).date() - timedelta(days=delta)).strftime("%Y-%m-%d")
         try:
             equity = _read_parquet(_backtest_url(d, model, "equity"))
             trades = _read_parquet(_backtest_url(d, model, "trades"))
