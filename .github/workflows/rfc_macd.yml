@@ -11,6 +11,16 @@ jobs:
     environment: j1s
     steps:
       - uses: actions/checkout@v5
+      - name: Set cache date
+        run: echo "CACHE_DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)" >> $GITHUB_ENV
+      - name: Restore price data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            db/price/
+            db/active_stocks/
+            db/feature_cols/
+          key: price-data-${{ env.CACHE_DATE }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'

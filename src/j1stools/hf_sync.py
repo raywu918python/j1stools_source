@@ -8,6 +8,10 @@ _REPO_ID = os.environ.get("HF_REPO_ID", "raywu918python/j1s-data")
 def pull(folders: list, local_dir="."):
     token = os.environ.get("HF_TOKEN")
     for folder in folders:
+        expected = os.path.join(local_dir, folder)
+        if os.path.isdir(expected) and any(os.scandir(expected)):
+            print(f"[hf_sync] cache hit, skip pull: {folder}")
+            continue
         for attempt in range(3):
             snapshot_download(
                 repo_id=_REPO_ID,

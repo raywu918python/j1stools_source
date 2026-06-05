@@ -9,6 +9,8 @@ jobs:
     environment: j1s
     steps:
       - uses: actions/checkout@v5
+      - name: Set cache date
+        run: echo "CACHE_DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)" >> $GITHUB_ENV
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -19,3 +21,11 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO_ID: raywu918python/j1s-data
         run: python scripts/run_price_update.py
+      - name: Save price data cache
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            db/price/
+            db/active_stocks/
+            db/feature_cols/
+          key: price-data-${{ env.CACHE_DATE }}
