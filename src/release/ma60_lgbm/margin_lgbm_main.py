@@ -36,7 +36,7 @@ def predict(
     end,
 ):
 
-    model = joblib.load("models/lgbm_timeseries_ensemble.joblib")
+    model = joblib.load("models/margin_lgbm.joblib")
     feature_cols = parquet_db.load_feature_cols(MODEL_NAME)
 
     df_feature, df_market = prepare_data(stocks, st, end, model="predict")
@@ -101,7 +101,7 @@ def main():
     if MARGIN_RUN.build in run:
         final_model, feature_cols = train_final_model(df_feature, models)
         update_features(feature_cols)
-        joblib.dump(final_model, "models/lgbm_timeseries_ensemble.joblib")
+        joblib.dump(final_model, "models/margin_lgbm.joblib")
 
     if MARGIN_RUN.predict in run:
         predict(
