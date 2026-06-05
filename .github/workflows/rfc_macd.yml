@@ -26,9 +26,11 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO_ID: raywu918python/j1s-data
+          PYTHONUNBUFFERED: "1"
         run: python scripts/run_rfc_predict.py
       - name: Run backtest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO_ID: raywu918python/j1s-data
+          PYTHONUNBUFFERED: "1"
         run: python scripts/run_rfc_backtest.py
