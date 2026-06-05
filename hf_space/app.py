@@ -187,12 +187,20 @@ def trigger_rfc_macd_6xx(token: str = Query(default="")):
 def trigger_predict_all(token: str = Query(default="")):
     if token != _API_KEY:
         raise HTTPException(status_code=403, detail="Invalid key")
-    results = {
-        "margin_lgbm": _trigger_workflow("margin_lgbm.yml"),
-        "rfc_macd_6xx": _trigger_workflow("rfc_macd.yml"),
-        "rfc_macd_ib_6xx": _trigger_workflow("rfc_ib_macd.yml"),
-    }
+    results = {name: _trigger_workflow(yml) for name, yml in _MODELS.items()}
     return {"ok": all(results.values()), "results": results}
+
+
+_MODELS = {
+    "rfc_macd_6xx":            "rfc_macd.yml",
+    "rfc_macd_ib_6xx":         "rfc_ib_macd.yml",
+    "lgbm_timeseries_ensemble": "margin_lgbm.yml",
+}
+
+
+@app.get("/models")
+def list_models():
+    return {"models": list(_MODELS.keys())}
 
 
 @app.get("/health")

@@ -93,8 +93,16 @@ def rank_stocks_by_news(stocks):
     return json.loads(text)
 
 
-_INFO_PATH = "/Users/wumingrui/Library/CloudStorage/Dropbox/自學/量化交易/db/info/info.parquet"
-_info = pd.read_parquet(_INFO_PATH).set_index("stock_id")["name"]
+_DEFAULT_INFO_PATH = "/Users/wumingrui/Library/CloudStorage/Dropbox/自學/量化交易/db/info/info.parquet"
+_info_cache: pd.Series | None = None
+
+
+def _load_info() -> pd.Series:
+    global _info_cache
+    if _info_cache is None:
+        path = os.getenv("INFO_PARQUET_PATH", _DEFAULT_INFO_PATH)
+        _info_cache = pd.read_parquet(path).set_index("stock_id")["name"]
+    return _info_cache
 
 
 def rank_stocks(stock_ids: list[str]) -> pd.DataFrame:
@@ -103,7 +111,8 @@ def rank_stocks(stock_ids: list[str]) -> pd.DataFrame:
     Output: DataFrame sorted by rank
             columns: rank, stock_id, company, score, summary, positive_factors, negative_factors
     """
-    stocks = [{"id": sid, "name": _info.get(sid, "")} for sid in stock_ids]
+    info = _load_info()
+    stocks = [{"id": sid, "name": info.get(sid, "")} for sid in stock_ids]
     result = rank_stocks_by_news(stocks)
     df = pd.DataFrame(result["ranking"]).sort_values("rank").reset_index(drop=True)
     return df[["rank", "stock_id", "company", "score", "summary", "positive_factors", "negative_factors"]]
