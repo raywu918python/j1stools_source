@@ -38,6 +38,40 @@ from j1stools.train_flow import (
 )
 from j1stools.train_function import rfc_train_function
 
+import numpy as np
+
+USE_IB_FEATURES = True  # True → 訓練 rfc_macd_ib_6xx.joblib，False → 原本 rfc_macd_6xx.joblib
+
+
+def _add_ib_features(df: pd.DataFrame, stocks: list, st: str, end: str) -> pd.DataFrame:
+    ib = parquet_db.query_ib(stocks, st, end)
+    ib["net"] = ib["buy"] - ib["sell"]
+    foreign = (
+        ib[ib["name"] == "Foreign_Investor"].groupby(["date", "stock_id"])["net"].sum().reset_index(name="_net_foreign")
+    )
+    df = df.merge(foreign, on=["date", "stock_id"], how="left")
+    df["_net_foreign"] = df["_net_foreign"].fillna(0)
+
+    g = df.groupby("stock_id")
+    df["_net_foreign"] = g["_net_foreign"].transform(lambda x: x.shift(1))
+
+    vol_denom = g["volume"].transform(lambda x: x.rolling(20, min_periods=1).mean()).replace(0, np.nan)
+    df["f_ib_net_foreign_pct"] = (df["_net_foreign"] / vol_denom).clip(-5, 5)
+
+    def _zscore(s, window=120, min_periods=20):
+        m = s.rolling(window, min_periods=min_periods).mean()
+        std = s.rolling(window, min_periods=min_periods).std().replace(0, np.nan)
+        return (s - m) / std
+
+    _5d = g["_net_foreign"].transform(lambda x: x.rolling(5).sum())
+    _10d = g["_net_foreign"].transform(lambda x: x.rolling(10).sum())
+    df["f_ib_net_foreign_5d_z"] = _5d.groupby(df["stock_id"]).transform(_zscore)
+    df["f_ib_net_foreign_10d_z"] = _10d.groupby(df["stock_id"]).transform(_zscore)
+    df["f_ib_net_foreign_streak"] = g["_net_foreign"].transform(
+        lambda x: (x.groupby((x <= 0).cumsum()).cumcount() + 1).where(x > 0, 0)
+    )
+    return df.drop(columns=["_net_foreign"])
+
 
 def predict_today():
     # stocks = random.sample(parquet_db.query_stocks_ids_list(), 100)
@@ -128,14 +162,15 @@ def optimize():
     )
 
 
-def prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_):
+def prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_, use_ib=USE_IB_FEATURES):
     df = parquet_db.query_price(stocks, st, end)
     print("filter.before:", df.shape)
     df = feature_builder.gen_feature(df, FEATURE_TYPE.macd)
+    if use_ib:
+        df = _add_ib_features(df, stocks, st, end)
     df = label_builder.profit_label(df)
     df = data_filter.filter(df, True, FILTER_TYPE.none_, atr_filter_type)
     print("filter.after:", df.shape)
-    # 資料在這裡刪
     df.set_index(["date", "stock_id"], inplace=True)
     df.sort_index(level=["date", "stock_id"], inplace=True)
     return df
@@ -144,13 +179,13 @@ def prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_):
 def train(
     stocks=parquet_db.query_stocks_no_etf(),
     st="2015-01-01",
-    end="2099-01-01",
+    end="2024-01-01",
     trainging_idx=0.8,
     pick_import_feature=False,
 ):
     print(f"=" * 60, "rfc start")
     keep_latest_ten_files("./model")
-    model = gen_rfc_model() if model is None else model
+    model = gen_rfc_model()
 
     df = prepare_data(stocks, st, end)
 
@@ -191,17 +226,23 @@ def predict(stocks, st, end):
 
 
 def model_release():
-    stocks = parquet_db.query_stocks_ids_list()
+    model_name = "rfc_macd_ib_6xx" if USE_IB_FEATURES else "rfc_macd_6xx"
+    stocks = parquet_db.activate_stocks()
     st = "2015-01-01"
     end = "2024-01-01"
-    df = prepare_data(stocks, st, end)
+    df = prepare_data(stocks, st, end, use_ib=USE_IB_FEATURES)
     x, _, y, _ = rfc_split_date(df, is_gen_train=True, trainging_idx=1)
     x = x[[col for col in x.columns if col.startswith("f_")]] if x is not None else None
     x, y = drop_na_inf(x, y)
     model = gen_rfc_model()
     model.fit(x, y)
-    joblib.dump(model, "models/rfc_macd_6xx.joblib")
+    joblib.dump(model, f"models/{model_name}.joblib")
+    print(f"saved → models/{model_name}.joblib")
 
+
+if __name__ == "__main__":
+    # train()
+    model_release()
 
 # predict_today()
 # main()
