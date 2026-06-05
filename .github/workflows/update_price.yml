@@ -9,8 +9,10 @@ jobs:
     environment: j1s
     steps:
       - uses: actions/checkout@v5
-      - name: Set cache date
-        run: echo "CACHE_DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)" >> $GITHUB_ENV
+      - name: Set cache key
+        run: |
+          echo "CACHE_DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)" >> $GITHUB_ENV
+          echo "CACHE_KEY=$(TZ=Asia/Taipei date +%Y-%m-%d-%H)" >> $GITHUB_ENV
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -28,4 +30,4 @@ jobs:
             db/price/
             db/active_stocks/
             db/feature_cols/
-          key: price-data-${{ env.CACHE_DATE }}
+          key: price-data-${{ env.CACHE_KEY }}
