@@ -18,7 +18,7 @@ app.add_middleware(
 )
 
 REPO_ID = "raywu918python/j1s-data"
-DEFAULT_MODEL = "lgbm_timeseries_ensemble"
+DEFAULT_MODEL = "margin_lgbm"
 _API_KEY = os.environ.get("API_KEY", "")
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
 _GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -32,17 +32,11 @@ def _verify_key(key: str = Security(_key_header)):
 
 
 def _pred_url(date_str: str, model: str) -> str:
-    return (
-        f"https://huggingface.co/datasets/{REPO_ID}/resolve/main"
-        f"/db/predictions/{model}/pred_{date_str}.parquet"
-    )
+    return f"https://huggingface.co/datasets/{REPO_ID}/resolve/main" f"/db/predictions/{model}/pred_{date_str}.parquet"
 
 
 def _backtest_url(date_str: str, model: str, kind: str) -> str:
-    return (
-        f"https://huggingface.co/datasets/{REPO_ID}/resolve/main"
-        f"/db/backtest/{model}/{kind}_{date_str}.parquet"
-    )
+    return f"https://huggingface.co/datasets/{REPO_ID}/resolve/main" f"/db/backtest/{model}/{kind}_{date_str}.parquet"
 
 
 def _to_records(df: pd.DataFrame) -> list:
@@ -59,6 +53,7 @@ def _to_records(df: pd.DataFrame) -> list:
 def _read_parquet(url: str) -> pd.DataFrame:
     headers = {"Authorization": f"Bearer {_HF_TOKEN}"} if _HF_TOKEN else {}
     import io, httpx
+
     r = httpx.get(url, headers=headers, follow_redirects=True, timeout=30)
     r.raise_for_status()
     return pd.read_parquet(io.BytesIO(r.content))
@@ -149,6 +144,7 @@ def get_backtest_by_date(date_str: str, model: Optional[str] = Query(default=DEF
 
 def _trigger_workflow(workflow_file: str) -> bool:
     import httpx
+
     url = f"https://api.github.com/repos/{_GITHUB_REPO}/actions/workflows/{workflow_file}/dispatches"
     r = httpx.post(
         url,
@@ -192,9 +188,9 @@ def trigger_predict_all(token: str = Query(default="")):
 
 
 _MODELS = {
-    "rfc_macd_6xx":            "rfc_macd.yml",
-    "rfc_macd_ib_6xx":         "rfc_ib_macd.yml",
-    "lgbm_timeseries_ensemble": "margin_lgbm.yml",
+    "rfc_macd_6xx": "rfc_macd.yml",
+    "rfc_macd_ib_6xx": "rfc_ib_macd.yml",
+    "margin_lgbm": "margin_lgbm.yml",
 }
 
 

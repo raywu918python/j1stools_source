@@ -70,7 +70,7 @@ def predict(
     end,
 ):
 
-    models = joblib.load("models/lgbm_timeseries_ensemble.joblib")
+    models = joblib.load("models/margin_lgbm.joblib")
 
     df = prepare_data(stocks, st, end)
 
@@ -93,7 +93,7 @@ def main():
     # models, scores = train(stocks=stocks, st=st, end=end)
 
     start_backtest(stocks=stocks, st=st, end=end)
-    # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
+    # joblib.dump(models, "models/margin_lgbm.joblib")
     # predict(stocks=stocks, st=st, end=end)
 
 
@@ -204,11 +204,11 @@ def train(
         params=params,
         n_splits=5,
     )
-    joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
+    joblib.dump(models, "models/margin_lgbm.joblib")
     # models, scores = walk_forward_train(df_feature, params)
 
     # models, scores = walk_forward_rolling(df_feature, params, train_years=3)
-    # joblib.dump(models, "models/lgbm_timeseries_ensemble.joblib")
+    # joblib.dump(models, "models/margin_lgbm.joblib")
     raise Exception("未完成")
 
 

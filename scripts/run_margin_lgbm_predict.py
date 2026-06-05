@@ -23,7 +23,7 @@ st = (datetime.now(_TW) - timedelta(days=10)).strftime("%Y-%m-%d")
 
 df = margin_lgbm_main.predict(stocks, st, "2099-01-01")
 
-MODEL_NAME = "lgbm_timeseries_ensemble"
+MODEL_NAME = "margin_lgbm"
 
 if df is not None:
     out_dir = f"db/predictions/{MODEL_NAME}"

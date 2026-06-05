@@ -15,7 +15,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          pip install -q huggingface_hub
+          pip install -q "huggingface_hub>=0.24"
           python - <<'EOF'
           import os
           from huggingface_hub import HfApi
