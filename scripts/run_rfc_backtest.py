@@ -56,6 +56,17 @@ def backtest(st="2024-01-01", end="2099-01-01"):
 
 portfolio_value, trades_df, open_df, close_df, market_df = backtest(st="2024-01-01")
 
+if not trades_df.empty:
+    pv = portfolio_value.copy()
+    pv["date"] = pd.to_datetime(pv["date"]).dt.normalize()
+    trades_df["entry_date"] = pd.to_datetime(trades_df["entry_date"]).dt.normalize()
+    trades_df = trades_df.merge(
+        pv[["date", "total"]].rename(columns={"date": "entry_date", "total": "_pv"}),
+        on="entry_date", how="left"
+    )
+    trades_df["weight"] = (trades_df["cost"] / trades_df["_pv"]).round(4)
+    trades_df = trades_df.drop(columns=["_pv"])
+
 os.makedirs(out_dir, exist_ok=True)
 portfolio_value.to_parquet(f"{out_dir}/equity_{today}.parquet", index=False)
 trades_df.to_parquet(f"{out_dir}/trades_{today}.parquet", index=False)
