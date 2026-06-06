@@ -19,7 +19,7 @@ def pull():
     sys.path.insert(0, "src")
     from j1stools.hf_sync import pull
 
-    pull(["db/price", "db/ib", "db/margin", "db/active_stocks", "db/feature_cols"])
+    pull(["db/price", "db/ib", "db/margin", "db/active_stocks", "db/feature_cols", "db/backtest"])
 
 
 if __name__ == "__main__":
