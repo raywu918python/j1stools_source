@@ -17,7 +17,7 @@ from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silhouette_score
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler
 
 from j1stools import parquet_db
 from j1stools.margin_ibbuysell_feature import add_feature
@@ -395,10 +395,11 @@ class IBMarginHDBSCAN:
         print(f"使用特徵：{len(avail)} 個，訓練樣本：{len(df):,} 筆")
 
         self._fitted_features = avail
+        # RobustScaler（中位數/IQR）對 raw 特徵的極端值更穩健
         self.preprocessor = Pipeline(
             [
                 ("imputer", SimpleImputer(strategy="median")),
-                ("scaler", StandardScaler()),
+                ("scaler", RobustScaler()),
                 ("pca", PCA(n_components=min(10, len(avail)), random_state=42)),
             ]
         )
@@ -561,19 +562,30 @@ def evaluate_clustering(
     # ── 幾何指標 ──────────────────────────────────────────────────── #
     if len(df) > sample_n:
         idx = pd.Series(range(len(df))).sample(sample_n, random_state=42).values
-        sil = silhouette_score(X_pca[idx], labels[idx])
+        labels_sil = labels[idx]
+        X_sil = X_pca[idx]
     else:
-        sil = silhouette_score(X_pca, labels)
+        labels_sil = labels
+        X_sil = X_pca
 
-    db = davies_bouldin_score(X_pca, labels)
-    ch = calinski_harabasz_score(X_pca, labels)
+    n_unique = len(set(labels_sil))
+    if n_unique >= 2:
+        sil = silhouette_score(X_sil, labels_sil)
+        db = davies_bouldin_score(X_pca, labels)
+        ch = calinski_harabasz_score(X_pca, labels)
+    else:
+        sil = db = ch = float("nan")
+        print(f"警告：只找到 {n_unique} 個叢集（全為噪聲？），幾何指標無法計算")
 
     print(f"\n{'='*55}")
     print(f"叢集幾何品質指標")
     print(f"{'='*55}")
-    print(f"  Silhouette score  : {sil:.4f}  （> 0.2 OK，> 0.5 佳）")
-    print(f"  Davies-Bouldin    : {db:.4f}  （越低越好）")
-    print(f"  Calinski-Harabasz : {ch:.1f}  （越高越好）")
+    if np.isnan(sil):
+        print(f"  Silhouette / DB / CH : N/A")
+    else:
+        print(f"  Silhouette score  : {sil:.4f}  （> 0.2 OK，> 0.5 佳）")
+        print(f"  Davies-Bouldin    : {db:.4f}  （越低越好）")
+        print(f"  Calinski-Harabasz : {ch:.1f}  （越高越好）")
 
     # ── 金融實用性：各持有天數報酬 + Kruskal-Wallis 檢定 ─────────── #
     df_eval = df.assign(cluster=labels).copy()
@@ -594,7 +606,12 @@ def evaluate_clustering(
         col = f"ret_{hold}d"
         df_eval[col] = df_eval.groupby("stock_id")["close"].transform(lambda x: x.shift(-hold) / x - 1)
         groups = [df_eval[df_eval["cluster"] == k][col].dropna().values for k in sorted(df_eval["cluster"].unique())]
-        kw_stat, kw_p = stats.kruskal(*groups)
+        if len(groups) >= 2:
+            kw_stat, kw_p = stats.kruskal(*groups)
+            kw_label = f"p={kw_p:.4f} {'★顯著' if kw_p < 0.05 else '（不顯著）'}"
+        else:
+            kw_p = float("nan")
+            kw_label = "N/A（叢集數 < 2）"
 
         stats_df = (
             df_eval.dropna(subset=[col])
@@ -602,7 +619,7 @@ def evaluate_clustering(
             .agg(count="count", win_rate=lambda x: (x > 0).mean(), mean="mean", median="median")
         )
         print(f"\n{'='*55}")
-        print(f"持有 {hold} 日  |  Kruskal-Wallis p={kw_p:.4f} {'★顯著' if kw_p < 0.05 else '（不顯著）'}")
+        print(f"持有 {hold} 日  |  Kruskal-Wallis {kw_label}")
         print(f"{'='*55}")
         disp = stats_df.copy()
         disp["win_rate"] = disp["win_rate"].map("{:.1%}".format)
@@ -719,10 +736,14 @@ def plot_clusters(clf: "IBMarginClassifier", df: pd.DataFrame, sample_n: int = 3
     plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
 
     X_full = df[clf._fitted_features].values
-    X_pca = clf.pipeline[:-1].transform(X_full)
-    labels = clf.pipeline.predict(X_full)
+    if hasattr(clf, "preprocessor"):  # IBMarginHDBSCAN
+        X_pca = clf.preprocessor.transform(X_full)
+        labels = clf.predict(df).values
+    else:
+        X_pca = clf.pipeline[:-1].transform(X_full)
+        labels = clf.pipeline.predict(X_full)
     n_k = clf.n_clusters
-    palette = plt.cm.tab10.colors[:n_k]
+    palette = plt.cm.tab20.colors[: max(n_k, 1)]
 
     sidx = (
         pd.Series(range(len(df))).sample(sample_n, random_state=42).values if len(df) > sample_n else np.arange(len(df))
@@ -732,17 +753,23 @@ def plot_clusters(clf: "IBMarginClassifier", df: pd.DataFrame, sample_n: int = 3
     fig = plt.figure(figsize=(18, 10))
     gs = gridspec.GridSpec(2, 4, figure=fig, hspace=0.45, wspace=0.4)
 
+    unique_labels = sorted(df_plot["cluster"].unique())
+
+    def _cluster_color(k):
+        return "lightgray" if k == -1 else palette[k % len(palette)]
+
     # ── 1. PCA 2D 散點圖 ─────────────────────────────────────────── #
     ax_pca = fig.add_subplot(gs[0, :2])
-    for k in range(n_k):
+    for k in unique_labels:
         mask = labels[sidx] == k
+        label_str = "噪聲" if k == -1 else f"叢集 {k}"
         ax_pca.scatter(
             X_pca[sidx][mask, 0],
             X_pca[sidx][mask, 1],
-            c=[palette[k]],
-            alpha=0.25,
+            c=[_cluster_color(k)],
+            alpha=0.15 if k == -1 else 0.25,
             s=4,
-            label=f"叢集 {k}",
+            label=label_str,
         )
     ax_pca.set_title("PCA 2D 散點圖（PC1 vs PC2）")
     ax_pca.set_xlabel("PC1")
@@ -751,68 +778,80 @@ def plot_clusters(clf: "IBMarginClassifier", df: pd.DataFrame, sample_n: int = 3
 
     # ── 2. Feature Heatmap ────────────────────────────────────────── #
     ax_heat = fig.add_subplot(gs[0, 2:])
-    KEY_FEAT = {
-        "f_net_foreign_pct_xrank": "外資",
-        "f_net_trust_pct_xrank": "投信",
-        "f_net_institutional_total_pct_xrank": "法人合計",
-        "f_net_institutional_total_streak": "連買天",
-        "f_margin_balance_change_pct_xrank": "融資變化",
-        "f_short_margin_ratio_xrank": "券資比",
-        "f_return_5d_xrank": "5日報酬",
-        "f_relative_strength_20d_xrank": "相對強度",
-    }
-    cols = [c for c in KEY_FEAT if c in clf.cluster_profiles.columns]
-    profile = clf.cluster_profiles[cols].rename(columns=KEY_FEAT)
-    data = profile.values.astype(float)
-    im = ax_heat.imshow(data, aspect="auto", cmap="RdYlGn", vmin=0, vmax=1)
-    ax_heat.set_xticks(range(len(profile.columns)))
-    ax_heat.set_xticklabels(profile.columns, rotation=40, ha="right", fontsize=9)
-    ax_heat.set_yticks(range(n_k))
-    ax_heat.set_yticklabels([f"叢集 {k}" for k in profile.index])
-    for i in range(n_k):
-        for j in range(len(profile.columns)):
-            v = data[i, j]
-            if not np.isnan(v):
-                ax_heat.text(
-                    j,
-                    i,
-                    f"{v:.2f}",
-                    ha="center",
-                    va="center",
-                    fontsize=7,
-                    color="white" if (v < 0.3 or v > 0.7) else "black",
-                )
-    plt.colorbar(im, ax=ax_heat, fraction=0.046)
-    ax_heat.set_title("叢集特徵 Heatmap\n（綠=高分位，紅=低分位）")
+    # 支援 xrank 版和 raw 版，優先用 xrank
+    _KEY_CANDIDATES = [
+        ("f_net_foreign_pct_xrank", "f_net_foreign_pct", "外資"),
+        ("f_net_trust_pct_xrank", "f_net_trust_pct", "投信"),
+        ("f_net_institutional_total_pct_xrank", "f_net_institutional_total_pct", "法人合計"),
+        ("f_net_institutional_total_streak", "f_net_institutional_total_streak", "連買天"),
+        ("f_margin_balance_change_pct_xrank", "f_margin_balance_change_pct", "融資變化"),
+        ("f_short_margin_ratio_xrank", "f_short_margin_ratio", "券資比"),
+        ("f_return_5d_xrank", "f_return_5d", "5日報酬"),
+        ("f_relative_strength_20d_xrank", "f_relative_strength_20d", "相對強度"),
+    ]
+    KEY_FEAT = {}
+    for xr, raw, lbl in _KEY_CANDIDATES:
+        if xr in clf.cluster_profiles.columns:
+            KEY_FEAT[xr] = lbl
+        elif raw in clf.cluster_profiles.columns:
+            KEY_FEAT[raw] = lbl
+
+    cols = list(KEY_FEAT.keys())
+    if cols:
+        profile = clf.cluster_profiles[cols].rename(columns=KEY_FEAT)
+        n_rows = len(profile)
+        data = profile.values.astype(float)
+        im = ax_heat.imshow(
+            data,
+            aspect="auto",
+            cmap="RdYlGn",
+            vmin=data[np.isfinite(data)].min() if np.isfinite(data).any() else 0,
+            vmax=data[np.isfinite(data)].max() if np.isfinite(data).any() else 1,
+        )
+        ax_heat.set_xticks(range(len(profile.columns)))
+        ax_heat.set_xticklabels(profile.columns, rotation=40, ha="right", fontsize=9)
+        ax_heat.set_yticks(range(n_rows))
+        ax_heat.set_yticklabels([("噪聲" if k == -1 else f"叢集 {k}") for k in profile.index])
+        for i in range(n_rows):
+            for j in range(len(profile.columns)):
+                v = data[i, j]
+                if not np.isnan(v):
+                    ax_heat.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7)
+        plt.colorbar(im, ax=ax_heat, fraction=0.046)
+    ax_heat.set_title("叢集特徵 Heatmap")
 
     # ── 3. Violin plots ───────────────────────────────────────────── #
-    violin_feats = [
-        ("f_net_foreign_pct_xrank", "外資"),
-        ("f_net_institutional_total_pct_xrank", "法人合計"),
-        ("f_return_5d_xrank", "5日報酬"),
-        ("f_short_margin_ratio_xrank", "券資比"),
+    _VIOLIN_CANDIDATES = [
+        ("f_net_foreign_pct_xrank", "f_net_foreign_pct", "外資"),
+        ("f_net_institutional_total_pct_xrank", "f_net_institutional_total_pct", "法人合計"),
+        ("f_return_5d_xrank", "f_return_5d", "5日報酬"),
+        ("f_short_margin_ratio_xrank", "f_short_margin_ratio", "券資比"),
     ]
+    violin_feats = []
+    for xr, raw, lbl in _VIOLIN_CANDIDATES:
+        if xr in df_plot.columns:
+            violin_feats.append((xr, lbl))
+        elif raw in df_plot.columns:
+            violin_feats.append((raw, lbl))
+
+    real_labels = [k for k in unique_labels if k >= 0]
     for col_idx, (feat, name) in enumerate(violin_feats):
         ax_v = fig.add_subplot(gs[1, col_idx])
-        if feat not in df_plot.columns:
-            continue
-        # 過濾掉空群（如叢集4沒有融資融券資料）
-        data_by_k = [(k, df_plot[df_plot["cluster"] == k][feat].dropna().values) for k in range(n_k)]
+        data_by_k = [(k, df_plot[df_plot["cluster"] == k][feat].dropna().values) for k in real_labels]
         data_by_k = [(k, v) for k, v in data_by_k if len(v) > 1]
         if not data_by_k:
+            ax_v.set_title(name)
             continue
         positions = [k for k, _ in data_by_k]
         parts = ax_v.violinplot([v for _, v in data_by_k], positions=positions, showmedians=True, showextrema=False)
         for j, body in enumerate(parts["bodies"]):
-            body.set_facecolor(palette[positions[j]])
+            body.set_facecolor(_cluster_color(positions[j]))
             body.set_alpha(0.7)
         parts["cmedians"].set_color("black")
         ax_v.set_title(name)
         ax_v.set_xlabel("叢集")
         ax_v.set_xticks(positions)
         ax_v.set_xticklabels([str(k) for k in positions])
-        ax_v.set_ylim(-0.05, 1.05)
-        ax_v.axhline(0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
 
     fig.suptitle("IB + Margin 叢集視覺化", fontsize=14)
     plt.tight_layout()
@@ -1119,47 +1158,171 @@ def find_optimal_gmm_components(
     return result
 
 
-if __name__ == "__main__":
-    MIN_ATR = 0.02  # 排除日均波幅 < 2% 的低流動性觀測值
+def plot_pca(
+    df: pd.DataFrame,
+    features: list | None = None,
+    sample_n: int = 50_000,
+    use_robust: bool = False,
+):
+    """
+    訓練前觀察資料結構：PCA 降到 2D/3D 看有沒有自然群落。
 
-    # 實驗：改用原始值（不 xrank）— 注意大小股規模偏差
-    clf, _ = run(
-        st="2020-01-01",
-        end="2023-12-31",
-        model="hdbscan",
-        min_atr_pct=MIN_ATR,
-        n_clusters=7500,
-        retrain=True,
-        features=CLASSIFY_FEATURES_RAW,
+    有明顯分離的球團 → HDBSCAN 可用。
+    一大坨均勻雲     → 用 GMM/KMeans 即可。
+
+    Parameters
+    ----------
+    use_robust : True = RobustScaler（適合 raw 特徵），False = StandardScaler（適合 xrank）
+    """
+    import matplotlib.pyplot as plt
+
+    feats = features or CLASSIFY_FEATURES
+    avail = [c for c in feats if c in df.columns]
+
+    scaler = RobustScaler() if use_robust else StandardScaler()
+    pre = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", scaler),
+            ("pca", PCA(n_components=3, random_state=42)),
+        ]
     )
+    X3 = pre.fit_transform(df[avail].values)
 
-    # 評估：2024 之後的 out-of-sample 資料，同樣過濾
+    if len(df) > sample_n:
+        idx = pd.Series(range(len(df))).sample(sample_n, random_state=42).values
+        X3 = X3[idx]
+
+    var = pre.named_steps["pca"].explained_variance_ratio_
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    axes[0].scatter(X3[:, 0], X3[:, 1], alpha=0.05, s=2, color="steelblue")
+    axes[0].set_xlabel(f"PC1 ({var[0]:.1%})")
+    axes[0].set_ylabel(f"PC2 ({var[1]:.1%})")
+    axes[0].set_title("PC1 vs PC2")
+
+    axes[1].scatter(X3[:, 0], X3[:, 2], alpha=0.05, s=2, color="tomato")
+    axes[1].set_xlabel(f"PC1 ({var[0]:.1%})")
+    axes[1].set_ylabel(f"PC3 ({var[2]:.1%})")
+    axes[1].set_title("PC1 vs PC3")
+
+    scaler_name = "RobustScaler" if use_robust else "StandardScaler"
+    fig.suptitle(f"PCA 資料結構觀察（{scaler_name}，{len(X3):,} 筆）", fontsize=13)
+    plt.tight_layout()
+    plt.show()
+    print(f"PC1~3 累積解釋變異：{sum(var):.1%}")
+
+
+def release_model(
+    n_components: int = N_CLUSTERS,
+    min_atr_pct: float = 0.02,
+) -> IBMarginGMM:
+    """
+    正式發布 GMM 模型：用 2015-01-01 ~ 2023-12-31 全量資料訓練並儲存。
+    無 train/test split — 這是最終上線版本。
+    """
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
-    df_test = load_data(stocks, st="2024-01-01", min_atr_pct=MIN_ATR)
-    df_test["cluster"] = clf.predict(df_test)
-
-    evaluate_clustering(clf=clf, df=df_test)
-    analyze_cluster_returns(df_test, hold_days=5)
-    analyze_cluster_returns(df_test, hold_days=10)
-    analyze_cluster_returns(df_test, hold_days=20)
-
-    # 各叢集出現頻率（每日有幾天、幾支）
-    total_days = df_test["date"].nunique()
-    freq = df_test.groupby("cluster").agg(
-        appear_days=("date", "nunique"),
-        avg_stocks_per_day=("stock_id", lambda x: x.groupby(df_test.loc[x.index, "date"]).count().mean()),
+    print(f"Release GMM  n_components={n_components}  訓練期：2015-01-01 ~ 2023-12-31")
+    clf, _ = run(
+        st="2015-01-01",
+        end="2023-12-31",
+        model="gmm",
+        n_clusters=n_components,
+        min_atr_pct=min_atr_pct,
+        retrain=True,
     )
-    freq["appear_rate"] = freq["appear_days"] / total_days
-    print(f"\n{'='*55}")
-    print(f"各叢集出現頻率（共 {total_days} 個交易日）")
-    print(f"{'='*55}")
-    print(freq.to_string())
-
-    # 今日預測（實際使用）
-    df_today = predict_today(model="gmm")
-
-    plot_clusters(clf, df_test)
+    return clf
 
 
-# df_today = predict_today()
-# candidates = df_today[df_today["cluster"] == 2]
+def eval_oos(
+    clf: IBMarginGMM | None = None,
+    st: str = "2024-01-01",
+    min_atr_pct: float = 0.02,
+    hold_days_list: list = [5, 10, 20],
+) -> pd.DataFrame:
+    """
+    OOS 驗證：用已 release 的模型預測 st 之後的資料，分析各叢集報酬。
+
+    Parameters
+    ----------
+    clf : 已訓練的 IBMarginGMM；None 則自動從 pkl 載入
+    st  : OOS 起始日（預設 2024-01-01）
+    """
+    if clf is None:
+        clf = IBMarginGMM.load()
+    stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
+    df = load_data(stocks, st=st, min_atr_pct=min_atr_pct)
+    df["cluster"] = clf.predict(df)
+    proba = clf.predict_proba(df)
+    df["max_prob"] = proba.max(axis=1)
+
+    print(f"\nOOS 期間：{st} ~ {df['date'].max().date()}  共 {df['date'].nunique()} 個交易日")
+    clf.describe_clusters(df)
+
+    for hold in hold_days_list:
+        analyze_cluster_returns(df, hold_days=hold)
+
+    evaluate_clustering(clf=clf, df=df)
+    plot_clusters(clf, df)
+    return df
+
+
+# 訓練/評估腳本：
+#   scripts/run_ib_margin_gmm.py     — GMM 正式模型
+#   scripts/run_ib_margin_hdbscan.py — HDBSCAN raw 特徵實驗
+
+if __name__ == "__main__":
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    MIN_ATR = 0.02
+    TRAIN_ST, TRAIN_END, EVAL_ST = "2015-01-01", "2023-12-31", "2024-01-01"
+    FEATURES = None  # None = CLASSIFY_FEATURES（xrank），或換成 CLASSIFY_FEATURES_RAW 實驗
+
+    # ── 切換模式 ──────────────────────────────────────────────────────────── #
+    #
+    #  experiment   : 【開發用】訓練 TRAIN_ST~TRAIN_END，立即對 EVAL_ST~ 跑報酬分析
+    #                 加新特徵、調整參數時用這個，不會覆蓋 release 的 pkl
+    #                 改 FEATURES 變數可以快速切換特徵組
+    #
+    #  release      : 【發布用】用 2015-01-01~2023-12-31 全量重訓並存 pkl
+    #                 確認特徵、參數都 OK 後才跑，會覆蓋正式模型
+    #
+    #  eval_oos     : 【驗證用】載入已 release 的 pkl，對 EVAL_ST~ 做 OOS 分析
+    #                 不重新訓練，只看模型在未來資料的表現
+    #
+    #  release+eval : 【一鍵】release 完接著跑 eval_oos
+    #
+    #  pca          : 【探索用】觀察特徵在 PCA 2D/3D 的分布，看有沒有自然群落
+    #                 換 FEATURES 可以比較 xrank vs raw 的資料結構差異
+    #
+    MODE = "release+eval"
+    # ─────────────────────────────────────────────────────────────────────── #
+
+    stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
+
+    if MODE == "experiment":
+        # 訓練 + 立刻測試（快速驗證新特徵用）
+        clf, _ = run(st=TRAIN_ST, end=TRAIN_END, model="gmm", min_atr_pct=MIN_ATR, retrain=True, features=FEATURES)
+        df_test = load_data(stocks, st=EVAL_ST, min_atr_pct=MIN_ATR)
+        df_test["cluster"] = clf.predict(df_test)
+        clf.describe_clusters(df_test)
+        analyze_cluster_returns(df_test, hold_days=5)
+        analyze_cluster_returns(df_test, hold_days=10)
+        evaluate_clustering(clf=clf, df=df_test)
+        plot_clusters(clf, df_test)
+
+    elif MODE == "release":
+        release_model(min_atr_pct=MIN_ATR)
+
+    elif MODE == "eval_oos":
+        eval_oos(st=EVAL_ST, min_atr_pct=MIN_ATR)
+
+    elif MODE == "release+eval":
+        clf = release_model(min_atr_pct=MIN_ATR)
+        eval_oos(clf=clf, st=EVAL_ST, min_atr_pct=MIN_ATR)
+
+    elif MODE == "pca":
+        df = load_data(stocks, TRAIN_ST, TRAIN_END, min_atr_pct=MIN_ATR)
+        plot_pca(df, features=FEATURES or CLASSIFY_FEATURES_RAW, use_robust=True)
