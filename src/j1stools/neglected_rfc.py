@@ -30,6 +30,7 @@ from j1stools.neglected_stock_classify import (
 )
 
 RFC_MODEL_PATH = "db/models/neglected_rfc.pkl"
+PROFIT_TARGET = 0.10  # 與 profit_label 預設一致
 
 # RFC 特徵：NEGLECTED_FEATURES（GMM 用的技術面）+ GMM 沒用的維度
 # prob_k 是 NEGLECTED_FEATURES 的非線性組合，移除以避免冗餘
@@ -87,18 +88,26 @@ def build_dataset(
     df_price_hl["date"] = pd.to_datetime(df_price_hl["date"])
     df = df.merge(df_price_hl[["date", "stock_id", "high", "low"]], on=["date", "stock_id"], how="left")
 
-    # 未來收盤報酬（eval_rfc 回測用）
+    # 未來收盤報酬（累積報酬用）
     df["future_return"] = df.groupby("stock_id")["close"].transform(lambda x: x.shift(-hold_days) / x - 1)
 
-    # profit_label：持有期間任何一天碰到目標就算成功（2=達標, 1=停損, 0=盤整）
-    df = profit_label(df, hold_days=hold_days)
-    df["Y"] = (df["target"] == 2).astype(int)
+    # profit_label：0=盤整, 1=停損, 2=達標（三類，保留原始語意）
+    # 注意：profit_label 內部會計算並 drop 自己的 max_ret，所以必須在它之後再算我們的
+    df = profit_label(df, hold_days=hold_days, profit_target=PROFIT_TARGET)
+    df["Y"] = df["target"].astype(int)  # 三類：0/1/2
+
+    # 持有期間最高報酬（win_rate 指標，與 profit_label 對齊；在 drop high 前計算）
+    future_max = df.groupby("stock_id")["high"].transform(
+        lambda x: x.shift(-hold_days).rolling(window=hold_days, min_periods=1).max()
+    )
+    df["max_ret"] = (future_max - df["close"]) / df["close"]
 
     # dropna 用 future_return 而非 target（profit_label 對末端列不會輸出 NaN）
     df = df.dropna(subset=["future_return"]).drop(columns=["target", "high", "low"], errors="ignore")
 
+    n2 = (df["Y"] == 2).mean()
     cluster_info = f"叢集 {clusters}" if clusters is not None else "全叢集"
-    print(f"資料集：{len(df):,} 筆  正樣本(達標)：{df['Y'].mean():.1%}  {cluster_info}  持有 {hold_days} 日")
+    print(f"資料集：{len(df):,} 筆  達標(2)：{n2:.1%}  {cluster_info}  持有 {hold_days} 日")
     return df
 
 
@@ -125,8 +134,8 @@ def train_rfc(
     rfc.fit(X, y)
     rfc._fitted_features = avail
 
-    auc = roc_auc_score(y, rfc.predict_proba(X)[:, 1])
-    print(f"訓練集 AUC：{auc:.4f}（in-sample，供參考）")
+    auc = roc_auc_score(y, rfc.predict_proba(X), multi_class="ovr", average="macro")
+    print(f"訓練集 AUC（macro OvR）：{auc:.4f}（in-sample，供參考）")
     return rfc
 
 
@@ -141,23 +150,76 @@ def train_xgb(
     X = df_train[avail].fillna(0.5).values
     y = df_train["Y"].values
 
-    scale = (y == 0).sum() / (y == 1).sum()
     xgb = XGBClassifier(
         n_estimators=n_estimators,
         max_depth=max_depth,
         learning_rate=0.05,
-        scale_pos_weight=scale,
         random_state=42,
         n_jobs=-1,
-        eval_metric="auc",
+        eval_metric="mlogloss",
         verbosity=0,
     )
     xgb.fit(X, y)
     xgb._fitted_features = avail
 
-    auc = roc_auc_score(y, xgb.predict_proba(X)[:, 1])
-    print(f"訓練集 AUC：{auc:.4f}（in-sample，供參考）")
+    auc = roc_auc_score(y, xgb.predict_proba(X), multi_class="ovr", average="macro")
+    print(f"訓練集 AUC（macro OvR）：{auc:.4f}（in-sample，供參考）")
     return xgb
+
+
+def tune_xgb(
+    df_train: pd.DataFrame,
+    n_trials: int = 50,
+    val_st: str = "2022-01-01",
+) -> dict:
+    """
+    用 Optuna 搜尋 XGBoost 最佳超參數。
+    時序切割：val_st 前訓練，之後驗證，避免 data leak。
+    需要 pip install optuna
+    """
+    import optuna
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    avail = [c for c in RFC_FEATURES if c in df_train.columns]
+    df_fit = df_train[df_train["date"] < val_st]
+    df_val = df_train[df_train["date"] >= val_st]
+
+    X_fit = df_fit[avail].fillna(0.5).values
+    y_fit = df_fit["Y"].values
+    X_val = df_val[avail].fillna(0.5).values
+    y_val = df_val["Y"].values
+
+    print(f"調參切割：訓練 {len(df_fit):,} 筆 / 驗證 {len(df_val):,} 筆（{val_st} 起）")
+
+    def objective(trial):
+        params = dict(
+            n_estimators=trial.suggest_int("n_estimators", 100, 600),
+            max_depth=trial.suggest_int("max_depth", 3, 8),
+            learning_rate=trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
+            subsample=trial.suggest_float("subsample", 0.6, 1.0),
+            colsample_bytree=trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            min_child_weight=trial.suggest_int("min_child_weight", 1, 20),
+            gamma=trial.suggest_float("gamma", 0.0, 2.0),
+            reg_alpha=trial.suggest_float("reg_alpha", 0.0, 2.0),
+            reg_lambda=trial.suggest_float("reg_lambda", 0.5, 10.0),
+            random_state=42,
+            n_jobs=-1,
+            eval_metric="mlogloss",
+            verbosity=0,
+        )
+        m = XGBClassifier(**params)
+        m.fit(X_fit, y_fit)
+        return roc_auc_score(y_val, m.predict_proba(X_val), multi_class="ovr", average="macro")
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    print(f"\n最佳 Val AUC：{study.best_value:.4f}")
+    print("最佳超參數：")
+    for k, v in study.best_params.items():
+        print(f"  {k:25s}: {v}")
+    return study.best_params
 
 
 def train_lgbm(
@@ -183,9 +245,32 @@ def train_lgbm(
     lgbm.fit(X, y)
     lgbm._fitted_features = avail
 
-    auc = roc_auc_score(y, lgbm.predict_proba(X)[:, 1])
-    print(f"訓練集 AUC：{auc:.4f}（in-sample，供參考）")
+    auc = roc_auc_score(y, lgbm.predict_proba(X), multi_class="ovr", average="macro")
+    print(f"訓練集 AUC（macro OvR）：{auc:.4f}（in-sample，供參考）")
     return lgbm
+
+
+class EnsembleModel:
+    """多模型加權平均 wrapper，相容 eval_rfc 介面。"""
+
+    def __init__(self, models: list, weights: list | None = None):
+        import numpy as np
+
+        w = weights if weights is not None else [1.0] * len(models)
+        total = sum(w)
+        self.models = models
+        self.weights = [x / total for x in w]
+        self._fitted_features = models[0]._fitted_features
+        self.feature_importances_ = np.zeros(len(self._fitted_features))
+
+    def predict_proba(self, X):
+        import numpy as np
+
+        # 三類加權平均：(N, 3) 格式
+        proba = np.zeros((X.shape[0], 3))
+        for model, w in zip(self.models, self.weights):
+            proba += w * model.predict_proba(X)
+        return proba
 
 
 def eval_rfc(
@@ -193,26 +278,42 @@ def eval_rfc(
     df_test: pd.DataFrame,
     top_n: int = 10,
     hold_days: int = 10,
+    min_prob: float = 0.0,
+    top_pct: float | None = None,
 ) -> pd.DataFrame:
     """
     OOS 評估：
       - AUC / 分類報告
       - 每日選 top_n 高機率股票，計算組合報酬
+
+    min_prob : 絕對門檻（固定數值，跨模型不公平）
+    top_pct  : 分位數門檻，例如 0.2 = 只取該模型 prob 分佈前 20% 的觀測
+               設定後會覆蓋 min_prob，讓各模型用自己的尺度比較
     """
     import matplotlib.pyplot as plt
 
     plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
 
+    import numpy as np
+
     avail = rfc._fitted_features
     X_test = df_test[avail].fillna(0.5).values
     y_test = df_test["Y"].values
-    prob = rfc.predict_proba(X_test)[:, 1]
+    proba_all = rfc.predict_proba(X_test)  # (N, 3) for 3-class
+    prob = proba_all[:, 2]  # class 2 = 達標機率（選股訊號）
 
-    auc = roc_auc_score(y_test, prob)
+    # 分位數門檻：用該模型自己的 prob 分佈決定，跨模型公平比較
+    effective_min_prob = min_prob
+    if top_pct is not None:
+        effective_min_prob = float(np.quantile(prob, 1.0 - top_pct))
+        print(f"top_pct={top_pct:.0%} → 有效門檻 prob >= {effective_min_prob:.4f}")
+
+    # Multi-class AUC（OvR）
+    auc = roc_auc_score(y_test, proba_all, multi_class="ovr", average="macro")
     print(f"\n{'='*55}")
-    print(f"OOS AUC：{auc:.4f}")
+    print(f"OOS AUC（macro OvR）：{auc:.4f}")
     print(f"{'='*55}")
-    print(classification_report(y_test, (prob >= 0.5).astype(int), target_names=["跌", "漲"]))
+    print(classification_report(y_test, proba_all.argmax(axis=1), target_names=["盤整", "停損", "達標"]))
 
     # 特徵重要性
     fi = pd.Series(rfc.feature_importances_, index=avail).sort_values(ascending=False)
@@ -227,7 +328,7 @@ def eval_rfc(
     cal = df_cal.groupby("bucket", observed=True).agg(
         筆數=("Y", "count"),
         平均信心=("prob", "mean"),
-        勝率=("Y", "mean"),
+        達標率=("Y", lambda x: (x == 2).mean()),  # class 2 = 達標
         平均報酬=("future_return", "mean"),
     )
     print(f"\n{'='*60}")
@@ -250,22 +351,25 @@ def eval_rfc(
         g = df_eval[df_eval["date"] == date]
         if len(g) == 0:
             continue
-        # RFC top_n
-        top_rfc = g.nlargest(top_n, "prob")
+        # RFC top_n（信心門檻過濾後再選）
+        candidates = g[g["prob"] >= effective_min_prob]
+        if len(candidates) == 0:
+            continue  # 當天無股票達門檻，空倉
+        top_rfc = candidates.nlargest(top_n, "prob")
         rfc_returns.append(
             {
                 "date": date,
                 "mean_return": top_rfc["future_return_clip"].mean(),
-                "win_rate": (top_rfc["future_return"] > 0).mean(),
+                "win_rate": (top_rfc["max_ret"] >= PROFIT_TARGET).mean(),
             }
         )
-        # Baseline：從同一叢集隨機選 top_n
+        # Baseline：隨機選 top_n
         top_base = g.sample(min(top_n, len(g)), random_state=42)
         base_returns.append(
             {
                 "date": date,
                 "mean_return": top_base["future_return_clip"].mean(),
-                "win_rate": (top_base["future_return"] > 0).mean(),
+                "win_rate": (top_base["max_ret"] >= PROFIT_TARGET).mean(),
             }
         )
 
@@ -274,8 +378,9 @@ def eval_rfc(
     cum_rfc = (1 + df_perf["mean_return"]).cumprod()
     cum_base = (1 + df_base["mean_return"]).cumprod()
 
+    threshold_str = f"  門檻 prob>={effective_min_prob:.4f}" if effective_min_prob > 0 else ""
     print(f"\n{'='*60}")
-    print(f"非重疊換倉 Top-{top_n} 組合（每 {hold_days} 日換一次）")
+    print(f"非重疊換倉 Top-{top_n} 組合（每 {hold_days} 日換一次{threshold_str}）  共 {len(rfc_returns)} 期進場")
     print(f"{'='*60}")
     print(f"{'':15} {'RFC':>10} {'隨機 Baseline':>15}")
     print(f"  平均報酬   {df_perf['mean_return'].mean():>9.2%} {df_base['mean_return'].mean():>14.2%}")
@@ -315,6 +420,25 @@ def load_rfc(path: str = RFC_MODEL_PATH) -> RandomForestClassifier:
         rfc = pickle.load(f)
     print(f"RFC 模型已載入：{path}")
     return rfc
+
+
+XGB_MODEL_PATH = "models/neglected_xgb.joblib"
+
+
+def save_xgb(xgb: XGBClassifier, path: str = XGB_MODEL_PATH):
+    import joblib
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    joblib.dump(xgb, path)
+    print(f"XGB 模型已儲存：{path}")
+
+
+def load_xgb(path: str = XGB_MODEL_PATH) -> XGBClassifier:
+    import joblib
+
+    xgb = joblib.load(path)
+    print(f"XGB 模型已載入：{path}")
+    return xgb
 
 
 def predict_today_rfc(
@@ -359,9 +483,11 @@ if __name__ == "__main__":
     CLUSTERS = [1, 2, 3]
     TOP_N = 10
     MIN_ATR = 0.02
+    MIN_PROB = 0.0  # 絕對門檻，0.0 = 不過濾
+    TOP_PCT = 0.2  # 分位數門檻：各模型自己前 20%，None = 不用
 
     # ── 切換模式 ─────────────────────────────────────────── #
-    MODE = "train+eval"  # "train+eval" | "eval_only" | "predict_today"
+    MODE = "train+eval"  # release | tune_xgb | "train+eval" | "eval_only" | "predict_today"
     # ────────────────────────────────────────────────────── #
 
     clf_gmm = NeglectedGMM.load()
@@ -380,21 +506,77 @@ if __name__ == "__main__":
         print("【RFC】")
         print("=" * 60)
         rfc = train_rfc(df_train)
-        eval_rfc(rfc, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
+        eval_rfc(rfc, df_test, top_n=TOP_N, hold_days=HOLD_DAYS, min_prob=MIN_PROB, top_pct=TOP_PCT)
 
         print("\n" + "=" * 60)
         print("【XGBoost】")
         print("=" * 60)
         xgb = train_xgb(df_train)
-        eval_rfc(xgb, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
+        eval_rfc(xgb, df_test, top_n=TOP_N, hold_days=HOLD_DAYS, min_prob=MIN_PROB, top_pct=TOP_PCT)
 
         print("\n" + "=" * 60)
         print("【LightGBM】")
         print("=" * 60)
         lgbm = train_lgbm(df_train)
-        eval_rfc(lgbm, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
+        eval_rfc(lgbm, df_test, top_n=TOP_N, hold_days=HOLD_DAYS, min_prob=MIN_PROB, top_pct=TOP_PCT)
+
+        # OOS AUC 計算（用於加權）
+        from sklearn.metrics import roc_auc_score as _auc
+
+        def _oos_auc(model):
+            avail = model._fitted_features
+            X = df_test[avail].fillna(0.5).values
+            return _auc(df_test["Y"].values, model.predict_proba(X), multi_class="ovr", average="macro")
+
+        auc_xgb = _oos_auc(xgb)
+        auc_lgbm = _oos_auc(lgbm)
+
+        print("\n" + "=" * 60)
+        print(f"【Ensemble XGB + LGBM  (AUC 加權 {auc_xgb:.4f} / {auc_lgbm:.4f})】")
+        print("=" * 60)
+        ensemble = EnsembleModel([xgb, lgbm], weights=[auc_xgb, auc_lgbm])
+        eval_rfc(ensemble, df_test, top_n=TOP_N, hold_days=HOLD_DAYS, min_prob=MIN_PROB, top_pct=TOP_PCT)
 
         save_rfc(rfc)
+
+    elif MODE == "tune_xgb":
+        print("建立訓練集...")
+        df_train = build_dataset(
+            clf_gmm, stocks, TRAIN_ST, TRAIN_END, clusters=None, hold_days=HOLD_DAYS, min_atr_pct=MIN_ATR
+        )
+        best_params = tune_xgb(df_train, n_trials=50, val_st="2022-01-01")
+
+        print("\n用最佳參數在全訓練集重新訓練並 OOS 評估...")
+        df_test = build_dataset(clf_gmm, stocks, EVAL_ST, clusters=None, hold_days=HOLD_DAYS, min_atr_pct=MIN_ATR)
+        avail = [c for c in RFC_FEATURES if c in df_train.columns]
+        X_all = df_train[avail].fillna(0.5).values
+        y_all = df_train["Y"].values
+        scale = (y_all == 0).sum() / (y_all == 1).sum()
+        xgb_tuned = XGBClassifier(
+            **best_params,
+            scale_pos_weight=scale,
+            random_state=42,
+            n_jobs=-1,
+            eval_metric="auc",
+            verbosity=0,
+        )
+        xgb_tuned.fit(X_all, y_all)
+        xgb_tuned._fitted_features = avail
+        print(f"訓練集 AUC：{roc_auc_score(y_all, xgb_tuned.predict_proba(X_all)[:, 1]):.4f}（in-sample）")
+        eval_rfc(xgb_tuned, df_test, top_n=TOP_N, hold_days=HOLD_DAYS, top_pct=TOP_PCT)
+
+    elif MODE == "release":
+        # 正式 release 模型：全訓練集（2015-2023）訓練 XGB，儲存供量化回測使用
+        print("建立 Release 訓練集（2015-2023）...")
+        df_train = build_dataset(
+            clf_gmm, stocks, TRAIN_ST, TRAIN_END, clusters=None, hold_days=HOLD_DAYS, min_atr_pct=MIN_ATR
+        )
+        print("\n訓練 XGBoost Release 模型...")
+        xgb_release = train_xgb(df_train)
+        save_xgb(xgb_release)
+        print(f"\nRelease 完成：{XGB_MODEL_PATH}")
+        print(f"特徵數：{len(xgb_release._fitted_features)}")
+        print(f"特徵列表：{xgb_release._fitted_features}")
 
     elif MODE == "eval_only":
         rfc = load_rfc()
@@ -403,3 +585,74 @@ if __name__ == "__main__":
 
     elif MODE == "predict_today":
         predict_today_rfc(top_n=TOP_N, clusters=CLUSTERS)
+
+
+"""
+勝率 52-53% 的問題有幾個角度可以想：
+
+方向一：信心門檻過濾
+目前是每次換倉固定選 Top-10，不管信心高不高。改成「prob > 0.6 才進場，不夠就空倉或減倉」——LightGBM 60-70% 的勝率已經有 34.85%，對應到 future_return > 0 的勝率也會更高。
+
+方向二：三模型 Ensemble
+把三個模型的 prob 平均（或加權），投票一致才選。可以減少各個模型的雜訊，對 Top-N 的品質提升比較直接。
+
+方向三：Y 標籤改法
+現在 win rate 是量 future_return > 0，但 Y 學的是「10日內碰到 +10%」，兩件事不一樣。可以把 win rate 改成量「持有期間最高點 > 入場價 + N%」，讓回測指標和訓練目標對齊。
+
+方向四：縮短持有天數
+10 日持有的雜訊多，5 日動能更強。但 profit_label 的 +10% 門檻要一起調。
+
+
+
+討論一下，那這個例子，cnn有沒有可以用的上的地方
+可以用，但用途和現在的樹模型完全不同。
+
+現在的模型（RFC/XGB/LGBM）：
+
+輸入：當天的截面 scalar 特徵（xrank、slope、ratio 等）
+學的是：這一天的「籌碼 + 技術狀態」→ 達標機率
+CNN 能做的事：
+
+1. 1D CNN on time series（最實用）
+把過去 N 天的 OHLCV 直接當序列輸入：
+
+
+[close_t-19, close_t-18, ... close_t-0]  ← 20天收盤
+[volume_t-19, ...]
+→ 1D CNN → 特徵萃取 → 分類
+優點：不需要手工算 ma_slope、bias 這些，CNN 自己學時序模式。
+
+2. 2D CNN on OHLCV matrix（K線圖）
+把 K 線畫成圖像，CNN 識別視覺形態（頭肩、突破、旗形）：
+
+
+[n_days × n_features] → 2D CNN → 分類
+這個場景能不能用？
+
+外資忽視股的特性是「靜悄悄地在動」——外資不買、不當沖，但股價可能在緩步收斂。這種型態恰好是 1D CNN 或圖形識別能捕捉的。
+
+問題：
+
+訓練樣本 110K 筆，對 CNN 來說剛好在邊界，不算多
+訓練時間比樹模型長很多
+解釋性差（不知道為什麼選這支）
+最合適的定位： CNN 作為第 4 個模型加入 ensemble，提供樹模型看不到的時序形態資訊，四模型投票加權。
+
+有興趣試嗎？還是先把目前三模型的門檻回測跑完？
+
+目前樹模型的弱點，依重要性排：
+
+1. 沒有做 ensemble（最直接的提升）
+三個模型各自跑，沒有合起來。XGBoost 最強（AUC 0.567, 626%），但加上 LGBM 的高勝率（45.3%）做加權平均，理論上比單一模型更穩。
+
+2. 超參數沒調過
+目前三個模型都用預設值（n_estimators=200, max_depth=6, lr=0.05），XGBoost 特別值得花時間調，因為它是主力。
+
+3. f_market_volatility_20d 佔 32% 讓人不安
+幾乎所有選股能力都靠這個市場擇時特徵，代表模型本質上是「市場平靜就買忽視股」。這在 2024-2026 牛市成立，換個環境可能失效。需要驗證這個特徵是不是真的穩定，還是只是 OOS 期間的巧合。
+
+4. 沒有 walk-forward 驗證
+現在是單一訓練/測試切割（2015-2023 / 2024-2026），不知道 2024-2025 訓練是否對 2025-2026 OOS 仍有效。
+
+最有效益的下一步：先做 ensemble（XGB + LGBM 加權平均），成本低、效果直接可量。要試嗎？
+"""
