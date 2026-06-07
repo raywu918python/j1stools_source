@@ -65,6 +65,7 @@ CLASSIFY_FEATURES = [
 N_CLUSTERS = 10
 MODEL_PATH = "db/models/ib_margin_classifier.pkl"
 GMM_MODEL_PATH = "db/models/ib_margin_gmm.pkl"
+HDBSCAN_MODEL_PATH = "db/models/ib_margin_hdbscan.pkl"
 MARKET_PROXY = "0050"  # 大盤代理（台灣50）
 
 """
@@ -316,6 +317,130 @@ class IBMarginClassifier:
         return obj
 
 
+class IBMarginHDBSCAN:
+    """
+    HDBSCAN 無監督分類器。
+
+    優勢：
+      - 不需要指定 k，自動決定群數
+      - 自動將異常點標為 -1（噪聲），不強迫歸群
+      - 對非球形、密度不均的群有更好的分辨力
+
+    主要參數：
+      min_cluster_size : 最小群大小（越大 → 群越少、越乾淨）
+      min_samples      : 決定保守程度（越大 → 噪聲點越多）
+    """
+
+    def __init__(self, min_cluster_size: int = 500, min_samples: int = 50, features: list | None = None):
+        self.min_cluster_size = min_cluster_size
+        self.min_samples = min_samples
+        self.features = features or CLASSIFY_FEATURES
+        self.preprocessor: Pipeline | None = None
+        self.clusterer = None
+        self._fitted_features: list = []
+        self.cluster_profiles: pd.DataFrame | None = None
+
+    @property
+    def n_clusters(self) -> int:
+        if self.clusterer is None:
+            return 0
+        labels = self.clusterer.labels_
+        return int(labels.max()) + 1  # -1 是噪聲，不算在內
+
+    def fit(self, df: pd.DataFrame) -> "IBMarginHDBSCAN":
+        import hdbscan as hdbscan_lib
+
+        avail = [c for c in self.features if c in df.columns]
+        missing = [c for c in self.features if c not in df.columns]
+        if missing:
+            print(f"缺少特徵（{len(missing)} 個）：{missing[:5]}{'...' if len(missing) > 5 else ''}")
+        print(f"使用特徵：{len(avail)} 個，訓練樣本：{len(df):,} 筆")
+
+        self._fitted_features = avail
+        self.preprocessor = Pipeline(
+            [
+                ("imputer", SimpleImputer(strategy="median")),
+                ("scaler", StandardScaler()),
+                ("pca", PCA(n_components=min(10, len(avail)), random_state=42)),
+            ]
+        )
+        X_pca = self.preprocessor.fit_transform(df[avail].values)
+
+        self.clusterer = hdbscan_lib.HDBSCAN(
+            min_cluster_size=self.min_cluster_size,
+            min_samples=self.min_samples,
+            core_dist_n_jobs=-1,
+            prediction_data=True,
+        )
+        labels = self.clusterer.fit_predict(X_pca)
+
+        n_clusters = self.n_clusters
+        n_noise = int((labels == -1).sum())
+        print(f"發現 {n_clusters} 個叢集，噪聲點：{n_noise:,} 筆（{n_noise/len(labels):.1%}）")
+
+        self.cluster_profiles = df.assign(cluster=labels).groupby("cluster")[avail].median().round(4)
+        return self
+
+    def predict(self, df: pd.DataFrame) -> pd.Series:
+        """對新資料做分類（噪聲點回傳 -1）。"""
+        if self.clusterer is None:
+            raise RuntimeError("請先呼叫 fit()")
+        import hdbscan as hdbscan_lib
+
+        X_pca = self.preprocessor.transform(df[self._fitted_features].values)
+        labels, _ = hdbscan_lib.approximate_predict(self.clusterer, X_pca)
+        return pd.Series(labels.astype(int), index=df.index, name="cluster")
+
+    def describe_clusters(self, df: pd.DataFrame | None = None):
+        if self.cluster_profiles is None:
+            raise RuntimeError("請先呼叫 fit()")
+
+        key_cols = [
+            c
+            for c in [
+                "f_net_foreign_pct_xrank",
+                "f_net_trust_pct_xrank",
+                "f_net_institutional_total_pct_xrank",
+                "f_net_institutional_total_streak",
+                "f_margin_balance_change_pct_xrank",
+                "f_short_margin_ratio_xrank",
+                "f_return_5d_xrank",
+                "f_relative_strength_20d_xrank",
+            ]
+            if c in self.cluster_profiles.columns
+        ]
+
+        print(f"\n{'='*65}")
+        print(f"HDBSCAN 叢集特徵 Median（{self.n_clusters} 群，-1=噪聲群）")
+        print(f"{'='*65}")
+        print(self.cluster_profiles[key_cols].T.to_string())
+
+        if df is not None and "cluster" in df.columns:
+            counts = df["cluster"].value_counts().sort_index()
+            total = len(df)
+            print(f"\n各叢集筆數：")
+            for k, n in counts.items():
+                label = "噪聲" if k == -1 else str(k)
+                print(f"  叢集 {label}: {n:>8,} 筆 ({n/total:.1%})")
+
+            latest = df["date"].max()
+            print(f"\n最新一日（{latest.date()}）：")
+            print(df[df["date"] == latest]["cluster"].value_counts().sort_index().to_string())
+
+    def save(self, path: str = HDBSCAN_MODEL_PATH):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+        print(f"HDBSCAN 模型已儲存：{path}")
+
+    @classmethod
+    def load(cls, path: str = HDBSCAN_MODEL_PATH) -> "IBMarginHDBSCAN":
+        with open(path, "rb") as f:
+            obj = pickle.load(f)
+        print(f"HDBSCAN 模型已載入：{path}（n_clusters={obj.n_clusters}）")
+        return obj
+
+
 def analyze_cluster_returns(df: pd.DataFrame, hold_days: int = 5) -> pd.DataFrame:
     """
     分析各叢集在持有 N 日後的報酬分布，驗證叢集是否具預測力。
@@ -387,9 +512,13 @@ def evaluate_clustering(
     import matplotlib.pyplot as plt
 
     X_full = df[clf._fitted_features].values
-    pipe_pre = clf.pipeline[:-1]  # imputer + scaler + pca
-    X_pca = pipe_pre.transform(X_full)
-    labels = clf.pipeline.predict(X_full)
+    # IBMarginHDBSCAN 用 preprocessor，其他用 pipeline[:-1]
+    if hasattr(clf, "preprocessor"):  # IBMarginHDBSCAN
+        X_pca = clf.preprocessor.transform(X_full)
+        labels = clf.predict(df).values
+    else:  # IBMarginClassifier / IBMarginGMM
+        X_pca = clf.pipeline[:-1].transform(X_full)
+        labels = clf.pipeline.predict(X_full)
 
     # ── 幾何指標 ──────────────────────────────────────────────────── #
     if len(df) > sample_n:
@@ -673,13 +802,14 @@ def run(
     (clf, df) : 分類器物件 + 含 cluster 欄位的 DataFrame
                 GMM 時 df 額外含 prob_0 ~ prob_n 欄位
     """
-    if model not in ("kmeans", "gmm"):
-        raise ValueError(f"model 必須是 'kmeans' 或 'gmm'，收到：{model}")
+    if model not in ("kmeans", "gmm", "hdbscan"):
+        raise ValueError(f"model 必須是 'kmeans'、'gmm' 或 'hdbscan'，收到：{model}")
 
-    model_path = MODEL_PATH if model == "kmeans" else GMM_MODEL_PATH
+    model_path = {"kmeans": MODEL_PATH, "gmm": GMM_MODEL_PATH, "hdbscan": HDBSCAN_MODEL_PATH}[model]
     if not retrain and os.path.exists(model_path):
         print(f"載入既有模型（retrain=False）：{model_path}")
-        clf = IBMarginClassifier.load(model_path) if model == "kmeans" else IBMarginGMM.load(model_path)
+        loaders = {"kmeans": IBMarginClassifier.load, "gmm": IBMarginGMM.load, "hdbscan": IBMarginHDBSCAN.load}
+        clf = loaders[model](model_path)
         stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
         df = load_data(stocks, st, end, min_atr_pct=min_atr_pct)
         df["cluster"] = clf.predict(df)
@@ -699,13 +829,17 @@ def run(
         clf = IBMarginClassifier(n_clusters=n_clusters)
         clf.fit(df)
         df["cluster"] = clf.predict(df)
-    else:
+    elif model == "gmm":
         print(f"訓練 GMM（n_components={n_clusters}）...")
         clf = IBMarginGMM(n_components=n_clusters)
         clf.fit(df)
         df["cluster"] = clf.predict(df)
-        proba_df = clf.predict_proba(df)
-        df = pd.concat([df, proba_df], axis=1)
+        df = pd.concat([df, clf.predict_proba(df)], axis=1)
+    else:
+        print(f"訓練 HDBSCAN（min_cluster_size={n_clusters}）...")
+        clf = IBMarginHDBSCAN(min_cluster_size=n_clusters)
+        clf.fit(df)
+        df["cluster"] = clf.predict(df)
 
     clf.describe_clusters(df)
     analyze_cluster_returns(df, hold_days=5)
@@ -731,10 +865,8 @@ def predict_today(
     -------
     pd.DataFrame : date, stock_id, cluster（GMM 時額外含 prob_* 欄位）
     """
-    if model == "kmeans":
-        clf = IBMarginClassifier.load()
-    else:
-        clf = IBMarginGMM.load()
+    loaders = {"kmeans": IBMarginClassifier.load, "gmm": IBMarginGMM.load, "hdbscan": IBMarginHDBSCAN.load}
+    clf = loaders[model]()
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
     df = load_data(stocks, st)
@@ -953,7 +1085,14 @@ if __name__ == "__main__":
 
     # 訓練：只用 2020~2023，過濾低波動
     # retrain=False：有 pkl 就直接載入，要重訓改成 retrain=True
-    clf, _ = run(st="2020-01-01", end="2023-12-31", model="gmm", min_atr_pct=MIN_ATR, retrain=False)
+    clf, _ = run(
+        st="2020-01-01",
+        end="2023-12-31",
+        model="hdbscan",
+        min_atr_pct=MIN_ATR,
+        n_clusters=7500,
+        retrain=True,
+    )
 
     # 評估：2024 之後的 out-of-sample 資料，同樣過濾
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
