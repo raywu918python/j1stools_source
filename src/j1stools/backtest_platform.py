@@ -51,11 +51,12 @@ class LgbmPrepareDate:
         self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
         self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
         self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
+        self.volume = input.pivot(index="date", columns="stock_id", values="volume").fillna(0)
         self.stock_group = parquet_db.query_stock_info().set_index("stock_id")["group"].to_dict()
 
         # 前處理（向量化）
         self.market_danger = check_market(self.close)
-        self.my_filter = gen_filter(self.close, self.high, self.low)
+        self.my_filter = gen_filter(self.close, self.high, self.low, self.volume)
         self.entries = gen_entries(self.my_filter, self.proba, top_n, threshold)
         self.exits = gen_exits(self.market_danger, self.proba)
 
@@ -63,7 +64,7 @@ class LgbmPrepareDate:
 
 
 class PrepareDate:
-    def __init__(self, signal, top_n, threshold):
+    def __init__(self, signal, top_n, threshold, min_volume=500):
         self.signal = signal
         self.top_n = top_n
         self.threshold = threshold
@@ -88,11 +89,12 @@ class PrepareDate:
         self.close = input.pivot(index="date", columns="stock_id", values="close").ffill()
         self.high = input.pivot(index="date", columns="stock_id", values="high").ffill()
         self.low = input.pivot(index="date", columns="stock_id", values="low").ffill()
+        self.volume = input.pivot(index="date", columns="stock_id", values="volume").fillna(0)
         self.stock_group = parquet_db.query_stock_info().set_index("stock_id")["group"].to_dict()
 
         # 前處理（向量化）
         self.market_danger = check_market(self.close)
-        self.my_filter = gen_filter(self.close, self.high, self.low)
+        self.my_filter = gen_filter(self.close, self.high, self.low, self.volume, min_volume)
         self.entries = gen_entries(self.my_filter, self.proba, top_n, threshold)
         self.exits = gen_exits(self.market_danger, self.proba)
 
@@ -140,7 +142,7 @@ def check_market(close_df):
     return market_danger
 
 
-def gen_filter(close, high, low):
+def gen_filter(close, high, low, volume=None, min_volume=500):
     daily_return = close.pct_change()
     filter_limit_up = daily_return < 0.09
 
@@ -161,6 +163,13 @@ def gen_filter(close, high, low):
         adx.columns = adx.columns.get_level_values("stock_id")
 
     filter_atr = (((atr / close) > 0.00) & (adx > 0)).fillna(False).infer_objects(copy=False)
+
+    # 最低成交量：20日均量 >= min_volume 張（volume 單位是股，1張=1000股）
+    if volume is not None:
+        avg_volume = volume.rolling(20).mean()
+        filter_volume = (avg_volume >= min_volume * 1000).fillna(False)
+        return filter_atr & filter_limit_up & filter_volume
+
     return filter_atr & filter_limit_up
 
 
@@ -196,9 +205,10 @@ def prepare_data_backtest(
     use_hold_days=False,
     use_fixed_sl=False,
     use_fixed_tp=False,
+    min_volume=200,
 ):
 
-    p = PrepareDate(signal, top_n=top_n, threshold=threshold)
+    p = PrepareDate(signal, top_n=top_n, threshold=threshold, min_volume=min_volume)
 
     # 回測
     st = time()

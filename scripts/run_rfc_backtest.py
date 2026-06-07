@@ -36,6 +36,7 @@ def backtest(st="2024-01-01", end="2099-01-01"):
         use_hold_days=True,
         hold_days=10,
         group_limit=2,
+        min_volume=200,  # 單位：張（日均量 >= 500張）
     )
 
     # 大盤對比（0050）
@@ -61,8 +62,7 @@ if not trades_df.empty:
     pv["date"] = pd.to_datetime(pv["date"]).dt.normalize()
     trades_df["entry_date"] = pd.to_datetime(trades_df["entry_date"]).dt.normalize()
     trades_df = trades_df.merge(
-        pv[["date", "total"]].rename(columns={"date": "entry_date", "total": "_pv"}),
-        on="entry_date", how="left"
+        pv[["date", "total"]].rename(columns={"date": "entry_date", "total": "_pv"}), on="entry_date", how="left"
     )
     trades_df["weight"] = (trades_df["cost"] / trades_df["_pv"]).round(4)
     trades_df = trades_df.drop(columns=["_pv"])
