@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silhouette_score
@@ -43,21 +44,62 @@ CLASSIFY_FEATURES = [
     "f_short_balance_change_pct_xrank",
     "f_margin_balance_change_5d_pct_xrank",
     "f_short_margin_ratio_xrank",
-    # 價格動能（相對大盤）
-    "f_return_5d_xrank",
-    "f_return_20d_xrank",
-    "f_relative_strength_5d_xrank",
-    "f_relative_strength_20d_xrank",
+    # 當沖
+    "f_dt_ratio_xrank",
+    "f_dt_net_xrank",
+    "f_dt_ratio_5d_xrank",
+    # 技術指標
+    "f_volume_ratio_5d_xrank",
+    "f_volume_change_pct_xrank",
+    "f_atr14_pct_xrank",
+    # 價格趨勢（MA 方向，不是報酬本身）
+    "f_ma5_slope_xrank",
+    "f_ma20_slope_xrank",
+    "f_bias_ma20_xrank",
+    "f_momentum_cross_xrank",
 ]
+# 移除價格動能特徵（f_return_5d_xrank 等）
+# 這些特徵等於「偷看答案」：讓分群結果偏向「已漲的股票」
+# 目標是找「籌碼好但還沒漲」的股票，所以只用 IB + Margin 純籌碼訊號
 
-N_CLUSTERS = 5
+N_CLUSTERS = 10
 MODEL_PATH = "db/models/ib_margin_classifier.pkl"
+GMM_MODEL_PATH = "db/models/ib_margin_gmm.pkl"
 MARKET_PROXY = "0050"  # 大盤代理（台灣50）
 
+"""
+KMeans k=5 結果紀錄（886支股票，2023-01-01 ~ 2026-06-05，706,147筆）
 
-def load_data(stocks: list, st: str, end: str = "2099-01-01") -> pd.DataFrame:
+叢集 0 (8.4%,  89支) — 投信主力
+  外資中性(0.47)、投信極強(0.94)、法人合計0.66、連買2天
+  融券比高(0.72)、5日報酬強(0.73)、相對強度佳(0.75)
+
+叢集 1 (23.2%, 192支) — 法人退場，融資散戶撐盤
+  外資弱(0.33)、投信中性(0.50)、連買0天
+  融資增加(0.65)、5日報酬強(0.73) → 危險訊號，法人出貨
+
+叢集 2 (31.5%, 292支) — 外資主導【最佳選股群】
+  外資強(0.78)、法人合計強(0.77)、連買3天
+  融資低(0.41)、5日報酬中(0.60)、相對強度0.60
+
+叢集 3 (36.9%, 313支) — 法人空頭
+  外資弱(0.36)、法人合計弱(0.34)、連買0天
+  5日報酬弱(0.25)、相對強度最差(0.24) → 排除
+
+叢集 4 (0.0%,  0支) — 異常群（無融資融券股票，streak=261異常）
+  幾乎不出現，自動隔離
+"""
+
+
+def load_data(stocks: list, st: str, end: str = "2099-01-01", min_atr_pct: float | None = None) -> pd.DataFrame:
     """
     載入並合併價格、融資融券、法人資料，回傳含 f_ 特徵的 DataFrame。
+
+    Parameters
+    ----------
+    min_atr_pct : 過濾門檻，保留 ATR14/close >= 此值的觀測值。
+                  例如 0.01 = 排除日均波幅 < 1% 的停牌/低流動性紀錄。
+                  None = 不過濾（預設）。
     """
     df_market = parquet_db.query_price([MARKET_PROXY], st, end)
     df_market["date"] = pd.to_datetime(df_market["date"])
@@ -72,11 +114,95 @@ def load_data(stocks: list, st: str, end: str = "2099-01-01") -> pd.DataFrame:
     df_ib = parquet_db.query_ib(stocks, st, end)
     df_ib["date"] = pd.to_datetime(df_ib["date"])
 
+    df_day_trade = parquet_db.query_day_trade(stocks, st, end)
+    df_day_trade["date"] = pd.to_datetime(df_day_trade["date"])
+
     df = df_price.merge(df_margin, on=["date", "stock_id"], how="left")
     feat = add_feature(df, df_ib, df_market, mode="predict")
-    # add_feature 只保留 f_ 欄位，把 close 補回來供報酬計算使用
-    feat = feat.merge(df_price[["date", "stock_id", "close"]], on=["date", "stock_id"], how="left")
+    # add_feature 只保留 f_ 欄位，把 close + volume 補回來
+    feat = feat.merge(
+        df_price[["date", "stock_id", "close", "volume", "high", "low"]],
+        on=["date", "stock_id"],
+        how="left",
+    )
+    feat = _add_day_trade_features(feat, df_day_trade)
+    feat = _add_atr_features(feat)
+    feat = feat.drop(columns=["volume", "high", "low"])
+
+    if min_atr_pct is not None:
+        before = len(feat)
+        feat = feat[feat["f_atr14_pct"].fillna(0) >= min_atr_pct]
+        print(f"ATR 過濾（>= {min_atr_pct:.3f}）：{before:,} → {len(feat):,} 筆，移除 {before - len(feat):,} 筆")
+
     return feat
+
+
+def _add_atr_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    計算 ATR14（14日平均真實波幅）占收盤價比例，並做截面排名。
+
+    需要 df 已含 high, low, close 欄位。
+    高 ATR = 波動大，低 ATR = 波動小（股性穩）。
+    """
+    g = df.groupby("stock_id")
+    prev_close = g["close"].transform(lambda x: x.shift(1))
+
+    df["_tr"] = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    atr14 = g["_tr"].transform(lambda x: x.rolling(14, min_periods=5).mean())
+    df["f_atr14_pct"] = (atr14 / df["close"].replace(0, np.nan)).clip(0, 0.3)
+    df = df.drop(columns=["_tr"])
+
+    df["f_atr14_pct_xrank"] = df.groupby("date")["f_atr14_pct"].rank(pct=True, na_option="keep")
+    return df
+
+
+def _add_day_trade_features(df: pd.DataFrame, df_dt: pd.DataFrame) -> pd.DataFrame:
+    """
+    加入當沖特徵（需要 df 已含 volume 欄位）。
+
+    df_dt 欄位：date, stock_id, volume（當沖量，股）, buy_amount, sell_amount
+
+    新增特徵：
+      f_dt_ratio     : 當沖量 / 個股總成交量（當沖佔比，越高=短線散戶越多）
+      f_dt_net       : (buy - sell) / (buy + sell)（當沖方向，正=買方主導）
+      f_dt_ratio_5d  : 5日均當沖佔比（持續性）
+    """
+    dt = df_dt.copy()
+    dt["date"] = pd.to_datetime(dt["date"])
+    dt = dt.rename(columns={"volume": "_dt_vol", "buy_amount": "_dt_buy", "sell_amount": "_dt_sell"})
+
+    base = df.merge(dt[["date", "stock_id", "_dt_vol", "_dt_buy", "_dt_sell"]], on=["date", "stock_id"], how="left")
+
+    # 當沖資料隔天公布，shift 1 天
+    g = base.groupby("stock_id")
+    for col in ["_dt_vol", "_dt_buy", "_dt_sell"]:
+        base[col] = g[col].transform(lambda x: x.shift(1))
+
+    # 當沖佔比（volume 單位同為股）
+    base["f_dt_ratio"] = (base["_dt_vol"] / base["volume"].replace(0, np.nan)).clip(0, 1)
+
+    # 當沖方向（正=買方多）
+    dt_total = (base["_dt_buy"] + base["_dt_sell"]).replace(0, np.nan)
+    base["f_dt_net"] = ((base["_dt_buy"] - base["_dt_sell"]) / dt_total).clip(-1, 1)
+
+    # 5日均當沖佔比
+    base["f_dt_ratio_5d"] = g["f_dt_ratio"].transform(lambda x: x.rolling(5).mean())
+
+    base = base.drop(columns=["_dt_vol", "_dt_buy", "_dt_sell"])
+
+    # xrank（截面百分位排名）
+    for col in ["f_dt_ratio", "f_dt_net", "f_dt_ratio_5d"]:
+        base[f"{col}_xrank"] = base.groupby("date")[col].rank(pct=True, na_option="keep")
+
+    return base
 
 
 class IBMarginClassifier:
@@ -504,14 +630,12 @@ def plot_clusters(clf: "IBMarginClassifier", df: pd.DataFrame, sample_n: int = 3
         if feat not in df_plot.columns:
             continue
         # 過濾掉空群（如叢集4沒有融資融券資料）
-        data_by_k = [(k, df_plot[df_plot["cluster"] == k][feat].dropna().values)
-                     for k in range(n_k)]
+        data_by_k = [(k, df_plot[df_plot["cluster"] == k][feat].dropna().values) for k in range(n_k)]
         data_by_k = [(k, v) for k, v in data_by_k if len(v) > 1]
         if not data_by_k:
             continue
         positions = [k for k, _ in data_by_k]
-        parts = ax_v.violinplot([v for _, v in data_by_k], positions=positions,
-                                showmedians=True, showextrema=False)
+        parts = ax_v.violinplot([v for _, v in data_by_k], positions=positions, showmedians=True, showextrema=False)
         for j, body in enumerate(parts["bodies"]):
             body.set_facecolor(palette[positions[j]])
             body.set_alpha(0.7)
@@ -528,25 +652,60 @@ def plot_clusters(clf: "IBMarginClassifier", df: pd.DataFrame, sample_n: int = 3
     plt.show()
 
 
-def run(st: str = "2023-01-01", end: str = "2099-01-01", n_clusters: int = N_CLUSTERS) -> tuple:
+def run(
+    st: str = "2023-01-01",
+    end: str = "2099-01-01",
+    n_clusters: int = N_CLUSTERS,
+    model: str = "kmeans",
+    min_atr_pct: float | None = None,
+    retrain: bool = False,
+) -> tuple:
     """
     主流程：載入資料 → 訓練分類器 → 顯示叢集特徵 → 儲存模型。
+
+    Parameters
+    ----------
+    model   : "kmeans"（預設）或 "gmm"
+    retrain : True = 強制重訓；False = 有存檔就直接載入（預設）
 
     Returns
     -------
     (clf, df) : 分類器物件 + 含 cluster 欄位的 DataFrame
+                GMM 時 df 額外含 prob_0 ~ prob_n 欄位
     """
+    if model not in ("kmeans", "gmm"):
+        raise ValueError(f"model 必須是 'kmeans' 或 'gmm'，收到：{model}")
+
+    model_path = MODEL_PATH if model == "kmeans" else GMM_MODEL_PATH
+    if not retrain and os.path.exists(model_path):
+        print(f"載入既有模型（retrain=False）：{model_path}")
+        clf = IBMarginClassifier.load(model_path) if model == "kmeans" else IBMarginGMM.load(model_path)
+        stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
+        df = load_data(stocks, st, end, min_atr_pct=min_atr_pct)
+        df["cluster"] = clf.predict(df)
+        if model == "gmm":
+            df = pd.concat([df, clf.predict_proba(df)], axis=1)
+        return clf, df
+
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
-    print(f"股票數：{len(stocks)}，期間：{st} ~ {end}")
+    print(f"模型：{model.upper()}  股票數：{len(stocks)}  期間：{st} ~ {end}")
 
     print("載入資料並計算特徵...")
-    df = load_data(stocks, st, end)
+    df = load_data(stocks, st, end, min_atr_pct=min_atr_pct)
     print(f"資料筆數：{len(df):,}")
 
-    print(f"訓練 KMeans（n_clusters={n_clusters}）...")
-    clf = IBMarginClassifier(n_clusters=n_clusters)
-    clf.fit(df)
-    df["cluster"] = clf.predict(df)
+    if model == "kmeans":
+        print(f"訓練 KMeans（n_clusters={n_clusters}）...")
+        clf = IBMarginClassifier(n_clusters=n_clusters)
+        clf.fit(df)
+        df["cluster"] = clf.predict(df)
+    else:
+        print(f"訓練 GMM（n_components={n_clusters}）...")
+        clf = IBMarginGMM(n_components=n_clusters)
+        clf.fit(df)
+        df["cluster"] = clf.predict(df)
+        proba_df = clf.predict_proba(df)
+        df = pd.concat([df, proba_df], axis=1)
 
     clf.describe_clusters(df)
     analyze_cluster_returns(df, hold_days=5)
@@ -555,29 +714,274 @@ def run(st: str = "2023-01-01", end: str = "2099-01-01", n_clusters: int = N_CLU
     return clf, df
 
 
-def predict_today(st: str = "2025-01-01") -> pd.DataFrame:
+def predict_today(
+    st: str = "2025-01-01",
+    model: str = "kmeans",
+    min_prob: float = 0.0,
+) -> pd.DataFrame:
     """
     使用訓練好的模型對最新交易日的股票做分類。
 
+    Parameters
+    ----------
+    model    : "kmeans"（預設）或 "gmm"
+    min_prob : 僅 GMM 有效，只回傳最大機率 >= min_prob 的股票
+
     Returns
     -------
-    pd.DataFrame : 含 date, stock_id, cluster 欄位
+    pd.DataFrame : date, stock_id, cluster（GMM 時額外含 prob_* 欄位）
     """
-    clf = IBMarginClassifier.load()
-    stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
+    if model == "kmeans":
+        clf = IBMarginClassifier.load()
+    else:
+        clf = IBMarginGMM.load()
 
+    stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
     df = load_data(stocks, st)
     latest_date = df["date"].max()
     df_today = df[df["date"] == latest_date].copy()
     df_today["cluster"] = clf.predict(df_today)
 
-    print(f"分類日期：{latest_date.date()}")
+    result_cols = ["date", "stock_id", "cluster"]
+
+    if model == "gmm":
+        proba_df = clf.predict_proba(df_today)
+        df_today = pd.concat([df_today, proba_df], axis=1)
+        df_today["max_prob"] = proba_df.max(axis=1)
+        if min_prob > 0:
+            df_today = df_today[df_today["max_prob"] >= min_prob]
+        result_cols += ["max_prob"] + list(proba_df.columns)
+
+    print(f"模型：{model.upper()}  分類日期：{latest_date.date()}")
     print(df_today["cluster"].value_counts().sort_index().to_string())
-    return df_today[["date", "stock_id", "cluster"]]
+    return df_today[result_cols]
+
+
+class IBMarginGMM:
+    """
+    Gaussian Mixture Model 軟分群分類器。
+
+    相較 KMeans 的優勢：
+      - predict_proba()：每支股票屬於各群的機率（0~1），可設信心門檻
+      - 對重疊的財務資料更自然（不強迫硬邊界）
+      - BIC/AIC 自動評估最佳 n_components
+    """
+
+    def __init__(self, n_components: int = N_CLUSTERS, features: list | None = None):
+        self.n_components = n_components
+        self.features = features or CLASSIFY_FEATURES
+        self.pipeline: Pipeline | None = None
+        self._fitted_features: list = []
+        self.cluster_profiles: pd.DataFrame | None = None
+        self.bic_: float | None = None
+        self.aic_: float | None = None
+
+    @property
+    def n_clusters(self) -> int:
+        return self.n_components
+
+    def _build_pipeline(self) -> Pipeline:
+        n_pca = min(10, len(self.features))
+        return Pipeline(
+            [
+                ("imputer", SimpleImputer(strategy="median")),
+                ("scaler", StandardScaler()),
+                ("pca", PCA(n_components=n_pca, random_state=42)),
+                (
+                    "gmm",
+                    GaussianMixture(
+                        n_components=self.n_components,
+                        covariance_type="full",
+                        random_state=42,
+                        n_init=5,
+                    ),
+                ),
+            ]
+        )
+
+    def fit(self, df: pd.DataFrame) -> "IBMarginGMM":
+        avail = [c for c in self.features if c in df.columns]
+        missing = [c for c in self.features if c not in df.columns]
+        if missing:
+            print(f"缺少特徵（{len(missing)} 個）：{missing[:5]}{'...' if len(missing) > 5 else ''}")
+        print(f"使用特徵：{len(avail)} 個，訓練樣本：{len(df):,} 筆")
+
+        self._fitted_features = avail
+        self.pipeline = self._build_pipeline()
+        self.pipeline.fit(df[avail].values)
+
+        X_pca = self.pipeline[:-1].transform(df[avail].values)
+        gmm = self.pipeline.named_steps["gmm"]
+        self.bic_ = gmm.bic(X_pca)
+        self.aic_ = gmm.aic(X_pca)
+        print(f"BIC: {self.bic_:.1f}  AIC: {self.aic_:.1f}  （越低越好）")
+
+        labels = self.pipeline.predict(df[avail].values)
+        self.cluster_profiles = df.assign(cluster=labels).groupby("cluster")[avail].median().round(4)
+        return self
+
+    def predict(self, df: pd.DataFrame) -> pd.Series:
+        """硬分群：回傳機率最大的叢集 label。"""
+        if self.pipeline is None:
+            raise RuntimeError("請先呼叫 fit()")
+        return pd.Series(
+            self.pipeline.predict(df[self._fitted_features].values),
+            index=df.index,
+            name="cluster",
+        )
+
+    def predict_proba(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        軟分群：回傳各叢集的機率。
+
+        Returns
+        -------
+        pd.DataFrame : columns = [prob_0, prob_1, ..., prob_n]
+        """
+        if self.pipeline is None:
+            raise RuntimeError("請先呼叫 fit()")
+        X_pca = self.pipeline[:-1].transform(df[self._fitted_features].values)
+        proba = self.pipeline.named_steps["gmm"].predict_proba(X_pca)
+        cols = [f"prob_{k}" for k in range(self.n_components)]
+        return pd.DataFrame(proba, index=df.index, columns=cols)
+
+    def describe_clusters(self, df: pd.DataFrame | None = None):
+        """印出每個叢集的特徵中位數，與 IBMarginClassifier 介面對齊。"""
+        if self.cluster_profiles is None:
+            raise RuntimeError("請先呼叫 fit()")
+
+        key_cols = [
+            c
+            for c in [
+                "f_net_foreign_pct_xrank",
+                "f_net_trust_pct_xrank",
+                "f_net_institutional_total_pct_xrank",
+                "f_net_institutional_total_streak",
+                "f_margin_balance_change_pct_xrank",
+                "f_short_margin_ratio_xrank",
+                "f_return_5d_xrank",
+                "f_relative_strength_20d_xrank",
+            ]
+            if c in self.cluster_profiles.columns
+        ]
+        print(f"\n{'='*65}")
+        print(f"GMM 叢集特徵 Median（{self.n_components} 群，BIC={self.bic_:.0f}）")
+        print(f"{'='*65}")
+        print(self.cluster_profiles[key_cols].T.to_string())
+
+        if df is not None and "cluster" in df.columns:
+            counts = df["cluster"].value_counts().sort_index()
+            total = counts.sum()
+            print(f"\n各叢集筆數：")
+            for k, n in counts.items():
+                print(f"  叢集 {k}: {n:>8,} 筆 ({n/total:.1%})")
+
+            latest = df["date"].max()
+            today_df = df[df["date"] == latest]
+            print(f"\n最新一日（{latest.date()}）各叢集筆數：")
+            print(today_df["cluster"].value_counts().sort_index().to_string())
+
+    def save(self, path: str = GMM_MODEL_PATH):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+        print(f"GMM 模型已儲存：{path}")
+
+    @classmethod
+    def load(cls, path: str = GMM_MODEL_PATH) -> "IBMarginGMM":
+        with open(path, "rb") as f:
+            obj = pickle.load(f)
+        print(f"GMM 模型已載入：{path}（n_components={obj.n_components}）")
+        return obj
+
+
+def find_optimal_gmm_components(
+    df: pd.DataFrame,
+    k_range: range = range(2, 10),
+) -> pd.DataFrame:
+    """
+    用 BIC + AIC 找最佳 GMM n_components，並畫折線圖。
+    BIC 懲罰複雜度更強，通常比 AIC 選出更少的群，兩者都越低越好。
+
+    Returns
+    -------
+    pd.DataFrame : k, BIC, AIC
+    """
+    import matplotlib.pyplot as plt
+
+    plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
+
+    avail = [c for c in CLASSIFY_FEATURES if c in df.columns]
+    pre = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("pca", PCA(n_components=min(10, len(avail)), random_state=42)),
+        ]
+    )
+    X = pre.fit_transform(df[avail].values)
+
+    rows = []
+    print("掃描最佳 GMM k 值...")
+    for k in k_range:
+        gmm = GaussianMixture(n_components=k, covariance_type="full", random_state=42, n_init=5)
+        gmm.fit(X)
+        rows.append({"k": k, "BIC": gmm.bic(X), "AIC": gmm.aic(X)})
+        print(f"  k={k}: BIC={gmm.bic(X):,.0f}, AIC={gmm.aic(X):,.0f}")
+
+    result = pd.DataFrame(rows).set_index("k")
+    best_bic = int(result["BIC"].idxmin())
+    best_aic = int(result["AIC"].idxmin())
+    print(f"\n最佳 BIC k={best_bic}  |  最佳 AIC k={best_aic}")
+
+    _, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(result.index, result["BIC"], "o-", color="steelblue", label="BIC")
+    ax.plot(result.index, result["AIC"], "s--", color="tomato", label="AIC")
+    ax.axvline(best_bic, color="steelblue", linestyle=":", linewidth=1.2, alpha=0.7, label=f"BIC 最佳 k={best_bic}")
+    ax.set_xlabel("n_components (k)")
+    ax.set_ylabel("分數（越低越好）")
+    ax.set_title("GMM：BIC / AIC 選擇最佳 k")
+    ax.set_xticks(list(k_range))
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+    return result
 
 
 if __name__ == "__main__":
-    clf, df = run(st="2023-01-01", n_clusters=N_CLUSTERS)
-    plot_clusters(clf, df)
+    MIN_ATR = 0.02  # 排除日均波幅 < 1% 的低流動性觀測值
 
-    # find_optimal_clusters(df)
+    # 訓練：只用 2020~2023，過濾低波動
+    # retrain=False：有 pkl 就直接載入，要重訓改成 retrain=True
+    clf, _ = run(st="2020-01-01", end="2023-12-31", model="gmm", min_atr_pct=MIN_ATR, retrain=False)
+
+    # 評估：2024 之後的 out-of-sample 資料，同樣過濾
+    stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
+    df_test = load_data(stocks, st="2024-01-01", min_atr_pct=MIN_ATR)
+    df_test["cluster"] = clf.predict(df_test)
+
+    evaluate_clustering(clf=clf, df=df_test)
+    analyze_cluster_returns(df_test, hold_days=5)
+    analyze_cluster_returns(df_test, hold_days=10)
+    analyze_cluster_returns(df_test, hold_days=20)
+
+    # 各叢集出現頻率（每日有幾天、幾支）
+    total_days = df_test["date"].nunique()
+    freq = df_test.groupby("cluster").agg(
+        appear_days=("date", "nunique"),
+        avg_stocks_per_day=("stock_id", lambda x: x.groupby(df_test.loc[x.index, "date"]).count().mean()),
+    )
+    freq["appear_rate"] = freq["appear_days"] / total_days
+    print(f"\n{'='*55}")
+    print(f"各叢集出現頻率（共 {total_days} 個交易日）")
+    print(f"{'='*55}")
+    print(freq.to_string())
+
+    # 今日預測（實際使用）
+    df_today = predict_today(model="gmm")
+
+    plot_clusters(clf, df_test)
+
+
+# df_today = predict_today()
+# candidates = df_today[df_today["cluster"] == 2]
