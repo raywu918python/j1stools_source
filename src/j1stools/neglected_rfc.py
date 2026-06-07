@@ -16,8 +16,10 @@ import os
 import pickle
 
 import pandas as pd
+from lightgbm import LGBMClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, roc_auc_score
+from xgboost import XGBClassifier
 
 from j1stools import parquet_db
 from j1stools.label_builder import profit_label
@@ -126,6 +128,64 @@ def train_rfc(
     auc = roc_auc_score(y, rfc.predict_proba(X)[:, 1])
     print(f"訓練集 AUC：{auc:.4f}（in-sample，供參考）")
     return rfc
+
+
+def train_xgb(
+    df_train: pd.DataFrame,
+    n_estimators: int = 200,
+    max_depth: int = 6,
+    features: list | None = None,
+) -> XGBClassifier:
+    feat_list = features if features is not None else RFC_FEATURES
+    avail = [c for c in feat_list if c in df_train.columns]
+    X = df_train[avail].fillna(0.5).values
+    y = df_train["Y"].values
+
+    scale = (y == 0).sum() / (y == 1).sum()
+    xgb = XGBClassifier(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        learning_rate=0.05,
+        scale_pos_weight=scale,
+        random_state=42,
+        n_jobs=-1,
+        eval_metric="auc",
+        verbosity=0,
+    )
+    xgb.fit(X, y)
+    xgb._fitted_features = avail
+
+    auc = roc_auc_score(y, xgb.predict_proba(X)[:, 1])
+    print(f"訓練集 AUC：{auc:.4f}（in-sample，供參考）")
+    return xgb
+
+
+def train_lgbm(
+    df_train: pd.DataFrame,
+    n_estimators: int = 200,
+    max_depth: int = 6,
+    features: list | None = None,
+) -> LGBMClassifier:
+    feat_list = features if features is not None else RFC_FEATURES
+    avail = [c for c in feat_list if c in df_train.columns]
+    X = df_train[avail].fillna(0.5).values
+    y = df_train["Y"].values
+
+    lgbm = LGBMClassifier(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        learning_rate=0.05,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        verbosity=-1,
+    )
+    lgbm.fit(X, y)
+    lgbm._fitted_features = avail
+
+    auc = roc_auc_score(y, lgbm.predict_proba(X)[:, 1])
+    print(f"訓練集 AUC：{auc:.4f}（in-sample，供參考）")
+    return lgbm
 
 
 def eval_rfc(
@@ -315,24 +375,26 @@ if __name__ == "__main__":
         print("\n建立測試集...")
         df_test = build_dataset(clf_gmm, stocks, EVAL_ST, clusters=None, hold_days=HOLD_DAYS, min_atr_pct=MIN_ATR)
 
-        # Ablation：同一訓練集，比較有無 cluster 特徵
-        features_with = RFC_FEATURES
-        features_without = [f for f in RFC_FEATURES if f != "cluster"]
+        # 三模型 PK：同一訓練集、同一測試集
+        print("\n" + "=" * 60)
+        print("【RFC】")
+        print("=" * 60)
+        rfc = train_rfc(df_train)
+        eval_rfc(rfc, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
 
         print("\n" + "=" * 60)
-        print("【含 cluster 特徵】")
+        print("【XGBoost】")
         print("=" * 60)
-        rfc_with = train_rfc(df_train, features=features_with)
-        eval_rfc(rfc_with, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
+        xgb = train_xgb(df_train)
+        eval_rfc(xgb, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
 
-        # print("\n" + "="*60)
-        # print("【不含 cluster 特徵】")
-        # print("="*60)
-        # rfc_without = train_rfc(df_train, features=features_without)
-        # eval_rfc(rfc_without, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
+        print("\n" + "=" * 60)
+        print("【LightGBM】")
+        print("=" * 60)
+        lgbm = train_lgbm(df_train)
+        eval_rfc(lgbm, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
 
-        # 儲存較好的（預設存含 cluster 版本）
-        save_rfc(rfc_with)
+        save_rfc(rfc)
 
     elif MODE == "eval_only":
         rfc = load_rfc()
