@@ -44,7 +44,7 @@ def train_best_model(
         stocks = parquet_db.query_stocks_no_etf()
 
     print("=" * 60, "prepare data")
-    df = prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_and_del)
+    df = prepare_data(stocks, st, end, atr_filter_type=FILTER_TYPE.add_)
     xtrain, xtest, ytrain, ytest = rfc_split_date(df, True, True, trainging_idx)
     xtrain, ytrain = drop_na_inf(xtrain, ytrain)
     xtest, ytest = drop_na_inf(xtest, ytest)
@@ -161,6 +161,7 @@ def train_best_model(
                 gs.fit(x_fit, ytrain, **fit_params)
         except Exception as e:
             import traceback
+
             print(f"  [SKIP] {name} 訓練失敗: {e}")
             traceback.print_exc()
             continue

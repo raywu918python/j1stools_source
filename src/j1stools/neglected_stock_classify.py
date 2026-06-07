@@ -48,7 +48,7 @@ NEGLECTED_FEATURES = [
 ]
 
 N_COMPONENTS = 6
-NEGLECTED_MODEL_PATH = "db/models/neglected_gmm.pkl"
+NEGLECTED_MODEL_PATH = "models/neglected_gmm.joblib"
 
 
 def load_neglected_data(
@@ -171,15 +171,24 @@ class NeglectedGMM:
             print(df[df["date"] == latest]["cluster"].value_counts().sort_index().to_string())
 
     def save(self, path: str = NEGLECTED_MODEL_PATH):
+        import joblib
+
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
+        joblib.dump(self, path)
         print(f"模型已儲存：{path}")
 
     @classmethod
     def load(cls, path: str = NEGLECTED_MODEL_PATH) -> "NeglectedGMM":
-        with open(path, "rb") as f:
-            obj = pickle.load(f)
+        import sys
+        import joblib
+
+        # joblib/pickle 存檔時若從 __main__ 執行，類別記為 __main__.NeglectedGMM
+        # 從其他 script 載入時需注入到 __main__，避免 AttributeError
+        main = sys.modules.get("__main__")
+        if main is not None and not hasattr(main, "NeglectedGMM"):
+            setattr(main, "NeglectedGMM", cls)
+
+        obj = joblib.load(path)
         print(f"模型已載入：{path}（n_components={obj.n_components}）")
         return obj
 
@@ -401,7 +410,7 @@ if __name__ == "__main__":
     #  experiment    : 快速實驗（不覆蓋 pkl）
     #  deep_analyze  : 對 CLUSTER_ID 做深度分析（股票清單 + Alpha + 空頭壓測）
     #  predict_today : 今日候選股票（叢集 2、3）
-    MODE = "predict_today"
+    MODE = "release"
     # ─────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]

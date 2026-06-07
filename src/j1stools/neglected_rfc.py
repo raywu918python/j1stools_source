@@ -379,8 +379,10 @@ def eval_rfc(
     cum_base = (1 + df_base["mean_return"]).cumprod()
 
     threshold_str = f"  門檻 prob>={effective_min_prob:.4f}" if effective_min_prob > 0 else ""
+    date_range = f"{df_eval['date'].min().date()} ~ {df_eval['date'].max().date()}"
     print(f"\n{'='*60}")
     print(f"非重疊換倉 Top-{top_n} 組合（每 {hold_days} 日換一次{threshold_str}）  共 {len(rfc_returns)} 期進場")
+    print(f"期間：{date_range}")
     print(f"{'='*60}")
     print(f"{'':15} {'RFC':>10} {'隨機 Baseline':>15}")
     print(f"  平均報酬   {df_perf['mean_return'].mean():>9.2%} {df_base['mean_return'].mean():>14.2%}")
@@ -439,6 +441,30 @@ def load_xgb(path: str = XGB_MODEL_PATH) -> XGBClassifier:
     xgb = joblib.load(path)
     print(f"XGB 模型已載入：{path}")
     return xgb
+
+
+ENSEMBLE_MODEL_PATH = "models/neglected_ensemble.joblib"
+
+
+def save_ensemble(ensemble: EnsembleModel, path: str = ENSEMBLE_MODEL_PATH):
+    import joblib
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    joblib.dump(ensemble, path)
+    print(f"Ensemble 模型已儲存：{path}")
+
+
+def load_ensemble(path: str = ENSEMBLE_MODEL_PATH) -> EnsembleModel:
+    import sys
+    import joblib
+
+    main = sys.modules.get("__main__")
+    if main is not None and not hasattr(main, "EnsembleModel"):
+        setattr(main, "EnsembleModel", EnsembleModel)
+
+    ensemble = joblib.load(path)
+    print(f"Ensemble 模型已載入：{path}")
+    return ensemble
 
 
 def predict_today_rfc(
@@ -551,37 +577,77 @@ if __name__ == "__main__":
         avail = [c for c in RFC_FEATURES if c in df_train.columns]
         X_all = df_train[avail].fillna(0.5).values
         y_all = df_train["Y"].values
-        scale = (y_all == 0).sum() / (y_all == 1).sum()
         xgb_tuned = XGBClassifier(
             **best_params,
-            scale_pos_weight=scale,
             random_state=42,
             n_jobs=-1,
-            eval_metric="auc",
+            eval_metric="mlogloss",
             verbosity=0,
         )
         xgb_tuned.fit(X_all, y_all)
         xgb_tuned._fitted_features = avail
-        print(f"訓練集 AUC：{roc_auc_score(y_all, xgb_tuned.predict_proba(X_all)[:, 1]):.4f}（in-sample）")
+        auc_in = roc_auc_score(y_all, xgb_tuned.predict_proba(X_all), multi_class="ovr", average="macro")
+        print(f"訓練集 AUC（macro OvR）：{auc_in:.4f}（in-sample）")
+
+        print("\n" + "=" * 60)
+        print("【XGBoost 調參版】")
+        print("=" * 60)
         eval_rfc(xgb_tuned, df_test, top_n=TOP_N, hold_days=HOLD_DAYS, top_pct=TOP_PCT)
 
+        # 調參後的 XGB + 預設 LGBM 的 Ensemble
+        print("\n建立 LGBM（預設）...")
+        lgbm_default = train_lgbm(df_train)
+        from sklearn.metrics import roc_auc_score as _auc
+
+        def _oas(m):
+            X = df_test[m._fitted_features].fillna(0.5).values
+            return _auc(df_test["Y"].values, m.predict_proba(X), multi_class="ovr", average="macro")
+
+        auc_xgb_t = _oas(xgb_tuned)
+        auc_lgbm = _oas(lgbm_default)
+        print("\n" + "=" * 60)
+        print(f"【Ensemble 調參XGB + 預設LGBM  (AUC {auc_xgb_t:.4f} / {auc_lgbm:.4f})】")
+        print("=" * 60)
+        ensemble_tuned = EnsembleModel([xgb_tuned, lgbm_default], weights=[auc_xgb_t, auc_lgbm])
+        eval_rfc(ensemble_tuned, df_test, top_n=TOP_N, hold_days=HOLD_DAYS, top_pct=TOP_PCT)
+
     elif MODE == "release":
-        # 正式 release 模型：全訓練集（2015-2023）訓練 XGB，儲存供量化回測使用
+        # 正式 release：全訓練集（2015-2023）訓練 XGB + LGBM，組成 Ensemble 儲存
         print("建立 Release 訓練集（2015-2023）...")
         df_train = build_dataset(
             clf_gmm, stocks, TRAIN_ST, TRAIN_END, clusters=None, hold_days=HOLD_DAYS, min_atr_pct=MIN_ATR
         )
-        print("\n訓練 XGBoost Release 模型...")
-        xgb_release = train_xgb(df_train)
-        save_xgb(xgb_release)
-        print(f"\nRelease 完成：{XGB_MODEL_PATH}")
-        print(f"特徵數：{len(xgb_release._fitted_features)}")
-        print(f"特徵列表：{xgb_release._fitted_features}")
+        print("\n訓練 XGBoost...")
+        xgb_rel = train_xgb(df_train)
+        print("\n訓練 LightGBM...")
+        lgbm_rel = train_lgbm(df_train)
+
+        from sklearn.metrics import roc_auc_score as _auc2
+
+        auc_x = _auc2(
+            df_train["Y"],
+            xgb_rel.predict_proba(df_train[xgb_rel._fitted_features].fillna(0.5).values),
+            multi_class="ovr",
+            average="macro",
+        )
+        auc_l = _auc2(
+            df_train["Y"],
+            lgbm_rel.predict_proba(df_train[lgbm_rel._fitted_features].fillna(0.5).values),
+            multi_class="ovr",
+            average="macro",
+        )
+
+        ensemble_rel = EnsembleModel([xgb_rel, lgbm_rel], weights=[auc_x, auc_l])
+        save_ensemble(ensemble_rel)
+        print(f"\nRelease 完成：{ENSEMBLE_MODEL_PATH}")
+        print(f"  XGB  in-sample AUC：{auc_x:.4f}  weight：{ensemble_rel.weights[0]:.4f}")
+        print(f"  LGBM in-sample AUC：{auc_l:.4f}  weight：{ensemble_rel.weights[1]:.4f}")
+        print(f"特徵：{ensemble_rel._fitted_features}")
 
     elif MODE == "eval_only":
-        rfc = load_rfc()
+        ensemble = load_ensemble()
         df_test = build_dataset(clf_gmm, stocks, EVAL_ST, clusters=None, hold_days=HOLD_DAYS, min_atr_pct=MIN_ATR)
-        eval_rfc(rfc, df_test, top_n=TOP_N, hold_days=HOLD_DAYS)
+        eval_rfc(ensemble, df_test, top_n=TOP_N, hold_days=HOLD_DAYS, top_pct=TOP_PCT)
 
     elif MODE == "predict_today":
         predict_today_rfc(top_n=TOP_N, clusters=CLUSTERS)

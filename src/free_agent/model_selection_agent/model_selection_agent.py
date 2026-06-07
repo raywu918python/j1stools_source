@@ -37,14 +37,22 @@ _gemini_client = OpenAI(
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
 )
 
-MODELS = [
-    # ("qwen3:14b", _ollama_client),
-    ("qwen3-coder:latest", _ollama_client),
-    ("llama-3.3-70b-versatile", _groq_client),
-    ("deepseek-v4-flash", _deepseek_client),
+FREE_MODELS = [
+    # ("qwen3-32b", _groq_client),
+    ("openai/gpt-oss-120b", _groq_client),
+    ("openai/gpt-oss-20b", _groq_client),
     (os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), _gemini_client),
+    # ("qwen3:14b", _ollama_client),
+    # ("gpt-oss:20b", _ollama_client),  # 本機，最後
+    ("qwen3-coder:latest", _ollama_client),  # 本機，最後
 ]
-_model_idx = 0
+
+PAID_MODELS = [
+    ("deepseek-v4-flash", _deepseek_client),
+]
+
+_model_pool: str = "paid"  # "paid" | "free"
+_model_idx: int = 0
 
 # ── 目前目標參數（session 全域） ──────────────────────────────────
 _current_target: dict = {"task": "return", "hold_days": 10, "threshold": 0.15, "sl_stop": 0.08}
@@ -66,12 +74,16 @@ def _target_name(tgt: dict) -> str:
     return f"{hd}d_{task}_{th}"
 
 
+def _current_pool() -> list:
+    return PAID_MODELS if _model_pool == "paid" else FREE_MODELS
+
+
 def _current_model() -> str:
-    return MODELS[_model_idx][0]
+    return _current_pool()[_model_idx][0]
 
 
 def _current_client():
-    return MODELS[_model_idx][1]
+    return _current_pool()[_model_idx][1]
 
 
 def _use_full_tool_results() -> bool:
@@ -80,10 +92,15 @@ def _use_full_tool_results() -> bool:
 
 
 def _next_model() -> bool:
-    global _model_idx
-    if _model_idx < len(MODELS) - 1:
+    global _model_pool, _model_idx
+    if _model_pool == "paid":
+        _model_pool = "free"
+        _model_idx = 0
+        print(f"\n[模型輪換] 付費模型額度用完，切換至免費 {FREE_MODELS[0][0]}")
+        return True
+    if _model_idx < len(FREE_MODELS) - 1:
         _model_idx += 1
-        print(f"\n[模型輪換] 切換至 {MODELS[_model_idx][0]}")
+        print(f"\n[模型輪換] 切換至 {FREE_MODELS[_model_idx][0]}")
         return True
     print("\n[模型輪換] 所有模型額度已用完，今天停止")
     return False
@@ -746,8 +763,6 @@ def execute_tool(name: str, inputs: dict) -> dict:
 
     if name == "check_history":
         top_n = inputs.get("top_n", 20)
-        ind_limit = 5
-        # 當次 session（用於飽和計數）
         session_entries = _load_signal_log(target, max_entries=9999)
         # 歷史 bak（僅供參考，不計入飽和）
         bak_entries = []
@@ -766,17 +781,12 @@ def execute_tool(name: str, inputs: dict) -> dict:
         # passed_llm 合併 session + bak（參考用）
         pass_th = _pass_threshold(target)
         all_llm = session_entries + bak_entries
-        passed_llm = [e for e in all_llm if e.get("source") != "grid"
-                      and e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100]
+        passed_llm = [
+            e
+            for e in all_llm
+            if e.get("source") != "grid" and e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100
+        ]
         passed_grid = [e for e in grid_entries if e.get("hit_rate", 0) >= pass_th and e.get("sample_count", 0) >= 100]
-
-        # 飽和計數只用當次 session（不含 bak，讓 LLM 每次探索自由）
-        ind_usage: dict = {}
-        for e in session_entries:
-            if e.get("source") != "grid":
-                for t in _saturable_indicators(e.get("condition", "")):
-                    ind_usage[t] = ind_usage.get(t, 0) + 1
-        saturated = [k for k, v in ind_usage.items() if v >= ind_limit]
 
         ind_filter = inputs.get("indicator", "")
 
@@ -786,7 +796,6 @@ def execute_tool(name: str, inputs: dict) -> dict:
         return {
             "total_tested": len(session_entries) + len(bak_entries) + len(grid_entries),
             "passed": len(passed_llm) + len(passed_grid),
-            "saturated_indicators": saturated,
             "passed_conditions": [
                 {"condition": e.get("condition", ""), "hit_rate": e.get("hit_rate")}
                 for e in sorted(filter(_match, passed_llm), key=lambda x: -x.get("hit_rate", 0))[:top_n]
@@ -819,24 +828,6 @@ def execute_tool(name: str, inputs: dict) -> dict:
                     "型態（f_n_structure_score/triangle_score）或籌碼（short_ratio_rank/trust_rank）之一。"
                 )
             }
-        # 飽和硬擋：合併 session + bak + grid_log 計算，防止 LLM 靠記憶繞過 tool description
-        if not inputs.get("_bypass_min_indicators"):
-            # 飽和只計當次 session（不含 bak，每次 session 自由探索）
-            _all = _load_signal_log(target, max_entries=9999)
-            _iu: dict = {}
-            for _e in _all:
-                if _e.get("source") != "grid":
-                    for _t in _saturable_indicators(_e.get("condition", "")):
-                        _iu[_t] = _iu.get(_t, 0) + 1
-            all_saturated = {k for k, v in _iu.items() if v >= 5}
-            saturated_used = _saturable_indicators(condition) & all_saturated
-            if saturated_used:
-                available_now = sorted(set(AGENT_INDICATORS) - all_saturated)
-                return {
-                    "error": f"飽和指標 {sorted(saturated_used)} 已出現 3+ 次，不可再用。",
-                    "現在可用的指標": available_now,
-                    "建議": "請從上面的可用指標中，選擇尚未探索的維度（量能、籌碼、型態）重新組合。",
-                }
         try:
             ind, close = _get_indicators(TRAIN_START, TRAIN_END)
         except Exception as e:
@@ -971,7 +962,7 @@ def _build_system_prompt(target: dict) -> str:
 
 **目標：找出能預測上述任務的指標組合，hit_rate >= {pass_th:.2f}，sample_count >= 100。**
 - 技術、量能、籌碼、型態指標皆可自由組合，找到什麼有效就用什麼
-- 每個指標最多使用 5 次（condition 參數的可用指標清單會即時更新）
+- 同一條件不會重複測試（已測過的直接略過）
 
 ━━ 工作流程 ━━
 1. 先呼叫 check_history()，看 grid_passed（Grid Search 已測好的 2 指標基礎）和 passed_conditions（已通過條件）
@@ -1001,7 +992,6 @@ def _compress_result(fn_name: str, result: dict) -> str:
     if fn_name == "check_history":
         lines = [
             f"total={result.get('total_tested')} passed={result.get('passed')}",
-            f"saturated={result.get('saturated_indicators',[])}",
             f"grid_summary={result.get('grid_summary','')}",
         ]
         for e in result.get("grid_passed", [])[:10]:
@@ -1042,15 +1032,23 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
     target: {"hold_days": 10, "profit_target": 0.15, "sl_stop": 0.08}
     max_calls: 最多幾次 tool 呼叫就停（0 = 不限）
     """
-    global _current_target, _model_idx
+    global _current_target, _model_pool, _model_idx
     _current_target = target
+    _model_pool = "paid"
     _model_idx = 0
 
     if model_override:
-        for i, (m, _) in enumerate(MODELS):
+        for i, (m, _) in enumerate(PAID_MODELS):
             if model_override in m:
+                _model_pool = "paid"
                 _model_idx = i
                 break
+        else:
+            for i, (m, _) in enumerate(FREE_MODELS):
+                if model_override in m:
+                    _model_pool = "free"
+                    _model_idx = i
+                    break
 
     # 備份舊 signal_log
     sig_path = _signal_log_path(target)
@@ -1090,16 +1088,6 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
         n_tested = len(sig_entries)
         n_passed = len([e for e in sig_entries if e.get("hit_rate", 0) >= _pass_threshold(target)])
 
-        # 飽和計數只用當次 session（不含 bak，讓每次 session 自由探索）
-        _ind_usage: dict = {}
-        for _e in sig_entries:
-            if _e.get("source") != "grid":
-                for _t in _saturable_indicators(_e.get("condition", "")):
-                    _ind_usage[_t] = _ind_usage.get(_t, 0) + 1
-        saturated = sorted(k for k, v in _ind_usage.items() if v >= 5)
-
-        available = sorted(set(AGENT_INDICATORS) - set(saturated))
-
         result = _copy.deepcopy(TOOLS)
         for tool in result:
             name = tool["function"]["name"]
@@ -1109,17 +1097,13 @@ def run_agent(target: dict, max_calls: int = 0, model_override: str = "") -> str
                 notes.append(f"已呼叫 {count} 次")
             if name == "analyze_signal":
                 notes.append(f"本 session 已測 {n_tested} 個條件，{n_passed} 個通過")
-                # 直接把可用指標列表注入 condition 參數 description
-                tool["function"]["parameters"]["properties"]["condition"]["description"] = (
-                    f"條件字串，用 & | ~，每個子句加括號。"
-                    f"【只能使用以下 {len(available)} 個指標，其餘已飽和禁用】：{available}"
-                )
             if notes:
                 tool["function"]["description"] += f"（{'；'.join(notes)}）"
         return result
 
     print(
-        f"\n[{tgt_name}] 開始探索... {'（測試：最多 ' + str(max_calls) + ' 次工具呼叫）' if max_calls else ''}\n{'─' * 60}"
+        f"\n[{tgt_name}] 開始探索... {'（測試：最多 ' + str(max_calls) + ' 次工具呼叫）' if max_calls else ''}"
+        f"\n模型：{_current_model()}\n{'─' * 60}"
     )
 
     while True:
@@ -1644,14 +1628,12 @@ def _generate_report(target: dict):
 def _generate_index(results_d: str):
     """產生 index.html，左側標籤切換所有歷史報表（iframe）。"""
     import glob
+
     reports = [("最新", "report.html")] + [
         (os.path.basename(p).replace("report_", "").replace(".html", ""), os.path.basename(p))
         for p in sorted(glob.glob(os.path.join(results_d, "report_*.html")), reverse=True)[:20]
     ]
-    tabs = "\n".join(
-        f'<div class="tab" onclick="load(\'{fn}\')">{label}</div>'
-        for label, fn in reports
-    )
+    tabs = "\n".join(f'<div class="tab" onclick="load(\'{fn}\')">{label}</div>' for label, fn in reports)
     index_html = f"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head><meta charset="UTF-8"><title>報表導覽</title>
@@ -1727,6 +1709,6 @@ if __name__ == "__main__":
     sl_stop = float(sys.argv[4]) if len(sys.argv) > 4 else 0.08
     model = sys.argv[5] if len(sys.argv) > 5 else "qwen"
     max_calls = int(sys.argv[6]) if len(sys.argv) > 6 else 30
-    model = "qwen"
+    model = "qwen3-code"
     max_calls = 100
     run_session(task=task, hold_days=hold_days, threshold=threshold, sl_stop=sl_stop, model=model, max_calls=max_calls)
