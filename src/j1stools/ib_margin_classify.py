@@ -107,6 +107,19 @@ HDBSCAN_MODEL_PATH = "db/models/ib_margin_hdbscan.pkl"
 MARKET_PROXY = "0050"  # 大盤代理（台灣50）
 
 """
+【外資忽視股效應】2026-06-07 發現
+
+GMM 每次都會產生一個「NaN 叢集」：_5d_z/_10d_z 全 NaN（外資幾乎不買，std≈0）、
+f_dt_* 全 NaN（不在當沖名單）。這群股票 OOS 報酬遠超有完整籌碼資料的群：
+  10日均報 4.79%，勝率 57.8%（其他群最高約 2.07%）
+
+原因：Neglected Firm Effect。機構不追 → 市場定價效率低 → 超額報酬。
+目標本來是找會漲的股票，IB/Margin 只是條件，但條件外的股票反而更強。
+
+識別方式：f_net_foreign_5d_z_xrank.isna() AND f_dt_ratio_xrank.isna()
+代表股票：6725, 3135, 2380, 4749, 6994 等（無外資追蹤、不能當沖的個股）
+→ 應獨立用基本面或純技術面建策略，不適合套 IB+Margin 框架
+
 KMeans k=5 結果紀錄（886支股票，2023-01-01 ~ 2026-06-05，706,147筆）
 
 叢集 0 (8.4%,  89支) — 投信主力
@@ -130,15 +143,21 @@ KMeans k=5 結果紀錄（886支股票，2023-01-01 ~ 2026-06-05，706,147筆）
 """
 
 
-def load_data(stocks: list, st: str, end: str = "2099-01-01", min_atr_pct: float | None = None) -> pd.DataFrame:
+def load_data(
+    stocks: list,
+    st: str,
+    end: str = "2099-01-01",
+    min_atr_pct: float | None = None,
+    require_complete: bool = True,
+) -> pd.DataFrame:
     """
     載入並合併價格、融資融券、法人資料，回傳含 f_ 特徵的 DataFrame。
 
     Parameters
     ----------
-    min_atr_pct : 過濾門檻，保留 ATR14/close >= 此值的觀測值。
-                  例如 0.01 = 排除日均波幅 < 1% 的停牌/低流動性紀錄。
-                  None = 不過濾（預設）。
+    min_atr_pct      : 過濾門檻，保留 ATR14/close >= 此值的觀測值。
+    require_complete : True（預設）= 過濾缺關鍵籌碼特徵的觀測值（IB+Margin 模型用）
+                       False = 保留全部，包含外資忽視股（neglected_stock_classify 用）
     """
     df_market = parquet_db.query_price([MARKET_PROXY], st, end)
     df_market["date"] = pd.to_datetime(df_market["date"])
@@ -172,6 +191,13 @@ def load_data(stocks: list, st: str, end: str = "2099-01-01", min_atr_pct: float
         before = len(feat)
         feat = feat[feat["f_atr14_pct"].fillna(0) >= min_atr_pct]
         print(f"ATR 過濾（>= {min_atr_pct:.3f}）：{before:,} → {len(feat):,} 筆，移除 {before - len(feat):,} 筆")
+
+    if require_complete:
+        # 過濾缺關鍵籌碼特徵的觀測值（無法當沖 or 外資不追蹤的股票）
+        # 這些股票 z-score/dt 特徵結構性缺失，會被 GMM 誤聚成假高報酬群
+        before = len(feat)
+        feat = feat.dropna(subset=["f_net_foreign_5d_z_xrank", "f_dt_ratio_xrank"])
+        print(f"籌碼完整性過濾：{before:,} → {len(feat):,} 筆，移除 {before - len(feat):,} 筆")
 
     return feat
 
@@ -304,30 +330,38 @@ class IBMarginClassifier:
         X = df[self._fitted_features].values
         return pd.Series(self.pipeline.predict(X), index=df.index, name="cluster")
 
-    def describe_clusters(self, df: pd.DataFrame | None = None):
-        """印出每個叢集的特徵中位數，幫助人工命名。"""
+    def describe_clusters(self, df: pd.DataFrame | None = None, full: bool = True):
+        """印出每個叢集的特徵中位數，幫助人工命名。full=True 顯示所有訓練特徵。"""
         if self.cluster_profiles is None:
             raise RuntimeError("請先呼叫 fit()")
 
-        key_cols = [
-            c
-            for c in [
-                "f_net_foreign_pct_xrank",
-                "f_net_trust_pct_xrank",
-                "f_net_institutional_total_pct_xrank",
-                "f_net_institutional_total_streak",
-                "f_margin_balance_change_pct_xrank",
-                "f_short_margin_ratio_xrank",
-                "f_return_5d_xrank",
-                "f_relative_strength_20d_xrank",
+        cols = (
+            list(self.cluster_profiles.columns)
+            if full
+            else [
+                c
+                for c in [
+                    "f_net_foreign_pct_xrank",
+                    "f_net_foreign_pct",
+                    "f_net_trust_pct_xrank",
+                    "f_net_trust_pct",
+                    "f_net_institutional_total_pct_xrank",
+                    "f_net_institutional_total_pct",
+                    "f_net_institutional_total_streak",
+                    "f_margin_balance_change_pct_xrank",
+                    "f_margin_balance_change_pct",
+                    "f_short_margin_ratio_xrank",
+                    "f_short_margin_ratio",
+                ]
+                if c in self.cluster_profiles.columns
             ]
-            if c in self.cluster_profiles.columns
-        ]
+        )
 
         print(f"\n{'='*65}")
-        print(f"叢集特徵 Median（{self.n_clusters} 群，xrank: 0=最低分位，1=最高分位）")
+        print(f"叢集特徵 Median（{self.n_clusters} 群，{'全部' if full else '摘要'} {len(cols)} 欄）")
         print(f"{'='*65}")
-        print(self.cluster_profiles[key_cols].T.to_string())
+        with pd.option_context("display.max_rows", None, "display.max_columns", None, "display.width", 200):
+            print(self.cluster_profiles[cols].T.to_string())
 
         if self.cluster_sizes is not None:
             print(f"\n各叢集筆數（訓練集）：")
@@ -430,29 +464,39 @@ class IBMarginHDBSCAN:
         labels, _ = hdbscan_lib.approximate_predict(self.clusterer, X_pca)
         return pd.Series(labels.astype(int), index=df.index, name="cluster")
 
-    def describe_clusters(self, df: pd.DataFrame | None = None):
+    def describe_clusters(self, df: pd.DataFrame | None = None, full: bool = True):
         if self.cluster_profiles is None:
             raise RuntimeError("請先呼叫 fit()")
 
-        key_cols = [
-            c
-            for c in [
-                "f_net_foreign_pct_xrank",
-                "f_net_trust_pct_xrank",
-                "f_net_institutional_total_pct_xrank",
-                "f_net_institutional_total_streak",
-                "f_margin_balance_change_pct_xrank",
-                "f_short_margin_ratio_xrank",
-                "f_return_5d_xrank",
-                "f_relative_strength_20d_xrank",
+        cols = (
+            list(self.cluster_profiles.columns)
+            if full
+            else [
+                c
+                for c in [
+                    "f_net_foreign_pct_xrank",
+                    "f_net_foreign_pct",
+                    "f_net_trust_pct_xrank",
+                    "f_net_trust_pct",
+                    "f_net_institutional_total_pct_xrank",
+                    "f_net_institutional_total_pct",
+                    "f_net_institutional_total_streak",
+                    "f_margin_balance_change_pct_xrank",
+                    "f_margin_balance_change_pct",
+                    "f_short_margin_ratio_xrank",
+                    "f_short_margin_ratio",
+                ]
+                if c in self.cluster_profiles.columns
             ]
-            if c in self.cluster_profiles.columns
-        ]
+        )
 
         print(f"\n{'='*65}")
-        print(f"HDBSCAN 叢集特徵 Median（{self.n_clusters} 群，-1=噪聲群）")
+        print(
+            f"HDBSCAN 叢集特徵 Median（{self.n_clusters} 群，-1=噪聲群，{'全部' if full else '摘要'} {len(cols)} 欄）"
+        )
         print(f"{'='*65}")
-        print(self.cluster_profiles[key_cols].T.to_string())
+        with pd.option_context("display.max_rows", None, "display.max_columns", None, "display.width", 200):
+            print(self.cluster_profiles[cols].T.to_string())
 
         if df is not None and "cluster" in df.columns:
             counts = df["cluster"].value_counts().sort_index()
@@ -549,6 +593,8 @@ def evaluate_clustering(
     dict : silhouette, davies_bouldin, calinski_harabasz, returns{hold_days: {...}}
     """
     import matplotlib.pyplot as plt
+
+    plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
 
     X_full = df[clf._fitted_features].values
     # IBMarginHDBSCAN 用 preprocessor，其他用 pipeline[:-1]
@@ -667,6 +713,8 @@ def find_optimal_clusters(
     pd.DataFrame : k, inertia, silhouette
     """
     import matplotlib.pyplot as plt
+
+    plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
 
     avail = [c for c in CLASSIFY_FEATURES if c in df.columns]
     pre = Pipeline(
@@ -866,6 +914,7 @@ def run(
     min_atr_pct: float | None = None,
     retrain: bool = False,
     features: list | None = None,
+    filter_neglected: bool = True,
 ) -> tuple:
     """
     主流程：載入資料 → 訓練分類器 → 顯示叢集特徵 → 儲存模型。
@@ -889,7 +938,7 @@ def run(
         loaders = {"kmeans": IBMarginClassifier.load, "gmm": IBMarginGMM.load, "hdbscan": IBMarginHDBSCAN.load}
         clf = loaders[model](model_path)
         stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
-        df = load_data(stocks, st, end, min_atr_pct=min_atr_pct)
+        df = load_data(stocks, st, end, min_atr_pct=min_atr_pct, require_complete=filter_neglected)
         df["cluster"] = clf.predict(df)
         if model == "gmm":
             df = pd.concat([df, clf.predict_proba(df)], axis=1)
@@ -899,7 +948,7 @@ def run(
     print(f"模型：{model.upper()}  股票數：{len(stocks)}  期間：{st} ~ {end}")
 
     print("載入資料並計算特徵...")
-    df = load_data(stocks, st, end, min_atr_pct=min_atr_pct)
+    df = load_data(stocks, st, end, min_atr_pct=min_atr_pct, require_complete=filter_neglected)
     print(f"資料筆數：{len(df):,}")
 
     if model == "kmeans":
@@ -1055,29 +1104,47 @@ class IBMarginGMM:
         cols = [f"prob_{k}" for k in range(self.n_components)]
         return pd.DataFrame(proba, index=df.index, columns=cols)
 
-    def describe_clusters(self, df: pd.DataFrame | None = None):
-        """印出每個叢集的特徵中位數，與 IBMarginClassifier 介面對齊。"""
+    def describe_clusters(self, df: pd.DataFrame | None = None, full: bool = True):
+        """
+        印出每個叢集的特徵中位數。
+
+        Parameters
+        ----------
+        full : True（預設）= 顯示所有訓練特徵；False = 只顯示摘要 6 欄
+        """
         if self.cluster_profiles is None:
             raise RuntimeError("請先呼叫 fit()")
 
-        key_cols = [
-            c
-            for c in [
-                "f_net_foreign_pct_xrank",
-                "f_net_trust_pct_xrank",
-                "f_net_institutional_total_pct_xrank",
-                "f_net_institutional_total_streak",
-                "f_margin_balance_change_pct_xrank",
-                "f_short_margin_ratio_xrank",
-                "f_return_5d_xrank",
-                "f_relative_strength_20d_xrank",
+        if full:
+            cols = list(self.cluster_profiles.columns)
+        else:
+            cols = [
+                c
+                for c in [
+                    "f_net_foreign_pct_xrank",
+                    "f_net_foreign_pct",
+                    "f_net_trust_pct_xrank",
+                    "f_net_trust_pct",
+                    "f_net_institutional_total_pct_xrank",
+                    "f_net_institutional_total_pct",
+                    "f_net_institutional_total_streak",
+                    "f_margin_balance_change_pct_xrank",
+                    "f_margin_balance_change_pct",
+                    "f_short_margin_ratio_xrank",
+                    "f_short_margin_ratio",
+                    "f_return_5d_xrank",
+                    "f_relative_strength_20d_xrank",
+                ]
+                if c in self.cluster_profiles.columns
             ]
-            if c in self.cluster_profiles.columns
-        ]
+
         print(f"\n{'='*65}")
-        print(f"GMM 叢集特徵 Median（{self.n_components} 群，BIC={self.bic_:.0f}）")
+        print(
+            f"GMM 叢集特徵 Median（{self.n_components} 群，BIC={self.bic_:.0f}，{'全部' if full else '摘要'} {len(cols)} 欄）"
+        )
         print(f"{'='*65}")
-        print(self.cluster_profiles[key_cols].T.to_string())
+        with pd.option_context("display.max_rows", None, "display.max_columns", None, "display.width", 200):
+            print(self.cluster_profiles[cols].T.to_string())
 
         if df is not None and "cluster" in df.columns:
             counts = df["cluster"].value_counts().sort_index()
@@ -1176,6 +1243,8 @@ def plot_pca(
     """
     import matplotlib.pyplot as plt
 
+    plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
+
     feats = features or CLASSIFY_FEATURES
     avail = [c for c in feats if c in df.columns]
 
@@ -1213,16 +1282,26 @@ def plot_pca(
     print(f"PC1~3 累積解釋變異：{sum(var):.1%}")
 
 
+def _gmm_path(filter_neglected: bool) -> str:
+    """依照是否過濾外資忽視股，回傳對應的模型儲存路徑。"""
+    return GMM_MODEL_PATH if filter_neglected else GMM_MODEL_PATH.replace(".pkl", "_with_neglected.pkl")
+
+
 def release_model(
     n_components: int = N_CLUSTERS,
     min_atr_pct: float = 0.02,
+    filter_neglected: bool = True,
 ) -> IBMarginGMM:
     """
     正式發布 GMM 模型：用 2015-01-01 ~ 2023-12-31 全量資料訓練並儲存。
     無 train/test split — 這是最終上線版本。
+
+    filter_neglected : True = 排除外資忽視股（正式模型）；False = 含全部（研究對照用）
     """
+    path = _gmm_path(filter_neglected)
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
-    print(f"Release GMM  n_components={n_components}  訓練期：2015-01-01 ~ 2023-12-31")
+    tag = "（含外資忽視股）" if not filter_neglected else ""
+    print(f"Release GMM{tag}  n_components={n_components}  訓練期：2015-01-01 ~ 2023-12-31  → {path}")
     clf, _ = run(
         st="2015-01-01",
         end="2023-12-31",
@@ -1230,7 +1309,9 @@ def release_model(
         n_clusters=n_components,
         min_atr_pct=min_atr_pct,
         retrain=True,
+        filter_neglected=filter_neglected,
     )
+    clf.save(path)
     return clf
 
 
@@ -1239,19 +1320,17 @@ def eval_oos(
     st: str = "2024-01-01",
     min_atr_pct: float = 0.02,
     hold_days_list: list = [5, 10, 20],
+    filter_neglected: bool = True,
 ) -> pd.DataFrame:
     """
     OOS 驗證：用已 release 的模型預測 st 之後的資料，分析各叢集報酬。
 
-    Parameters
-    ----------
-    clf : 已訓練的 IBMarginGMM；None 則自動從 pkl 載入
-    st  : OOS 起始日（預設 2024-01-01）
+    filter_neglected : True = 排除外資忽視股；False = 含全部（研究對照用）
     """
     if clf is None:
-        clf = IBMarginGMM.load()
+        clf = IBMarginGMM.load(_gmm_path(filter_neglected))
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
-    df = load_data(stocks, st=st, min_atr_pct=min_atr_pct)
+    df = load_data(stocks, st=st, min_atr_pct=min_atr_pct, require_complete=filter_neglected)
     df["cluster"] = clf.predict(df)
     proba = clf.predict_proba(df)
     df["max_prob"] = proba.max(axis=1)
@@ -1272,13 +1351,34 @@ def eval_oos(
 #   scripts/run_ib_margin_hdbscan.py — HDBSCAN raw 特徵實驗
 
 if __name__ == "__main__":
+    """
+    選股建議
+
+    主力選股：叢集 7（外資強+連買2天，12.5% 覆蓋率）、叢集 9（低券資比，24.5% 覆蓋率）
+    高信心精選：叢集 2（max_prob > 0.7，報酬最高但筆數少）
+    補充：叢集 4（外資連買6天，6.8%）
+    排除：叢集 8（追高頂部）、叢集 0（法人棄守）
+    """
+
     import sys
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
     MIN_ATR = 0.02
-    TRAIN_ST, TRAIN_END, EVAL_ST = "2015-01-01", "2023-12-31", "2024-01-01"
+    TRAIN_ST, TRAIN_END, EVAL_ST = "2020-01-01", "2023-12-31", "2024-01-01"
     FEATURES = None  # None = CLASSIFY_FEATURES（xrank），或換成 CLASSIFY_FEATURES_RAW 實驗
+
+    # ── 外資忽視股開關 ────────────────────────────────────────────────────── #
+    #
+    #  True  : 過濾掉外資忽視股（z-score/dt 缺失），只保留有完整籌碼的股票
+    #          → IB+Margin 籌碼模型的正確用法，避免 NaN 假高報酬群
+    #
+    #  False : 保留全部股票（含外資忽視股）
+    #          → 研究用：觀察「有籌碼 vs 無籌碼」的分群差異
+    #          → 與 neglected_stock_classify.py 做對照
+    #
+    FILTER_NEGLECTED = False
+    # ─────────────────────────────────────────────────────────────────────── #
 
     # ── 切換模式 ──────────────────────────────────────────────────────────── #
     #
@@ -1294,18 +1394,21 @@ if __name__ == "__main__":
     #
     #  release+eval : 【一鍵】release 完接著跑 eval_oos
     #
+    #  scan         : 【調參用】用訓練期資料掃最佳 n_components（BIC/AIC 圖）
+    #                 換特徵或換股票池時用，確認 k 值合理再 release
+    #                 不能用 OOS 資料掃，否則等於用未來資料調參
+    #
     #  pca          : 【探索用】觀察特徵在 PCA 2D/3D 的分布，看有沒有自然群落
     #                 換 FEATURES 可以比較 xrank vs raw 的資料結構差異
     #
-    MODE = "release+eval"
+    MODE = "scan"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
     if MODE == "experiment":
-        # 訓練 + 立刻測試（快速驗證新特徵用）
         clf, _ = run(st=TRAIN_ST, end=TRAIN_END, model="gmm", min_atr_pct=MIN_ATR, retrain=True, features=FEATURES)
-        df_test = load_data(stocks, st=EVAL_ST, min_atr_pct=MIN_ATR)
+        df_test = load_data(stocks, st=EVAL_ST, min_atr_pct=MIN_ATR, require_complete=FILTER_NEGLECTED)
         df_test["cluster"] = clf.predict(df_test)
         clf.describe_clusters(df_test)
         analyze_cluster_returns(df_test, hold_days=5)
@@ -1314,15 +1417,20 @@ if __name__ == "__main__":
         plot_clusters(clf, df_test)
 
     elif MODE == "release":
-        release_model(min_atr_pct=MIN_ATR)
+        release_model(min_atr_pct=MIN_ATR, filter_neglected=FILTER_NEGLECTED)
 
     elif MODE == "eval_oos":
-        eval_oos(st=EVAL_ST, min_atr_pct=MIN_ATR)
+        eval_oos(st=EVAL_ST, min_atr_pct=MIN_ATR, filter_neglected=FILTER_NEGLECTED)
+
+    elif MODE == "scan":
+        # 用訓練期資料掃最佳 k，不能用 OOS（否則等於用未來資料調參）
+        df_train = load_data(stocks, TRAIN_ST, TRAIN_END, min_atr_pct=MIN_ATR, require_complete=FILTER_NEGLECTED)
+        find_optimal_gmm_components(df_train, k_range=range(2, 16))
 
     elif MODE == "release+eval":
-        clf = release_model(min_atr_pct=MIN_ATR)
-        eval_oos(clf=clf, st=EVAL_ST, min_atr_pct=MIN_ATR)
+        clf = release_model(min_atr_pct=MIN_ATR, filter_neglected=FILTER_NEGLECTED)
+        eval_oos(clf=clf, st=EVAL_ST, min_atr_pct=MIN_ATR, filter_neglected=FILTER_NEGLECTED)
 
     elif MODE == "pca":
-        df = load_data(stocks, TRAIN_ST, TRAIN_END, min_atr_pct=MIN_ATR)
+        df = load_data(stocks, TRAIN_ST, TRAIN_END, min_atr_pct=MIN_ATR, require_complete=FILTER_NEGLECTED)
         plot_pca(df, features=FEATURES or CLASSIFY_FEATURES_RAW, use_robust=True)
