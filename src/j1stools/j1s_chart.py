@@ -31,8 +31,10 @@ def plot_performance(portfolio_value, trades_df, initial_cash=1_000_000, is_web=
     """
 
     # ── 1. 策略每日資產價值 ──────────────────────────────
-    strategy_value = portfolio_value.copy()
-
+    if isinstance(portfolio_value, pd.DataFrame):
+        strategy_value = portfolio_value.set_index("date")["total"]
+    else:
+        strategy_value = portfolio_value.copy()
     strategy_value.index = pd.to_datetime(strategy_value.index)
     st  = strategy_value.index.min().strftime("%Y-%m-%d")
     end = strategy_value.index.max().strftime("%Y-%m-%d")
