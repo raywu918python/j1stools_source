@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from j1stools import backtest_platform, parquet_db
-from run_neglected_xgb_predict import MODEL_NAME, predict
+from j1stools.run_neglected_xgb_predict import MODEL_NAME, predict
 
 _TW = timezone(timedelta(hours=8))
 today = datetime.now(_TW).strftime("%Y-%m-%d")
