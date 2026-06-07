@@ -62,6 +62,44 @@ CLASSIFY_FEATURES = [
 # 這些特徵等於「偷看答案」：讓分群結果偏向「已漲的股票」
 # 目標是找「籌碼好但還沒漲」的股票，所以只用 IB + Margin 純籌碼訊號
 
+# 原始值版本（不做截面排名）— 保留數值語意，但大小股規模不同
+# StandardScaler 會標準化量綱，但無法消除市值規模偏差
+CLASSIFY_FEATURES_RAW = [
+    # 外資（% = 佔流通股本，已有規模校正）
+    "f_net_foreign_pct",
+    "f_net_foreign_5d_z",
+    "f_net_foreign_10d_z",
+    "f_net_foreign_streak",
+    # 投信
+    "f_net_trust_pct",
+    "f_net_trust_5d_z",
+    "f_net_trust_10d_z",
+    "f_net_trust_streak",
+    # 法人合計
+    "f_net_institutional_total_pct",
+    "f_net_institutional_total_5d_z",
+    "f_net_institutional_total_10d_z",
+    "f_net_institutional_total_streak",
+    # 融資融券（pct / ratio 已有規模校正）
+    "f_margin_balance_change_pct",
+    "f_short_balance_change_pct",
+    "f_margin_balance_change_5d_pct",
+    "f_short_margin_ratio",
+    # 當沖（ratio 已有規模校正）
+    "f_dt_ratio",
+    "f_dt_net",
+    "f_dt_ratio_5d",
+    # 技術指標
+    "f_volume_ratio_5d",
+    "f_volume_change_pct",
+    "f_atr14_pct",
+    # 價格趨勢
+    "f_ma5_slope",
+    "f_ma20_slope",
+    "f_bias_ma20",
+    "f_momentum_cross",
+]
+
 N_CLUSTERS = 10
 MODEL_PATH = "db/models/ib_margin_classifier.pkl"
 GMM_MODEL_PATH = "db/models/ib_margin_gmm.pkl"
@@ -788,6 +826,7 @@ def run(
     model: str = "kmeans",
     min_atr_pct: float | None = None,
     retrain: bool = False,
+    features: list | None = None,
 ) -> tuple:
     """
     主流程：載入資料 → 訓練分類器 → 顯示叢集特徵 → 儲存模型。
@@ -826,18 +865,18 @@ def run(
 
     if model == "kmeans":
         print(f"訓練 KMeans（n_clusters={n_clusters}）...")
-        clf = IBMarginClassifier(n_clusters=n_clusters)
+        clf = IBMarginClassifier(n_clusters=n_clusters, features=features)
         clf.fit(df)
         df["cluster"] = clf.predict(df)
     elif model == "gmm":
         print(f"訓練 GMM（n_components={n_clusters}）...")
-        clf = IBMarginGMM(n_components=n_clusters)
+        clf = IBMarginGMM(n_components=n_clusters, features=features)
         clf.fit(df)
         df["cluster"] = clf.predict(df)
         df = pd.concat([df, clf.predict_proba(df)], axis=1)
     else:
         print(f"訓練 HDBSCAN（min_cluster_size={n_clusters}）...")
-        clf = IBMarginHDBSCAN(min_cluster_size=n_clusters)
+        clf = IBMarginHDBSCAN(min_cluster_size=n_clusters, features=features)
         clf.fit(df)
         df["cluster"] = clf.predict(df)
 
@@ -1081,10 +1120,9 @@ def find_optimal_gmm_components(
 
 
 if __name__ == "__main__":
-    MIN_ATR = 0.02  # 排除日均波幅 < 1% 的低流動性觀測值
+    MIN_ATR = 0.02  # 排除日均波幅 < 2% 的低流動性觀測值
 
-    # 訓練：只用 2020~2023，過濾低波動
-    # retrain=False：有 pkl 就直接載入，要重訓改成 retrain=True
+    # 實驗：改用原始值（不 xrank）— 注意大小股規模偏差
     clf, _ = run(
         st="2020-01-01",
         end="2023-12-31",
@@ -1092,6 +1130,7 @@ if __name__ == "__main__":
         min_atr_pct=MIN_ATR,
         n_clusters=7500,
         retrain=True,
+        features=CLASSIFY_FEATURES_RAW,
     )
 
     # 評估：2024 之後的 out-of-sample 資料，同樣過濾
