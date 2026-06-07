@@ -235,6 +235,18 @@ def query_ib(stocks: list, st="2015-01-01", end="2099-01-01"):
     return df
 
 
+def query_day_trade(stocks: list, st="2015-01-01", end="2099-01-01"):
+    dataset = ds.dataset("db/day_trade/", format="parquet")
+    st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+    condition = (ds.field("date") >= st_str) & (ds.field("date") < end_str) & (ds.field("stock_id").isin(stocks))
+    df = dataset.to_table(filter=condition).to_pandas()
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    df.sort_values(["date", "stock_id"], inplace=True)
+    df.drop_duplicates(subset=["date", "stock_id"], inplace=True)
+    return df
+
+
 def query_margin(stocks: list, st="2015-01-01", end="2099-01-01"):
     dataset = ds.dataset("db/margin/", format="parquet")
     st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
