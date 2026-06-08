@@ -406,85 +406,33 @@ def win6XX(signal):
 
 def main(
     st="2024-01-01",
-    end="2026-01-01",
+    end="2099-01-01",
 ):
     print("======main======")
-    if False:
-        signal = rfc_main.predict(parquet_db.query_stocks_ids_list(), st, end)
-        signal.to_csv("rfc_macd_6xx.csv", index=False)
-        p = PrepareDate(signal, top_n=5, threshold=0.7)
-    else:
-        signal = lgbm_main.predict(parquet_db.query_stocks_ids_list(), st, end)
-        signal.to_csv("lgbm_main_signal.csv", index=False)
-        p = LgbmPrepareDate(signal, top_n=10, threshold=0.2)
-        # signal = local_signals("lgbm_main_signal.csv")
+    stocks = parquet_db.query_stocks_no_etf()
+    signal = rfc_main.predict(stocks, st, end)
+    signal.to_csv("rfc_macd_6xx.csv", index=False)
 
-    # signal = local_signals()
-    show_chart = Chart.NONE
-    # show_chart |= Chart.PF
-    # show_chart |= Chart.FLOW
-    # show_chart |= Chart.INFO
-
-    #############################################################
-    print("======lgbm prepare======")
-    print(p.proba.head())
-    t1 = time()
-    portfolio_value, trades_df, positions = backtest_engine(
-        use_sl_trail=True,
-        sl_trail=0.1,
-        use_fixed_sl=True,
-        sl_stop=0.2,
-        use_fixed_tp=True,
-        tp_stop=0.1,
-        use_hold_days=True,
-        hold_days=20,
-        #############################################################
-        use_fixed_sl_tp=True,
-        use_proba_sizing=False,
-        #############################################################
+    portfolio_value, trades_df, positions, close_df = prepare_data_backtest(
+        signal,
+        top_n=5,
+        threshold=0.6,
         max_positions=5,
-        group_limit=5,
-        stock_group=p.stock_group,
-        #############################################################
-        init_cash=1_000_000,
-        fee=0.001,
-        close=p.close,
-        entries=p.entries,
-        exits=p.exits,
-        df_proba=p.proba,
+        use_sl_trail=False,
+        use_fixed_sl=True,
+        sl_stop=0.10,
+        use_fixed_tp=True,
+        tp_stop=0.10,
+        use_hold_days=True,
+        hold_days=10,
+        group_limit=2,
+        min_volume=200,
     )
-    print(f"回測時間: {time() - t1:.2f} 秒")
-
-    #############################################################
-    final_value = portfolio_value["total"].iloc[-1]
-    total_return = (final_value / 1_000_000 - 1) * 100
-    print(f"最終資產：{final_value:,.0f}")
-    print(f"總報酬率：{total_return:.2f}%")
-    if not trades_df.empty:
-        print(f"總交易次數：{len(trades_df)}")
-        print(f"勝率：{(trades_df['pnl'] > 0).mean() * 100:.1f}%")
-        print(f"平均報酬：{trades_df['return_pct'].mean():.2f}%")
-    #############################################################
-
-    if show_chart & Chart.PF:
-        j1s_chart.plot_performance(
-            portfolio_value=portfolio_value,
-            trades_df=trades_df,
-            is_web=False,
-        )
-    if show_chart & Chart.FLOW:
-        j1s_chart.chart_gantt(trades_df)
-    if show_chart & Chart.INFO:
-        j1s_chart.chart_allocation(
-            portfolio_value,
-            trades_df,
-            close=p.close,
-        )
 
 
 #############################################################
 # optimize(local_signals())
-# main()
+main()
 # raise Exception("未完成")
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()
