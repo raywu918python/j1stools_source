@@ -66,7 +66,7 @@ def backtest_engine(
             )
 
             if should_exit:
-                if use_fixed_sl_tp and use_fixed_sl and price <= pos["entry_price"] * (1 - tp_stop):
+                if use_fixed_sl_tp and use_fixed_sl and price <= pos["entry_price"] * (1 - sl_stop):
                     sell_value = pos["entry_price"] * (1 - sl_stop) * pos["shares"] * (1 - fee)
                 elif use_fixed_sl_tp and use_fixed_tp and price >= pos["entry_price"] * (1 + tp_stop):
                     sell_value = pos["entry_price"] * (1 + tp_stop) * pos["shares"] * (1 - fee)
