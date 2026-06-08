@@ -220,7 +220,7 @@ def prepare_data_backtest(
         max_positions=max_positions,
         hold_days=hold_days,
         init_cash=1_000_000,
-        fee=0.001,
+        fee=0.003,
         use_hold_days=use_hold_days,
         use_sl_trail=use_sl_trail,
         use_fixed_sl=use_fixed_sl,
@@ -320,7 +320,7 @@ def optimize(signal):
             group_limit=params["group_limit"],
             # use_fixed_sl_tp=params["use_fixed_sl_tp"],
             init_cash=1_000_000,
-            fee=0.001,
+            fee=0.003,
         )
 
         if trades_df.empty:
@@ -396,7 +396,7 @@ def win6XX(signal):
         stock_group=p.stock_group,
         #############################################################
         init_cash=1_000_000,
-        fee=0.001,
+        fee=0.003,
         close=p.close,
         entries=p.entries,
         exits=p.exits,
