@@ -432,7 +432,8 @@ def main(
 
 #############################################################
 # optimize(local_signals())
-main()
+if __name__ == "__main__":
+    main()
 # raise Exception("未完成")
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()
