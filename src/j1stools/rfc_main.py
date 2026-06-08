@@ -216,15 +216,19 @@ def train(
 
 
 def predict(stocks, st, end):
-
-    model = joblib.load("models/rfc_macd_6xx.joblib")
-    df = prepare_data(stocks, st, end)
+    model_name = "rfc_macd_ib_6xx" if USE_IB_FEATURES else "rfc_macd_6xx"
+    model = joblib.load(f"models/{model_name}.joblib")
+    warmup_st = (pd.Timestamp(st) - pd.DateOffset(days=120)).strftime("%Y-%m-%d")
+    df = prepare_data(stocks, warmup_st, end, use_ib=USE_IB_FEATURES)
     _, x, _, y = rfc_split_date(df, is_gen_test=True, is_gen_train=False, trainging_idx=0)
     x = x[[col for col in x.columns if col.startswith("f_")]] if x is not None else None
     x, y = drop_na_inf(x, y)
     expected_features = model.feature_names_in_
     x = x[expected_features]
-    return batter_predict(model, x, y)
+    result = batter_predict(model, x, y)
+    result["date"] = pd.to_datetime(result["date"])
+    result = result[result["date"] >= pd.Timestamp(st)].reset_index(drop=True)
+    return result
 
 
 def model_release():
