@@ -23,7 +23,7 @@ def backtest_engine(
     init_cash=1_000_000,
     fee=0.001,
     group_limit=3,  # ✅ 每族群最多 3 支
-    use_fixed_sl_tp=False,
+    use_fixed_sl_tp=False,  # 固定 10 %，有點像掛單，但實際操作不同
     use_proba_sizing=False,
 ):
     dates = close.index
@@ -151,12 +151,30 @@ def backtest_engine(
 
         # ── 每日資產價值 ──────────────────────────────────
         pos_value = sum(close.loc[dt, sid] * pos["shares"] for sid, pos in positions.items() if sid in close.columns)
-        portfolio_records.append({"date": dt, "cash": round(cash, 2), "market_value": round(pos_value, 2), "total": round(cash + pos_value, 2)})
+        portfolio_records.append(
+            {
+                "date": dt,
+                "cash": round(cash, 2),
+                "market_value": round(pos_value, 2),
+                "total": round(cash + pos_value, 2),
+            }
+        )
 
     _COLS = [
-        "stock_id", "entry_date", "entry_price", "stop", "target",
-        "exit_date", "exit_price", "exit_reason", "highest",
-        "cost", "pnl", "pnl_pct", "return_pct", "hold_days",
+        "stock_id",
+        "entry_date",
+        "entry_price",
+        "stop",
+        "target",
+        "exit_date",
+        "exit_price",
+        "exit_reason",
+        "highest",
+        "cost",
+        "pnl",
+        "pnl_pct",
+        "return_pct",
+        "hold_days",
     ]
     portfolio_df = pd.DataFrame(portfolio_records)
     trades_df = pd.DataFrame(trades) if trades else pd.DataFrame(columns=_COLS)
