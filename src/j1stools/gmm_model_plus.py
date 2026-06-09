@@ -260,7 +260,11 @@ def train_ensemble(df_train: pd.DataFrame, df_val: pd.DataFrame) -> EnsembleMode
     def oos_auc(m):
         avail = m._fitted_features
         X = df_val[avail].fillna(0.5)
-        return roc_auc_score(df_val["Y"].values, m.predict_proba(X), multi_class="ovr", average="macro")
+        y = df_val["Y"].values
+        if len(set(y)) < 3:
+            print(f"  警告：驗證集只有 {sorted(set(y))} 兩個 class，AUC 無法計算，改用等權")
+            return 1.0
+        return roc_auc_score(y, m.predict_proba(X), multi_class="ovr", average="macro")
 
     aucs = {m.__class__.__name__: oos_auc(m) for m in [rfc, xgb, lgbm]}
     for name, auc in aucs.items():
@@ -620,22 +624,20 @@ if __name__ == "__main__":
         elif MODE == "breakout_backtest":
             from j1stools import backtest_platform, j1s_chart
 
-            rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
-            xgb = train_xgb(df_train, features=CLASSIFY_FEATURES)
             lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
 
-            for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", lgbm)]:
-                print(f"\n{'='*60}\n【{name} 回測】\n{'='*60}")
-                signal = make_signal_breakout(
+            def _run_backtest(label, m, clusters):
+                print(f"\n{'='*60}\n【{label}】\n{'='*60}")
+                sig = make_signal_breakout(
                     m,
                     clf_breakout,
                     stocks,
                     st=EVAL_ST,
-                    clusters=BREAKOUT_CLUSTERS,
+                    clusters=clusters,
                     volume_ratio_min=VOLUME_RATIO_MIN,
                 )
-                portfolio_value, trades_df, positions, close_df = backtest_platform.prepare_data_backtest(
-                    signal,
+                pv, td, _, _ = backtest_platform.prepare_data_backtest(
+                    sig,
                     top_n=5,
                     threshold=0.50,
                     max_positions=5,
@@ -649,7 +651,23 @@ if __name__ == "__main__":
                     group_limit=2,
                     min_volume=200,
                 )
-                j1s_chart.plot_performance(portfolio_value, trades_df)
+                j1s_chart.plot_performance(pv, td)
+
+            # ── GMM 過濾（叢集 2/7/9）──
+            _run_backtest("LGBM + GMM 叢集 2/7/9", lgbm, BREAKOUT_CLUSTERS)
+
+            # ── Baseline：全叢集（驗證 GMM 是否有效）──
+            print("\n── 建立 Baseline 訓練集（全叢集）──")
+            df_train_all = build_dataset_breakout(
+                clf_breakout,
+                stocks,
+                TRAIN_ST,
+                VAL_ST,
+                clusters=None,
+                volume_ratio_min=VOLUME_RATIO_MIN,
+            )
+            lgbm_all = train_lgbm(df_train_all, features=CLASSIFY_FEATURES)
+            _run_backtest("LGBM Baseline（全叢集，無 GMM 過濾）", lgbm_all, None)
 
     else:
         print("── 建立訓練集 ──")
