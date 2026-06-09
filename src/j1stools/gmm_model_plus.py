@@ -459,109 +459,14 @@ if __name__ == "__main__":
             print(f"  {k}: {v}")
 
     elif MODE == "breakout_tune_backtest":
-        import optuna
         from j1stools import backtest_platform
-
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
 
         lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
         signal = make_signal_breakout(
-            lgbm,
-            clf_breakout,
-            stocks,
-            st=EVAL_ST,
-            clusters=BREAKOUT_CLUSTERS,
-            volume_ratio_min=VOLUME_RATIO_MIN,
+            lgbm, clf_breakout, stocks, st=EVAL_ST,
+            clusters=BREAKOUT_CLUSTERS, volume_ratio_min=VOLUME_RATIO_MIN,
         )
-
-        def bt_objective(trial):
-            threshold = trial.suggest_float("threshold", 0.30, 0.65)
-            top_n = trial.suggest_int("top_n", 3, 8)
-            max_positions = trial.suggest_int("max_positions", 2, 6)
-            hold_days = trial.suggest_int("hold_days", 5, 20)
-            group_limit = trial.suggest_int("group_limit", 1, 4)
-            sl_stop = trial.suggest_float("sl_stop", 0.05, 0.20)
-            tp_stop = trial.suggest_float("tp_stop", 0.05, 0.25)
-
-            try:
-                pv, _, _, _ = backtest_platform.prepare_data_backtest(
-                    signal,
-                    top_n=top_n,
-                    threshold=threshold,
-                    max_positions=max_positions,
-                    use_sl_trail=False,
-                    use_fixed_sl=True,
-                    sl_stop=sl_stop,
-                    use_fixed_tp=True,
-                    tp_stop=tp_stop,
-                    use_hold_days=True,
-                    hold_days=hold_days,
-                    group_limit=group_limit,
-                    min_volume=200,
-                )
-                total_return = pv["total"].iloc[-1] / pv["total"].iloc[0] - 1
-                return total_return
-            except Exception:
-                return -1.0
-
-        TUNE_TRIALS = 100
-        print(f"\n── Optuna 回測參數最佳化（{TUNE_TRIALS} trials，目標：OOS 總報酬）──")
-        study = optuna.create_study(direction="maximize")
-        study.optimize(bt_objective, n_trials=TUNE_TRIALS, show_progress_bar=True)
-
-        import matplotlib.pyplot as plt
-        plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
-
-        # ── 所有 trial 結果 ──
-        trials_df = study.trials_dataframe()
-        returns = trials_df["value"].dropna()
-
-        print(f"\n{'='*60}")
-        print(f"Optuna 回測參數最佳化報告（{TUNE_TRIALS} trials）")
-        print(f"{'='*60}")
-        print(f"  最佳報酬  : {returns.max():.2%}")
-        print(f"  中位數    : {returns.median():.2%}")
-        print(f"  平均值    : {returns.mean():.2%}")
-        print(f"  標準差    : {returns.std():.2%}")
-        print(f"  >100% 次數: {(returns > 1.0).sum()} / {len(returns)}")
-        print(f"  >50%  次數: {(returns > 0.5).sum()} / {len(returns)}")
-        print(f"  虧損次數  : {(returns < 0).sum()} / {len(returns)}")
-
-        print(f"\n── Top 5 最佳 trials ──")
-        top5 = trials_df.nlargest(5, "value")[["number", "value"] + [c for c in trials_df.columns if c.startswith("params_")]]
-        top5.columns = [c.replace("params_", "") for c in top5.columns]
-        top5["value"] = top5["value"].map("{:.2%}".format)
-        print(top5.to_string(index=False))
-
-        best = study.best_params
-        print(f"\n最佳參數（trial {study.best_trial.number}，報酬 {study.best_value:.2%}）：")
-        for k, v in best.items():
-            fmt = f"{v:.4f}" if isinstance(v, float) else str(v)
-            print(f"  {k}: {fmt}")
-
-        # ── 視覺化：報酬分布 ──
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-        axes[0].hist(returns * 100, bins=20, color="steelblue", edgecolor="white", linewidth=0.5)
-        axes[0].axvline(returns.median() * 100, color="orange", linestyle="--", linewidth=1.5, label=f"中位數 {returns.median():.1%}")
-        axes[0].axvline(returns.max() * 100, color="red", linestyle=":", linewidth=1.5, label=f"最佳 {returns.max():.1%}")
-        axes[0].set_title("100 Trials 報酬率分布")
-        axes[0].set_xlabel("總報酬率 (%)")
-        axes[0].set_ylabel("次數")
-        axes[0].legend()
-
-        trial_nums = trials_df["number"]
-        best_so_far = returns.cummax()
-        axes[1].plot(trial_nums, returns * 100, alpha=0.4, color="steelblue", label="每次報酬")
-        axes[1].plot(trial_nums, best_so_far * 100, color="red", linewidth=1.5, label="歷史最佳")
-        axes[1].set_title("Trials 過程（最佳值收斂）")
-        axes[1].set_xlabel("Trial")
-        axes[1].set_ylabel("總報酬率 (%)")
-        axes[1].legend()
-
-        plt.suptitle("⚠️  最佳值僅出現 1 次，過擬合風險高，參數穩定性請參考中位數", fontsize=11, color="red")
-        plt.tight_layout()
-        plt.show()
+        backtest_platform.optimize_optuna(signal, n_trials=100)
 
     elif MODE == "breakout_compare":
         rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
