@@ -580,7 +580,7 @@ if __name__ == "__main__":
     #  breakout_signal   : Ensemble 訊號品質分析
     #  breakout_backtest : Ensemble 回測
     #
-    MODE = "breakout_signal"
+    MODE = "breakout_backtest"
     # ─────────────────────────────────────────────────────────────────────── #
 
     GMM_TARGET_CLUSTER = 5  # gmm_backtest 用：None=全部忽視股 | int=指定叢集機率當訊號
@@ -631,7 +631,7 @@ if __name__ == "__main__":
             portfolio_value, trades_df, positions, close_df = backtest_platform.prepare_data_backtest(
                 signal,
                 top_n=5,
-                threshold=0.35,
+                threshold=0.50,
                 max_positions=5,
                 use_sl_trail=False,
                 use_fixed_sl=True,
@@ -676,7 +676,7 @@ if __name__ == "__main__":
                 stocks,
                 st=EVAL_ST,
                 top_n=5,
-                threshold=0.45,
+                threshold=0.5,
                 max_positions=5,
                 use_fixed_sl=True,
                 sl_stop=0.10,

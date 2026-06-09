@@ -218,7 +218,7 @@ def load_data(
     feat["f_volume_ratio_20d"] = feat.groupby("stock_id")["volume"].transform(
         lambda x: x / x.rolling(20, min_periods=5).mean()
     )
-    feat["f_daily_return"] = feat.groupby("stock_id")["close"].transform(lambda x: x.pct_change())
+    feat["f_daily_return"] = feat.groupby("stock_id")["close"].transform(lambda x: x.pct_change(fill_method=None))
     feat = feat.drop(columns=["volume", "high", "low"])
 
     if min_atr_pct is not None:
