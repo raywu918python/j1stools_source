@@ -72,6 +72,9 @@ MARKET_PROXY = "0050"  # 大盤代理（台灣50）
 MIN_ATR_PCT = 0.05  # ATR 過濾門檻（GMM 訓練與 LGBM 資料共用）
 VOLUME_RATIO_MIN = 1  # 放量門檻（None = 關閉）
 
+# 分類器額外特徵：量能梯度（GMM 分群不用，分類模型才用）
+CLASSIFIER_FEATURES = CLASSIFY_FEATURES + ["f_volume_ratio_20d_xrank"]
+
 
 def load_transition_stocks(
     stocks: list,
@@ -190,6 +193,7 @@ def load_data(
     feat["f_volume_ratio_20d"] = feat.groupby("stock_id")["volume"].transform(
         lambda x: x / x.rolling(20, min_periods=5).mean()
     )
+    feat["f_volume_ratio_20d_xrank"] = feat.groupby("date")["f_volume_ratio_20d"].rank(pct=True)
     feat["f_daily_return"] = feat.groupby("stock_id")["close"].transform(lambda x: x.pct_change(fill_method=None))
     feat = feat.drop(columns=["volume", "high", "low"])
 

@@ -24,7 +24,7 @@ from xgboost import XGBClassifier
 from j1stools import j1s_chart, parquet_db
 from j1stools.ib_margin_classify import (
     BREAKOUT_GMM_MODEL_PATH,
-    CLASSIFY_FEATURES,
+    CLASSIFIER_FEATURES,
     IBMarginGMM,
     MIN_ATR_PCT,
     VOLUME_RATIO_MIN,
@@ -95,7 +95,7 @@ def make_signal_breakout(
 
 
 def _fit(model, df_train: pd.DataFrame, features: list | None = None):
-    feat_list = features if features is not None else CLASSIFY_FEATURES
+    feat_list = features if features is not None else CLASSIFIER_FEATURES
     avail = [c for c in feat_list if c in df_train.columns]
     X = df_train[avail].fillna(0.5)
     y = df_train["Y"].values
@@ -157,22 +157,44 @@ def train_lgbm(df_train: pd.DataFrame, features: list | None = None) -> LGBMClas
 
 
 def train_lgbm_tuned(df_train: pd.DataFrame, features: list | None = None) -> LGBMClassifier:
-    """LGBM（Optuna 最佳化）：Val AUC 0.6760，叢集 [1,2,3,5,7]，上漲日宇宙"""
+    """LGBM（Optuna 最佳化）：Val AUC 0.6738，排除叢集 [6,8]，27 特徵"""
     return _fit(
         LGBMClassifier(
-            n_estimators=491,
-            max_depth=5,
-            learning_rate=0.02522006977039476,
-            num_leaves=15,
-            min_child_samples=82,
-            subsample=0.6155595042032475,
-            colsample_bytree=0.550787808634972,
-            reg_alpha=0.0032483628032381746,
-            reg_lambda=0.0024074809500550767,
+            n_estimators=483,
+            max_depth=3,
+            learning_rate=0.011309696199358326,
+            num_leaves=70,
+            min_child_samples=66,
+            subsample=0.5684781131909383,
+            colsample_bytree=0.5342311112649019,
+            reg_alpha=0.4555576418233763,
+            reg_lambda=0.00010022911141773666,
             class_weight="balanced",
             random_state=42,
             n_jobs=-1,
             verbosity=-1,
+        ),
+        df_train,
+        features,
+    )
+
+
+def train_xgb_tuned(df_train: pd.DataFrame, features: list | None = None) -> XGBClassifier:
+    """XGB（Optuna 最佳化）：Val AUC 0.6828，排除叢集 [6,8]，27 特徵"""
+    return _fit(
+        XGBClassifier(
+            n_estimators=172,
+            max_depth=3,
+            learning_rate=0.05009204111676675,
+            min_child_weight=69,
+            subsample=0.5404115103473386,
+            colsample_bytree=0.7644450784682499,
+            reg_alpha=0.002912378245304034,
+            reg_lambda=0.02111571283240814,
+            random_state=42,
+            n_jobs=-1,
+            eval_metric="mlogloss",
+            verbosity=0,
         ),
         df_train,
         features,
@@ -231,6 +253,7 @@ def eval_signal(
     model,
     df_test: pd.DataFrame,
     thresholds: list[float] | None = None,
+    label: str = "",
 ) -> pd.DataFrame:
     """
     訊號品質分析（不做投組回測）。
@@ -306,8 +329,9 @@ def eval_signal(
 
     cluster_info = sorted(df_test["cluster"].unique().tolist()) if "cluster" in df_test.columns else "全叢集"
     result = pd.DataFrame(rows)
+    header_label = f"【{label}】" if label else ""
     print(f"\n{'='*68}")
-    print(f"Breakout 訊號品質  {date_range}  共 {n_dates} 個交易日")
+    print(f"Breakout 訊號品質 {header_label} {date_range}  共 {n_dates} 個交易日")
     print(f"基準達標率（叢集 {cluster_info} 全宇宙）：{base_rate:.1%}")
     print(f"{'='*68}")
     print(
@@ -339,7 +363,8 @@ def eval_signal(
     axes[1].set_ylabel("達標率")
     axes[1].legend()
 
-    plt.suptitle(f"Breakout 訊號品質分析（GMM 叢集 {cluster_info}）")
+    chart_label = f"{label}  " if label else ""
+    plt.suptitle(f"{chart_label}Breakout 訊號品質分析（GMM 叢集 {cluster_info}）")
     plt.tight_layout()
     plt.show()
     return df_out
@@ -385,7 +410,7 @@ if __name__ == "__main__":
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_tune_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -455,7 +480,7 @@ if __name__ == "__main__":
 
         optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-        avail = [c for c in CLASSIFY_FEATURES if c in df_train.columns]
+        avail = [c for c in CLASSIFIER_FEATURES if c in df_train.columns]
         X_tr = df_train[avail].fillna(0.5)
         y_tr = df_train["Y"].values
         X_val = df_val[avail].fillna(0.5)
@@ -485,23 +510,48 @@ if __name__ == "__main__":
             # class 不完整時改用 class 2（達標）的二元 AUC
             return roc_auc_score((y_val == 2).astype(int), proba_val[:, 2])
 
-        TUNE_TRIALS = 50
-        print(f"\n── Optuna 調參（{TUNE_TRIALS} trials，目標：Val OOS AUC）──")
-        study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=TUNE_TRIALS, show_progress_bar=True)
+        def objective_xgb(trial):
+            from xgboost import XGBClassifier as _XGB
 
-        best = study.best_params
-        print(f"\n最佳 Val AUC：{study.best_value:.4f}")
-        print("最佳參數：")
-        for k, v in best.items():
-            print(f"  {k}: {v}")
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 100, 600),
+                "max_depth": trial.suggest_int("max_depth", 3, 8),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+                "min_child_weight": trial.suggest_int("min_child_weight", 10, 100),
+                "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+                "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),
+                "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
+                "random_state": 42,
+                "n_jobs": -1,
+                "eval_metric": "mlogloss",
+                "verbosity": 0,
+            }
+            m = _XGB(**params)
+            m.fit(X_tr, y_tr)
+            proba_val = m.predict_proba(X_val)
+            if len(set(y_val)) >= 3:
+                return roc_auc_score(y_val, proba_val, multi_class="ovr", average="macro")
+            return roc_auc_score((y_val == 2).astype(int), proba_val[:, 2])
+
+        TUNE_TRIALS = 50
+        for model_name, obj_fn in [("LGBM", objective), ("XGB", objective_xgb)]:
+            print(f"\n── {model_name} Optuna 調參（{TUNE_TRIALS} trials，目標：Val OOS AUC）──")
+            study = optuna.create_study(direction="maximize")
+            study.optimize(obj_fn, n_trials=TUNE_TRIALS, show_progress_bar=True)
+            print(f"\n{model_name} 最佳 Val AUC：{study.best_value:.4f}")
+            print("最佳參數：")
+            for k, v in study.best_params.items():
+                print(f"  {k}: {v}")
 
     elif MODE == "breakout_tune_backtest":
         from j1stools import backtest_platform
 
-        lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
+        backtest_platform.IS_USE_CACHE = True
+        # lgbm = train_lgbm(df_train, features=CLASSIFIER_FEATURES)
+        model = train_xgb(df_train, features=CLASSIFIER_FEATURES)
         signal = make_signal_breakout(
-            lgbm,
+            model,
             clf_breakout,
             stocks,
             st=EVAL_ST,
@@ -512,24 +562,36 @@ if __name__ == "__main__":
         backtest_platform.optimize_optuna(signal, n_trials=100)
 
     elif MODE == "breakout_compare":
-        rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
-        xgb = train_xgb(df_train, features=CLASSIFY_FEATURES)
-        lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
-        for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", lgbm)]:
+        rfc = train_rfc(df_train, features=CLASSIFIER_FEATURES)
+        xgb = train_xgb(df_train, features=CLASSIFIER_FEATURES)
+        model = train_lgbm(df_train, features=CLASSIFIER_FEATURES)
+        for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", model)]:
             print(f"\n{'='*60}\n【{name} 訊號品質】\n{'='*60}")
             eval_signal(m, df_test)
 
     elif MODE == "breakout_signal":
-        lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
-        eval_signal(lgbm, df_test)
+        rfc = train_rfc(df_train, features=CLASSIFIER_FEATURES)
+        xgb = train_xgb(df_train, features=CLASSIFIER_FEATURES)
+        xgb_tune = train_xgb_tuned(df_train, features=CLASSIFIER_FEATURES)
+        model = train_lgbm(df_train, features=CLASSIFIER_FEATURES)
+        lgbm_tune = train_lgbm_tuned(df_train, features=CLASSIFIER_FEATURES)
+        for name, m in [
+            ("RFC", rfc),
+            ("XGB", xgb),
+            ("XGB Tuned", xgb_tune),
+            ("LGBM", model),
+            ("LGBM Tuned", lgbm_tune),
+        ]:
+            eval_signal(m, df_test, label=name)
 
     elif MODE == "breakout_backtest":
         from j1stools import backtest_platform
 
-        rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
-        xgb = train_xgb(df_train, features=CLASSIFY_FEATURES)
-        lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
-        lgbm_tune = train_lgbm_tuned(df_train, features=CLASSIFY_FEATURES)
+        rfc = train_rfc(df_train, features=CLASSIFIER_FEATURES)
+        xgb = train_xgb(df_train, features=CLASSIFIER_FEATURES)
+        xgb_tune = train_xgb_tuned(df_train, features=CLASSIFIER_FEATURES)
+        model = train_lgbm(df_train, features=CLASSIFIER_FEATURES)
+        lgbm_tune = train_lgbm_tuned(df_train, features=CLASSIFIER_FEATURES)
 
         def _run_backtest(label, m, clusters, threshold=0.50):
             print(f"\n{'='*60}\n【{label}】\n{'='*60}")
@@ -559,8 +621,14 @@ if __name__ == "__main__":
             )
             j1s_chart.plot_performance(pv, td)
 
-        # ── 四模型比較 ──
-        for name, m, thr in [("RFC", rfc, 0.50), ("XGB", xgb, 0.60), ("LGBM", lgbm, 0.70), ("LGBM Tuned", lgbm_tune, 0.70)]:
+        # ── 五模型比較 ──
+        for name, m, thr in [
+            ("RFC", rfc, 0.50),
+            ("XGB", xgb, 0.75),
+            ("XGB Tuned", xgb_tune, 0.75),
+            ("LGBM", model, 0.75),
+            ("LGBM Tuned", lgbm_tune, 0.75),
+        ]:
             _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr)
 
         # ── Baseline：全叢集（驗證 GMM 是否有效）──
@@ -573,5 +641,5 @@ if __name__ == "__main__":
             clusters=None,
             volume_ratio_min=VOLUME_RATIO_MIN,
         )
-        lgbm_all = train_lgbm(df_train_all, features=CLASSIFY_FEATURES)
+        lgbm_all = train_lgbm(df_train_all, features=CLASSIFIER_FEATURES)
         _run_backtest("LGBM Baseline（全叢集，無 GMM 過濾）", lgbm_all, None)
