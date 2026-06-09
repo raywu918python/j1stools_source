@@ -6,8 +6,6 @@ IB + Margin 無監督分類器
 """
 
 import os
-import pickle
-
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -24,39 +22,39 @@ from j1stools.margin_ibbuysell_feature import add_feature
 
 # 聚焦 IB + Margin 的截面排名特徵（0~1 均勻分布，跨時間穩定）
 CLASSIFY_FEATURES = [
-    # 外資
-    "f_net_foreign_pct_xrank",
-    "f_net_foreign_5d_z_xrank",
-    "f_net_foreign_10d_z_xrank",
-    "f_net_foreign_streak",
-    # 投信
-    "f_net_trust_pct_xrank",
-    "f_net_trust_5d_z_xrank",
-    "f_net_trust_10d_z_xrank",
-    "f_net_trust_streak",
-    # 法人合計
-    "f_net_institutional_total_pct_xrank",
-    "f_net_institutional_total_5d_z_xrank",
-    "f_net_institutional_total_10d_z_xrank",
-    "f_net_institutional_total_streak",
-    # 融資融券
-    "f_margin_balance_change_pct_xrank",
-    "f_short_balance_change_pct_xrank",
-    "f_margin_balance_change_5d_pct_xrank",
-    "f_short_margin_ratio_xrank",
-    # 當沖
-    "f_dt_ratio_xrank",
-    "f_dt_net_xrank",
-    "f_dt_ratio_5d_xrank",
-    # 技術指標
-    "f_volume_ratio_5d_xrank",
-    "f_volume_change_pct_xrank",
-    "f_atr14_pct_xrank",
-    # 價格趨勢（MA 方向，不是報酬本身）
-    "f_ma5_slope_xrank",
-    "f_ma20_slope_xrank",
-    "f_bias_ma20_xrank",
-    "f_momentum_cross_xrank",
+    # ── 外資籌碼 ──────────────────────────────────────────
+    "f_net_foreign_pct_xrank",  # 當日外資買超佔流通股本（截面排名）
+    "f_net_foreign_5d_z_xrank",  # 外資 5 日買超 z-score：高 = 近期買超異常強
+    "f_net_foreign_10d_z_xrank",  # 外資 10 日 z-score：中期趨勢方向
+    "f_net_foreign_streak",  # 連續買賣天數：正=連買、負=連賣，>8 通常漲幅已反映
+    # ── 投信籌碼（轉折核心訊號）──────────────────────────
+    "f_net_trust_pct_xrank",  # 當日投信買超強度（截面排名）
+    "f_net_trust_5d_z_xrank",  # 投信 5 日 z-score：高 = 投信正在加碼
+    "f_net_trust_10d_z_xrank",  # 投信 10 日 z-score：中期佈局強度
+    "f_net_trust_streak",  # 投信連買天數：>=2 是「外資還沒發現」的早期訊號
+    # ── 法人合計（外資+投信+自營商）──────────────────────
+    "f_net_institutional_total_pct_xrank",  # 整體法人當日買超強度
+    "f_net_institutional_total_5d_z_xrank",  # 整體法人 5 日 z-score
+    "f_net_institutional_total_10d_z_xrank",  # 整體法人 10 日 z-score
+    "f_net_institutional_total_streak",  # 整體法人連買天數
+    # ── 融資融券 ──────────────────────────────────────────
+    "f_margin_balance_change_pct_xrank",  # 融資餘額增減（增加=散戶跟進）
+    "f_short_balance_change_pct_xrank",  # 融券餘額增減（增加=空方施壓）
+    "f_margin_balance_change_5d_pct_xrank",  # 5 日融資趨勢
+    "f_short_margin_ratio_xrank",  # 融券/融資比：高 = 多空對立激烈
+    # ── 當沖 ──────────────────────────────────────────────
+    "f_dt_ratio_xrank",  # 當沖佔比：高 = 短線散戶多，股性活躍
+    "f_dt_net_xrank",  # 當沖買賣方向（正=當沖買方主導）
+    "f_dt_ratio_5d_xrank",  # 5 日當沖佔比趨勢
+    # ── 量能 ──────────────────────────────────────────────
+    "f_volume_ratio_5d_xrank",  # 今日成交量 / 5 日均量：高 = 放量
+    "f_volume_change_pct_xrank",  # 成交量日增率：正 = 量能擴張
+    "f_atr14_pct_xrank",  # 14 日 ATR 佔收盤價比：股票波動性
+    # ── 價格趨勢（方向，非報酬）────────────────────────────
+    "f_ma5_slope_xrank",  # MA5 斜率：短期趨勢方向
+    "f_ma20_slope_xrank",  # MA20 斜率：中期趨勢方向
+    "f_bias_ma20_xrank",  # 偏離 MA20 程度：高 = 超漲，低 = 超跌
+    "f_momentum_cross_xrank",  # MA5/MA20 黃金/死亡交叉訊號
 ]
 # 移除價格動能特徵（f_return_5d_xrank 等）
 # 這些特徵等於「偷看答案」：讓分群結果偏向「已漲的股票」
@@ -101,46 +99,76 @@ CLASSIFY_FEATURES_RAW = [
 ]
 
 N_CLUSTERS = 10
-MODEL_PATH = "db/models/ib_margin_classifier.pkl"
-GMM_MODEL_PATH = "db/models/ib_margin_gmm.pkl"
-HDBSCAN_MODEL_PATH = "db/models/ib_margin_hdbscan.pkl"
+MODEL_PATH = "db/models/ib_margin_classifier.joblib"
+GMM_MODEL_PATH = "db/models/ib_margin_gmm.joblib"
+HDBSCAN_MODEL_PATH = "db/models/ib_margin_hdbscan.joblib"
+BREAKOUT_GMM_MODEL_PATH = "db/models/ib_margin_breakout_gmm.joblib"
 MARKET_PROXY = "0050"  # 大盤代理（台灣50）
 
-"""
-【外資忽視股效應】2026-06-07 發現
 
-GMM 每次都會產生一個「NaN 叢集」：_5d_z/_10d_z 全 NaN（外資幾乎不買，std≈0）、
-f_dt_* 全 NaN（不在當沖名單）。這群股票 OOS 報酬遠超有完整籌碼資料的群：
-  10日均報 4.79%，勝率 57.8%（其他群最高約 2.07%）
+def load_transition_stocks(
+    stocks: list,
+    st: str,
+    end: str = "2099-01-01",
+    min_atr_pct: float = 0.02,
+    foreign_pct_max: float = 0.25,
+    trust_streak_min: int = 2,
+) -> pd.DataFrame:
+    """
+    「被發現轉折股」宇宙：
+      - 外資仍低活躍（f_net_foreign_pct_xrank < foreign_pct_max，或完全 NaN）
+      - 投信開始連續買進（f_net_trust_streak >= trust_streak_min）
 
-原因：Neglected Firm Effect。機構不追 → 市場定價效率低 → 超額報酬。
-目標本來是找會漲的股票，IB/Margin 只是條件，但條件外的股票反而更強。
+    與 load_neglected_data 的差異：
+      neglected = 完全被忽視（外資 std=0）
+      transition = 外資還沒大買，但投信已悄悄佈局（轉折訊號）
+    """
+    df = load_data(stocks, st, end, min_atr_pct=min_atr_pct, require_complete=False)
 
-識別方式：f_net_foreign_5d_z_xrank.isna() AND f_dt_ratio_xrank.isna()
-代表股票：6725, 3135, 2380, 4749, 6994 等（無外資追蹤、不能當沖的個股）
-→ 應獨立用基本面或純技術面建策略，不適合套 IB+Margin 框架
+    foreign_low = df["f_net_foreign_pct_xrank"].isna() | (df["f_net_foreign_pct_xrank"] < foreign_pct_max)
+    trust_buying = df["f_net_trust_streak"] >= trust_streak_min
+    # 外資連買 8 天以上 → 漲幅已反映，排除
+    not_overbought = df["f_net_foreign_streak"].fillna(0) < 8
 
-KMeans k=5 結果紀錄（886支股票，2023-01-01 ~ 2026-06-05，706,147筆）
+    mask = foreign_low & trust_buying & not_overbought
+    result = df[mask].copy()
 
-叢集 0 (8.4%,  89支) — 投信主力
-  外資中性(0.47)、投信極強(0.94)、法人合計0.66、連買2天
-  融券比高(0.72)、5日報酬強(0.73)、相對強度佳(0.75)
+    total = len(df)
+    n = len(result)
+    print(
+        f"轉折股過濾（外資<{foreign_pct_max:.0%} & 投信streak>={trust_streak_min}）："
+        f"{total:,} → {n:,} 筆（{n/total:.1%}），唯一股票：{result['stock_id'].nunique()} 支"
+    )
+    return result
 
-叢集 1 (23.2%, 192支) — 法人退場，融資散戶撐盤
-  外資弱(0.33)、投信中性(0.50)、連買0天
-  融資增加(0.65)、5日報酬強(0.73) → 危險訊號，法人出貨
 
-叢集 2 (31.5%, 292支) — 外資主導【最佳選股群】
-  外資強(0.78)、法人合計強(0.77)、連買3天
-  融資低(0.41)、5日報酬中(0.60)、相對強度0.60
+def load_breakout_stocks(
+    stocks: list,
+    st: str,
+    end: str = "2099-01-01",
+    min_atr_pct: float = 0.02,
+    volume_ratio_min: float = 2.0,
+    require_complete: bool = False,
+) -> pd.DataFrame:
+    """
+    放量上漲宇宙：今日成交量 >= 20日均量的 volume_ratio_min 倍，且今日收盤上漲。
 
-叢集 3 (36.9%, 313支) — 法人空頭
-  外資弱(0.36)、法人合計弱(0.34)、連買0天
-  5日報酬弱(0.25)、相對強度最差(0.24) → 排除
+    條件背後的假設：
+      量能放大 + 價格上漲 = 有人在買且市場認可
+      這個時點搭配 GMM 分群，可以找出「哪種籌碼型態下的放量最可靠」。
+    """
+    df = load_data(stocks, st, end, min_atr_pct=min_atr_pct, require_complete=require_complete)
 
-叢集 4 (0.0%,  0支) — 異常群（無融資融券股票，streak=261異常）
-  幾乎不出現，自動隔離
-"""
+    mask = (df["f_volume_ratio_20d"] >= volume_ratio_min) & (df["f_daily_return"] > 0)
+    result = df[mask].copy()
+
+    total = len(df)
+    n = len(result)
+    print(
+        f"放量上漲過濾（量>={volume_ratio_min:.0f}x均量 & 上漲）："
+        f"{total:,} → {n:,} 筆（{n/total:.1%}），唯一股票：{result['stock_id'].nunique()} 支"
+    )
+    return result
 
 
 def load_data(
@@ -185,6 +213,12 @@ def load_data(
     )
     feat = _add_day_trade_features(feat, df_day_trade)
     feat = _add_atr_features(feat)
+
+    # volume ratio 和 daily return（在 drop volume 之前計算，供放量過濾用）
+    feat["f_volume_ratio_20d"] = feat.groupby("stock_id")["volume"].transform(
+        lambda x: x / x.rolling(20, min_periods=5).mean()
+    )
+    feat["f_daily_return"] = feat.groupby("stock_id")["close"].transform(lambda x: x.pct_change())
     feat = feat.drop(columns=["volume", "high", "low"])
 
     if min_atr_pct is not None:
@@ -376,15 +410,20 @@ class IBMarginClassifier:
             print(today_df["cluster"].value_counts().sort_index().to_string())
 
     def save(self, path: str = MODEL_PATH):
+        import joblib
+
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
+        joblib.dump(self, path)
         print(f"模型已儲存：{path}")
 
     @classmethod
     def load(cls, path: str = MODEL_PATH) -> "IBMarginClassifier":
-        with open(path, "rb") as f:
-            obj = pickle.load(f)
+        import sys, joblib
+
+        main = sys.modules.get("__main__")
+        if main is not None and not hasattr(main, "IBMarginClassifier"):
+            setattr(main, "IBMarginClassifier", cls)
+        obj = joblib.load(path)
         print(f"模型已載入：{path}（n_clusters={obj.n_clusters}）")
         return obj
 
@@ -511,15 +550,20 @@ class IBMarginHDBSCAN:
             print(df[df["date"] == latest]["cluster"].value_counts().sort_index().to_string())
 
     def save(self, path: str = HDBSCAN_MODEL_PATH):
+        import joblib
+
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
+        joblib.dump(self, path)
         print(f"HDBSCAN 模型已儲存：{path}")
 
     @classmethod
     def load(cls, path: str = HDBSCAN_MODEL_PATH) -> "IBMarginHDBSCAN":
-        with open(path, "rb") as f:
-            obj = pickle.load(f)
+        import sys, joblib
+
+        main = sys.modules.get("__main__")
+        if main is not None and not hasattr(main, "IBMarginHDBSCAN"):
+            setattr(main, "IBMarginHDBSCAN", cls)
+        obj = joblib.load(path)
         print(f"HDBSCAN 模型已載入：{path}（n_clusters={obj.n_clusters}）")
         return obj
 
@@ -1159,15 +1203,20 @@ class IBMarginGMM:
             print(today_df["cluster"].value_counts().sort_index().to_string())
 
     def save(self, path: str = GMM_MODEL_PATH):
+        import joblib
+
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
+        joblib.dump(self, path)
         print(f"GMM 模型已儲存：{path}")
 
     @classmethod
     def load(cls, path: str = GMM_MODEL_PATH) -> "IBMarginGMM":
-        with open(path, "rb") as f:
-            obj = pickle.load(f)
+        import sys, joblib
+
+        main = sys.modules.get("__main__")
+        if main is not None and not hasattr(main, "IBMarginGMM"):
+            setattr(main, "IBMarginGMM", cls)
+        obj = joblib.load(path)
         print(f"GMM 模型已載入：{path}（n_components={obj.n_components}）")
         return obj
 
@@ -1382,10 +1431,6 @@ if __name__ == "__main__":
 
     # ── 切換模式 ──────────────────────────────────────────────────────────── #
     #
-    #  experiment   : 【開發用】訓練 TRAIN_ST~TRAIN_END，立即對 EVAL_ST~ 跑報酬分析
-    #                 加新特徵、調整參數時用這個，不會覆蓋 release 的 pkl
-    #                 改 FEATURES 變數可以快速切換特徵組
-    #
     #  release      : 【發布用】用 2015-01-01~2023-12-31 全量重訓並存 pkl
     #                 確認特徵、參數都 OK 後才跑，會覆蓋正式模型
     #
@@ -1401,20 +1446,39 @@ if __name__ == "__main__":
     #  pca          : 【探索用】觀察特徵在 PCA 2D/3D 的分布，看有沒有自然群落
     #                 換 FEATURES 可以比較 xrank vs raw 的資料結構差異
     #
-    MODE = "scan"
+    MODE = "breakout"  # "breakout" | "release" | "eval_oos" | "scan"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
-    if MODE == "experiment":
-        clf, _ = run(st=TRAIN_ST, end=TRAIN_END, model="gmm", min_atr_pct=MIN_ATR, retrain=True, features=FEATURES)
-        df_test = load_data(stocks, st=EVAL_ST, min_atr_pct=MIN_ATR, require_complete=FILTER_NEGLECTED)
+    if MODE == "breakout":
+        # 放量上漲宇宙 GMM 分群實驗
+        print("── 訓練集（放量上漲）──")
+        df_train = load_breakout_stocks(stocks, TRAIN_ST, TRAIN_END, min_atr_pct=MIN_ATR)
+
+        print("\n── 訓練 IBMarginGMM ──")
+        clf = IBMarginGMM(n_components=N_CLUSTERS)
+        clf.fit(df_train)
+
+        print("\n── 測試集（放量上漲）──")
+        df_test = load_breakout_stocks(stocks, EVAL_ST, min_atr_pct=MIN_ATR)
         df_test["cluster"] = clf.predict(df_test)
+
+        print("\n── 叢集輪廓 ──")
         clf.describe_clusters(df_test)
+
+        print("\n── 叢集 OOS 報酬 ──")
         analyze_cluster_returns(df_test, hold_days=5)
         analyze_cluster_returns(df_test, hold_days=10)
+
+        print("\n── 叢集品質指標 ──")
         evaluate_clustering(clf=clf, df=df_test)
+
+        print("\n── 叢集視覺化 ──")
         plot_clusters(clf, df_test)
+
+        print("\n── 儲存模型 ──")
+        clf.save(BREAKOUT_GMM_MODEL_PATH)
 
     elif MODE == "release":
         release_model(min_atr_pct=MIN_ATR, filter_neglected=FILTER_NEGLECTED)
@@ -1434,3 +1498,96 @@ if __name__ == "__main__":
     elif MODE == "pca":
         df = load_data(stocks, TRAIN_ST, TRAIN_END, min_atr_pct=MIN_ATR, require_complete=FILTER_NEGLECTED)
         plot_pca(df, features=FEATURES or CLASSIFY_FEATURES_RAW, use_robust=True)
+
+
+"""
+【外資忽視股效應】2026-06-07 發現
+
+GMM 每次都會產生一個「NaN 叢集」：_5d_z/_10d_z 全 NaN（外資幾乎不買，std≈0）、
+f_dt_* 全 NaN（不在當沖名單）。這群股票 OOS 報酬遠超有完整籌碼資料的群：
+  10日均報 4.79%，勝率 57.8%（其他群最高約 2.07%）
+
+原因：Neglected Firm Effect。機構不追 → 市場定價效率低 → 超額報酬。
+目標本來是找會漲的股票，IB/Margin 只是條件，但條件外的股票反而更強。
+
+識別方式：f_net_foreign_5d_z_xrank.isna() AND f_dt_ratio_xrank.isna()
+代表股票：6725, 3135, 2380, 4749, 6994 等（無外資追蹤、不能當沖的個股）
+→ 應獨立用基本面或純技術面建策略，不適合套 IB+Margin 框架
+
+KMeans k=5 結果紀錄（886支股票，2023-01-01 ~ 2026-06-05，706,147筆）
+
+叢集 0 (8.4%,  89支) — 投信主力
+  外資中性(0.47)、投信極強(0.94)、法人合計0.66、連買2天
+  融券比高(0.72)、5日報酬強(0.73)、相對強度佳(0.75)
+
+叢集 1 (23.2%, 192支) — 法人退場，融資散戶撐盤
+  外資弱(0.33)、投信中性(0.50)、連買0天
+  融資增加(0.65)、5日報酬強(0.73) → 危險訊號，法人出貨
+
+叢集 2 (31.5%, 292支) — 外資主導【最佳選股群】
+  外資強(0.78)、法人合計強(0.77)、連買3天
+  融資低(0.41)、5日報酬中(0.60)、相對強度0.60
+
+叢集 3 (36.9%, 313支) — 法人空頭
+  外資弱(0.36)、法人合計弱(0.34)、連買0天
+  5日報酬弱(0.25)、相對強度最差(0.24) → 排除
+
+叢集 4 (0.0%,  0支) — 異常群（無融資融券股票，streak=261異常）
+  幾乎不出現，自動隔離
+
+breakout（你剛剛要求的）
+
+
+全市場股票
+  ↓ ATR 過濾
+  ↓ 今日量 >= 20日均量 2倍（放量）
+  ↓ 今日收盤上漲
+  ↓ GMM 分群（用 ATR + 籌碼特徵）
+先用放量上漲當前置條件，再對這個有動能的宇宙做分群。結果是各叢集 5日勝率 60-70%、10日中位報酬 7-18%，有實質區別力。
+
+你說的條件「成交量於20天均量2倍、今日上漲，當條件，去做GMM」= breakout 模式，就是剛才那一組好結果。  
+
+圖很清楚！逐一解讀：
+
+Box Plot：全部叢集的中位數（紅線）都在 0% 以上，跟 experiment 的「全部壓在 0%」完全不同——放量過濾有用。
+
+Heatmap 最關鍵的兩欄（連買天）：
+
+叢集	外資	投信	連買天	解讀
+4	0.89	0.50	4.00（深綠）	外資主力連買4天放量
+0	0.57	0.97	2.00	投信大買放量
+1/2	0.50/0.61	0.49	2.00	法人普通
+3	0.38	0.48	0.00（深紅）	法人不追，散戶追高
+5	0.59	0.49	0.00（深紅）	NaN忽視股，無法人資料
+叢集 3 和 5 都是「連買天=0」，但報酬不同——叢集 5 贏是因為它是忽視股，叢集 3 輸是因為法人在出貨而散戶在追高。
+
+PCA 散點圖：叢集 0（藍）和 4（深綠）在右側分離得很清楚，代表外資/投信主力的特徵在空間上是可區分的。
+
+這張圖已經可以告訴你策略：選叢集 4（外資連買放量）或叢集 5（忽視股放量），排除叢集 3（散戶追高）。
+
+這張圖有三層，從右上 → 左上 → 下方依序看：
+
+第一層：Heatmap（右上）— 每個叢集的籌碼側寫
+
+每格是該叢集的特徵中位數，綠=高、紅=低。最重要的一欄是「連買天」：
+
+叢集	外資	投信	連買天	解讀
+7	0.94	0.53	5（深綠）	外資主力持續買
+2	0.83	0.51	5（深綠）	外資次主力
+6	0.44	0.96	2	投信主力
+0	0.67	0.49	2	法人普通
+1	0.39	0.48	0（紅）	法人退場
+4	0.21	0.49	0（紅）	外資最弱
+第二層：PCA 散點圖（左上）— 叢集是否真的分得開
+
+叢集 2（橘）和叢集 4（綠）在右側分離明顯 → 特徵獨特，模型可靠
+其他叢集集中在中間互相重疊 → 邊界模糊，分類信心較低
+第三層：Violin 圖（下方）— 各特徵在每個叢集內的分布形狀
+
+琴身細長：這群股票特徵值很集中，選股條件一致
+琴身胖且雙峰（例如叢集 0 的外資欄）：內部其實有兩種股票混在一起，不純
+橫線：中位數
+結合 Box Plot 的最終解讀
+
+叢集 7（外資0.94＋連買5天）和叢集 2（外資0.83＋連買5天）是籌碼最乾淨的群，對應回去看 Box Plot 的報酬應該是最值得追的候選。叢集 4（外資0.21）直接排除。
+"""
