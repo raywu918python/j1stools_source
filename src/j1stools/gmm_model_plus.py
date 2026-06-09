@@ -108,10 +108,15 @@ def train_rfc(df_train: pd.DataFrame, features: list | None = None) -> RandomFor
     """RFC：n_estimators=200, max_depth=6, min_samples_leaf=50, class_weight=balanced"""
     return _fit(
         RandomForestClassifier(
-            n_estimators=200, max_depth=6, min_samples_leaf=50,
-            class_weight="balanced", random_state=42, n_jobs=-1,
+            n_estimators=200,
+            max_depth=6,
+            min_samples_leaf=50,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
         ),
-        df_train, features,
+        df_train,
+        features,
     )
 
 
@@ -119,10 +124,16 @@ def train_xgb(df_train: pd.DataFrame, features: list | None = None) -> XGBClassi
     """XGB：n_estimators=200, max_depth=6, lr=0.05"""
     return _fit(
         XGBClassifier(
-            n_estimators=200, max_depth=6, learning_rate=0.05,
-            random_state=42, n_jobs=-1, eval_metric="mlogloss", verbosity=0,
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.05,
+            random_state=42,
+            n_jobs=-1,
+            eval_metric="mlogloss",
+            verbosity=0,
         ),
-        df_train, features,
+        df_train,
+        features,
     )
 
 
@@ -130,10 +141,16 @@ def train_lgbm(df_train: pd.DataFrame, features: list | None = None) -> LGBMClas
     """LGBM：n_estimators=200, max_depth=6, lr=0.05, class_weight=balanced"""
     return _fit(
         LGBMClassifier(
-            n_estimators=200, max_depth=6, learning_rate=0.05,
-            class_weight="balanced", random_state=42, n_jobs=-1, verbosity=-1,
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.05,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+            verbosity=-1,
         ),
-        df_train, features,
+        df_train,
+        features,
     )
 
 
@@ -207,13 +224,19 @@ def eval_signal(
     proba_all = model.predict_proba(X)
     prob = proba_all[:, 2]
 
-    auc = roc_auc_score(df_test["Y"].values, proba_all, multi_class="ovr", average="macro")
-    print(f"\nOOS AUC：{auc:.4f}")
+    y_true = df_test["Y"].values
+    if len(set(y_true)) >= 3:
+        auc = roc_auc_score(y_true, proba_all, multi_class="ovr", average="macro")
+        print(f"\nOOS AUC：{auc:.4f}")
+    else:
+        auc = float("nan")
+        print(f"\nOOS AUC：N/A（測試集只有 {sorted(set(y_true))} 兩個 class）")
     print(
         classification_report(
-            df_test["Y"].values,
+            y_true,
             proba_all.argmax(axis=1),
             target_names=["盤整", "停損", "達標"],
+            zero_division=0,
         )
     )
 
@@ -229,28 +252,48 @@ def eval_signal(
     for thr in thresholds:
         subset = df_out[df_out["prob"] >= thr]
         if len(subset) == 0:
-            rows.append({"門檻": f">={thr:.0%}", "總筆數": 0, "日均訊號": 0.0,
-                         "盤整": 0, "停損": 0, "達標": 0,
-                         "達標率": float("nan"), "平均報酬": float("nan")})
+            rows.append(
+                {
+                    "門檻": f">={thr:.0%}",
+                    "總筆數": 0,
+                    "日均訊號": 0.0,
+                    "盤整": 0,
+                    "停損": 0,
+                    "達標": 0,
+                    "達標率": float("nan"),
+                    "平均報酬": float("nan"),
+                }
+            )
             continue
         vc = subset["Y"].value_counts()
-        rows.append({
-            "門檻": f">={thr:.0%}",
-            "總筆數": len(subset),
-            "日均訊號": round(len(subset) / n_dates, 1),
-            "盤整": vc.get(0, 0), "停損": vc.get(1, 0), "達標": vc.get(2, 0),
-            "達標率": (subset["Y"] == 2).mean(),
-            "平均報酬": subset["future_return_clip"].mean(),
-        })
+        rows.append(
+            {
+                "門檻": f">={thr:.0%}",
+                "總筆數": len(subset),
+                "日均訊號": round(len(subset) / n_dates, 1),
+                "盤整": vc.get(0, 0),
+                "停損": vc.get(1, 0),
+                "達標": vc.get(2, 0),
+                "達標率": (subset["Y"] == 2).mean(),
+                "平均報酬": subset["future_return_clip"].mean(),
+            }
+        )
 
     result = pd.DataFrame(rows)
     print(f"\n{'='*68}")
     print(f"Breakout 訊號品質  {date_range}  共 {n_dates} 個交易日")
     print(f"基準達標率（叢集 2/7/9 全宇宙）：{base_rate:.1%}")
     print(f"{'='*68}")
-    print(result.to_string(index=False, formatters={
-        "達標率": "{:.1%}".format, "平均報酬": "{:.2%}".format, "日均訊號": "{:.1f}".format,
-    }))
+    print(
+        result.to_string(
+            index=False,
+            formatters={
+                "達標率": "{:.1%}".format,
+                "平均報酬": "{:.2%}".format,
+                "日均訊號": "{:.1f}".format,
+            },
+        )
+    )
 
     _, axes = plt.subplots(1, 2, figsize=(12, 4))
 
@@ -260,11 +303,7 @@ def eval_signal(
     axes[0].set_ylabel("筆數")
 
     df_out["prob_bin"] = pd.cut(prob, bins=10)
-    cal = (
-        df_out.groupby("prob_bin", observed=True)
-        .agg(達標率=("Y", lambda x: (x == 2).mean()))
-        .reset_index()
-    )
+    cal = df_out.groupby("prob_bin", observed=True).agg(達標率=("Y", lambda x: (x == 2).mean())).reset_index()
     bin_mid = cal["prob_bin"].apply(lambda b: b.mid)
     bin_width = cal["prob_bin"].apply(lambda b: b.length).iloc[0] * 0.85
     axes[1].bar(bin_mid, cal["達標率"], width=bin_width, color="seagreen", alpha=0.8, label="實際達標率")
@@ -287,23 +326,25 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
     TRAIN_ST = "2015-01-01"
-    VAL_ST   = "2022-01-01"   # 驗證集起點（Ensemble AUC 加權用）
-    VAL_END  = "2023-12-31"   # 訓練 / 驗證結束
-    EVAL_ST  = "2024-01-01"   # OOS 測試起點
+    VAL_ST = "2022-01-01"  # 驗證集起點（Ensemble AUC 加權用）
+    VAL_END = "2023-12-31"  # 訓練 / 驗證結束
+    EVAL_ST = "2024-01-01"  # OOS 測試起點
 
-    BREAKOUT_CLUSTERS = [2, 7, 9]   # 叢集 2（外資強）、7（外資主力）、9（最佳報酬）
-    VOLUME_RATIO_MIN  = 2.0          # 放量門檻：今日量 >= N 倍 20日均量
+    BREAKOUT_CLUSTERS = [2, 7, 9]  # 叢集 2（外資強）、7（外資主力）、9（最佳報酬）
+    VOLUME_RATIO_MIN = 2.0  # 放量門檻：今日量 >= N 倍 20日均量
 
     # ── 切換模式 ──────────────────────────────────────────────────────────── #
     #
-    #  breakout_signal   : 訊號品質分析（prob 分布 + 校準曲線）
-    #                      → 看各門檻的達標率，決定 backtest 的 threshold
+    #  breakout_compare  : 【模型選型】RFC / XGB / LGBM 三個校準曲線對比
+    #                      → 找出信心分最準的模型
     #
-    #  breakout_backtest : 回測
-    #                      → LGBM + GMM 叢集 2/7/9 vs 全叢集 baseline 對照
+    #  breakout_signal   : 【門檻確認】單一模型校準曲線 + 達標率表
+    #                      → 決定 backtest 的 prob threshold
+    #
+    #  breakout_backtest : 【策略驗證】LGBM+GMM 叢集 2/7/9 vs 全叢集 baseline
     #                      → 確認 GMM 過濾是否有效
     #
-    MODE = "breakout_backtest"  # "breakout_signal" | "breakout_backtest"
+    MODE = "breakout_backtest"  # "breakout_compare" | "breakout_signal" | "breakout_backtest"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -311,14 +352,22 @@ if __name__ == "__main__":
 
     print("── 建立 Breakout 訓練集 ──")
     df_train = build_dataset_breakout(
-        clf_breakout, stocks, TRAIN_ST, VAL_ST,
-        clusters=BREAKOUT_CLUSTERS, volume_ratio_min=VOLUME_RATIO_MIN,
+        clf_breakout,
+        stocks,
+        TRAIN_ST,
+        VAL_ST,
+        clusters=BREAKOUT_CLUSTERS,
+        volume_ratio_min=VOLUME_RATIO_MIN,
     )
 
     print("\n── 建立 Breakout 驗證集 ──")
     df_val = build_dataset_breakout(
-        clf_breakout, stocks, VAL_ST, VAL_END,
-        clusters=BREAKOUT_CLUSTERS, volume_ratio_min=VOLUME_RATIO_MIN,
+        clf_breakout,
+        stocks,
+        VAL_ST,
+        VAL_END,
+        clusters=BREAKOUT_CLUSTERS,
+        volume_ratio_min=VOLUME_RATIO_MIN,
     )
 
     print("\n── 訓練 Ensemble（RFC + XGB + LGBM）──")
@@ -326,43 +375,72 @@ if __name__ == "__main__":
 
     print("\n── 建立 Breakout 測試集 ──")
     df_test = build_dataset_breakout(
-        clf_breakout, stocks, EVAL_ST,
-        clusters=BREAKOUT_CLUSTERS, volume_ratio_min=VOLUME_RATIO_MIN,
+        clf_breakout,
+        stocks,
+        EVAL_ST,
+        clusters=BREAKOUT_CLUSTERS,
+        volume_ratio_min=VOLUME_RATIO_MIN,
     )
 
-    if MODE == "breakout_signal":
-        eval_signal(ensemble, df_test)
+    if MODE == "breakout_compare":
+        rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
+        xgb = train_xgb(df_train, features=CLASSIFY_FEATURES)
+        lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
+        for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", lgbm)]:
+            print(f"\n{'='*60}\n【{name} 訊號品質】\n{'='*60}")
+            eval_signal(m, df_test)
+
+    elif MODE == "breakout_signal":
+        lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
+        eval_signal(lgbm, df_test)
 
     elif MODE == "breakout_backtest":
         from j1stools import backtest_platform
 
+        rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
+        xgb = train_xgb(df_train, features=CLASSIFY_FEATURES)
         lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
 
         def _run_backtest(label, m, clusters):
             print(f"\n{'='*60}\n【{label}】\n{'='*60}")
             sig = make_signal_breakout(
-                m, clf_breakout, stocks, st=EVAL_ST,
-                clusters=clusters, volume_ratio_min=VOLUME_RATIO_MIN,
+                m,
+                clf_breakout,
+                stocks,
+                st=EVAL_ST,
+                clusters=clusters,
+                volume_ratio_min=VOLUME_RATIO_MIN,
             )
             pv, td, _, _ = backtest_platform.prepare_data_backtest(
                 sig,
-                top_n=5, threshold=0.50, max_positions=5,
+                top_n=5,
+                threshold=0.50,
+                max_positions=5,
                 use_sl_trail=False,
-                use_fixed_sl=True,  sl_stop=0.10,
-                use_fixed_tp=True,  tp_stop=0.10,
-                use_hold_days=True, hold_days=HOLD_DAYS,
-                group_limit=2, min_volume=200,
+                use_fixed_sl=True,
+                sl_stop=0.10,
+                use_fixed_tp=True,
+                tp_stop=0.10,
+                use_hold_days=True,
+                hold_days=HOLD_DAYS,
+                group_limit=2,
+                min_volume=200,
             )
-            j1s_chart.plot_performance(pv, td)
+            # j1s_chart.plot_performance(pv, td)
 
-        # ── GMM 過濾（叢集 2/7/9）──
-        _run_backtest("LGBM + GMM 叢集 2/7/9", lgbm, BREAKOUT_CLUSTERS)
+        # ── 第一步：三模型比較（GMM 叢集 2/7/9）──
+        for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", lgbm)]:
+            _run_backtest(f"{name} + GMM 叢集 2/7/9", m, BREAKOUT_CLUSTERS)
 
         # ── Baseline：全叢集（驗證 GMM 是否有效）──
         print("\n── 建立 Baseline 訓練集（全叢集）──")
         df_train_all = build_dataset_breakout(
-            clf_breakout, stocks, TRAIN_ST, VAL_ST,
-            clusters=None, volume_ratio_min=VOLUME_RATIO_MIN,
+            clf_breakout,
+            stocks,
+            TRAIN_ST,
+            VAL_ST,
+            clusters=None,
+            volume_ratio_min=VOLUME_RATIO_MIN,
         )
         lgbm_all = train_lgbm(df_train_all, features=CLASSIFY_FEATURES)
         _run_backtest("LGBM Baseline（全叢集，無 GMM 過濾）", lgbm_all, None)
