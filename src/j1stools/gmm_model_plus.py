@@ -30,7 +30,7 @@ from j1stools.ib_margin_classify import (
 )
 from j1stools.label_builder import profit_label
 
-HOLD_DAYS = 20
+HOLD_DAYS = 10
 PROFIT_TARGET = 0.10
 STOP_LOSS = -0.10
 
@@ -414,9 +414,11 @@ if __name__ == "__main__":
             }
             m = LGBMClassifier(**params)
             m.fit(X_tr, y_tr)
-            if len(set(y_val)) < 3:
-                return 0.0
-            return roc_auc_score(y_val, m.predict_proba(X_val), multi_class="ovr", average="macro")
+            proba_val = m.predict_proba(X_val)
+            if len(set(y_val)) >= 3:
+                return roc_auc_score(y_val, proba_val, multi_class="ovr", average="macro")
+            # class 不完整時改用 class 2（達標）的二元 AUC
+            return roc_auc_score((y_val == 2).astype(int), proba_val[:, 2])
 
         TUNE_TRIALS = 50
         print(f"\n── Optuna 調參（{TUNE_TRIALS} trials，目標：Val OOS AUC）──")
