@@ -42,7 +42,7 @@ from j1stools.ib_margin_classify import (
 from j1stools.label_builder import profit_label
 from j1stools.neglected_stock_classify import NeglectedGMM, load_neglected_data
 
-HOLD_DAYS = 10
+HOLD_DAYS = 20
 PROFIT_TARGET = 0.10
 STOP_LOSS = -0.10
 
@@ -82,7 +82,7 @@ def build_dataset(
 def _fit(model, df_train: pd.DataFrame, features: list | None = None):
     feat_list = features if features is not None else FEATURES
     avail = [c for c in feat_list if c in df_train.columns]
-    X = df_train[avail].fillna(0.5).values
+    X = df_train[avail].fillna(0.5)
     y = df_train["Y"].values
     model.fit(X, y)
     model._fitted_features = avail
@@ -171,7 +171,7 @@ def make_signal_breakout(
         df = df[df["cluster"].isin(clusters)].copy()
 
     avail = model._fitted_features
-    proba = model.predict_proba(df[avail].fillna(0.5).values)
+    proba = model.predict_proba(df[avail].fillna(0.5))
     df["2"] = proba[:, 2]
 
     signal = df[["date", "stock_id", "2"]].copy()
@@ -259,7 +259,7 @@ def train_ensemble(df_train: pd.DataFrame, df_val: pd.DataFrame) -> EnsembleMode
 
     def oos_auc(m):
         avail = m._fitted_features
-        X = df_val[avail].fillna(0.5).values
+        X = df_val[avail].fillna(0.5)
         return roc_auc_score(df_val["Y"].values, m.predict_proba(X), multi_class="ovr", average="macro")
 
     aucs = {m.__class__.__name__: oos_auc(m) for m in [rfc, xgb, lgbm]}
@@ -290,7 +290,7 @@ def eval_signal(
         thresholds = [0.0, 0.2, 0.3, 0.35, 0.4, 0.45]
 
     avail = model._fitted_features
-    X = df_test[avail].fillna(0.5).values
+    X = df_test[avail].fillna(0.5)
     proba_all = model.predict_proba(X)
     prob = proba_all[:, 2]
 
@@ -480,7 +480,7 @@ def make_signal(
         df = df[df["cluster"].isin(clusters)].copy()
 
     avail = model._fitted_features
-    proba = model.predict_proba(df[avail].fillna(0.5).values)
+    proba = model.predict_proba(df[avail].fillna(0.5))
     df["2"] = proba[:, 2]
 
     signal = df[["date", "stock_id", "2"]].copy()
@@ -618,34 +618,38 @@ if __name__ == "__main__":
             eval_signal(ensemble, df_test)
 
         elif MODE == "breakout_backtest":
-            from j1stools import backtest_platform
+            from j1stools import backtest_platform, j1s_chart
 
-            signal = make_signal_breakout(
-                ensemble,
-                clf_breakout,
-                stocks,
-                st=EVAL_ST,
-                clusters=BREAKOUT_CLUSTERS,
-                volume_ratio_min=VOLUME_RATIO_MIN,
-            )
-            portfolio_value, trades_df, positions, close_df = backtest_platform.prepare_data_backtest(
-                signal,
-                top_n=5,
-                threshold=0.50,
-                max_positions=5,
-                use_sl_trail=False,
-                use_fixed_sl=True,
-                sl_stop=0.10,
-                use_fixed_tp=True,
-                tp_stop=0.10,
-                use_hold_days=True,
-                hold_days=HOLD_DAYS,
-                group_limit=2,
-                min_volume=200,
-            )
-            from j1stools import j1s_chart
+            rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
+            xgb = train_xgb(df_train, features=CLASSIFY_FEATURES)
+            lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
 
-            j1s_chart.plot_performance(portfolio_value, trades_df)
+            for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", lgbm)]:
+                print(f"\n{'='*60}\n【{name} 回測】\n{'='*60}")
+                signal = make_signal_breakout(
+                    m,
+                    clf_breakout,
+                    stocks,
+                    st=EVAL_ST,
+                    clusters=BREAKOUT_CLUSTERS,
+                    volume_ratio_min=VOLUME_RATIO_MIN,
+                )
+                portfolio_value, trades_df, positions, close_df = backtest_platform.prepare_data_backtest(
+                    signal,
+                    top_n=5,
+                    threshold=0.50,
+                    max_positions=5,
+                    use_sl_trail=False,
+                    use_fixed_sl=True,
+                    sl_stop=0.10,
+                    use_fixed_tp=True,
+                    tp_stop=0.10,
+                    use_hold_days=True,
+                    hold_days=HOLD_DAYS,
+                    group_limit=2,
+                    min_volume=200,
+                )
+                j1s_chart.plot_performance(portfolio_value, trades_df)
 
     else:
         print("── 建立訓練集 ──")
