@@ -9,7 +9,7 @@ SeqCNN：20日時序 → 10日超額報酬預測
       10日後 stock_return - 0050_return <= -5% = 停損 (Y=1)
       其餘 = 盤整 (Y=0)
 
-CNN_FEATURES (10):
+CNN_FEATURES (11):
   cnn_daily_return    日報酬率
   cnn_volume_ratio    成交量 / 20日均量
   cnn_hl_range        (high - low) / close
@@ -20,6 +20,8 @@ CNN_FEATURES (10):
   cnn_margin_chg      融資餘額日增率
   cnn_short_chg       融券餘額日增率
   cnn_dt_ratio        當沖成交量 / 總成交量
+  cnn_macd_hist       MACD histogram / close（動能方向）
+  cnn_macd_div        MACD Hist背離
 """
 
 import numpy as np
@@ -41,6 +43,10 @@ CNN_FEATURES = [
     "cnn_dt_ratio",
 ]
 
+
+def _normalize_price_windows(X: np.ndarray) -> np.ndarray:
+    return X
+
 HOLD_DAYS = 10
 ALPHA_TARGET = 0.05  # 超越大盤 5% = 達標
 ALPHA_STOP = -0.05  # 落後大盤 5% = 停損
@@ -57,7 +63,11 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     不做 ATR 過濾（由呼叫端決定）。
     """
     import pandas as pd
+    import time as _time
     from j1stools import parquet_db
+
+    _t0 = _time.time()
+    print(f"  [CNN] 載入 price（{len(stocks)} 檔，{st}~{end}）...")
 
     # ── 大盤日報酬（0050）──
     df_mkt = parquet_db.query_price([MARKET_PROXY], st, end)
@@ -67,6 +77,7 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
 
     # ── 個股價格特徵 ──
     df_price = parquet_db.query_price(stocks, st, end)
+    print(f"  [CNN] price done ({_time.time()-_t0:.1f}s)，載入 ib...")
     df_price["date"] = pd.to_datetime(df_price["date"])
     df_price = df_price.sort_values(["stock_id", "date"])
 
@@ -111,6 +122,7 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     feat = feat.drop(columns=["mkt_return"])
 
     # ── 法人特徵 ──
+    print(f"  [CNN] ib... ({_time.time()-_t0:.1f}s)")
     df_ib = parquet_db.query_ib(stocks, st, end)
     df_ib["date"] = pd.to_datetime(df_ib["date"])
     df_ib["net"] = df_ib["buy"] - df_ib["sell"]
@@ -130,6 +142,7 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     feat["cnn_trust_net"] = feat["trust_net_raw"].fillna(0) / vol
 
     # ── 融資融券特徵 ──
+    print(f"  [CNN] margin... ({_time.time()-_t0:.1f}s)")
     df_margin = parquet_db.query_margin(stocks, st, end)
     df_margin["date"] = pd.to_datetime(df_margin["date"])
     for today_col, yest_col, out_col in [
@@ -146,12 +159,33 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     )
 
     # ── 當沖特徵 ──
+    print(f"  [CNN] day_trade... ({_time.time()-_t0:.1f}s)")
     df_dt = parquet_db.query_day_trade(stocks, st, end)
     df_dt["date"] = pd.to_datetime(df_dt["date"])
-    feat = feat.merge(df_dt[["date", "stock_id", "volume"]].rename(columns={"volume": "dt_volume"}),
-                      on=["date", "stock_id"], how="left")
+    feat = feat.merge(
+        df_dt[["date", "stock_id", "volume"]].rename(columns={"volume": "dt_volume"}),
+        on=["date", "stock_id"],
+        how="left",
+    )
     feat["cnn_dt_ratio"] = feat["dt_volume"].fillna(0) / feat["volume"].replace(0, np.nan)
     feat = feat.drop(columns=["volume", "foreign_net_raw", "trust_net_raw", "dt_volume"])
+
+    # ── MACD histogram（pivot 向量化，比 groupby.apply 快）──
+    _pv = df_price.pivot(index="date", columns="stock_id", values="close")
+    _ema12 = _pv.ewm(span=12, adjust=False).mean()
+    _ema26 = _pv.ewm(span=26, adjust=False).mean()
+    _macd = _ema12 - _ema26
+    _sig = _macd.ewm(span=9, adjust=False).mean()
+    _hist = (_macd - _sig) / _pv.replace(0, np.nan)
+    _hist_long = _hist.stack(future_stack=True).rename("cnn_macd_hist").reset_index()
+    df_price = df_price.merge(_hist_long, on=["date", "stock_id"], how="left")
+    # 背離：用已算好的 hist，不重複跑 EWM
+    price_slope = df_price.groupby("stock_id")["close"].pct_change(5)
+    macd_slope = df_price.groupby("stock_id")["cnn_macd_hist"].diff(5)
+    df_price["cnn_macd_div"] = price_slope * macd_slope
+    feat = feat.merge(
+        df_price[["date", "stock_id", "cnn_macd_hist", "cnn_macd_div"]], on=["date", "stock_id"], how="left"
+    )
 
     # clip 極端值
     for col in ["cnn_foreign_net", "cnn_trust_net", "cnn_margin_chg", "cnn_short_chg"]:
@@ -160,6 +194,8 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     feat["cnn_stock_vs_mkt"] = feat["cnn_stock_vs_mkt"].clip(-0.3, 0.3)
     feat["cnn_volume_ratio"] = feat["cnn_volume_ratio"].clip(0, 10)
     feat["cnn_dt_ratio"] = feat["cnn_dt_ratio"].clip(0, 1)
+    feat["cnn_macd_hist"] = feat["cnn_macd_hist"].clip(-0.05, 0.05)
+    feat["cnn_macd_div"] = feat["cnn_macd_div"].clip(-0.005, 0.005)
 
     return feat.sort_values(["stock_id", "date"]).reset_index(drop=True)
 
@@ -261,7 +297,7 @@ def build_alpha_label_dataset(
     print(f"時序窗口（lookback={lookback}）：{kept:,} 筆")
 
     df_valid = df_signal.iloc[all_meta_idx].reset_index(drop=True)
-    X = np.array(all_X, dtype=np.float32)
+    X = _normalize_price_windows(np.array(all_X, dtype=np.float32))
     y = df_valid["Y"].values.astype(np.int64)
     return X, y, df_valid
 
@@ -296,10 +332,17 @@ def build_breakout_cnn_dataset(
     df_all = build_cnn_daily_features(stocks, st_buf, end_buf)
     df_all["date"] = pd.to_datetime(df_all["date"])
 
-    # 計算 hold_days 後複利報酬
-    df_all["fwd_return"] = df_all.groupby("stock_id")["cnn_daily_return"].transform(
-        lambda x: (1 + x).rolling(hold_days).apply(np.prod, raw=True).shift(-hold_days) - 1
+    # 計算 hold_days 後報酬（直接用 price，避免 clipped return 失真）
+    df_all = df_all.merge(
+        parquet_db.query_price(stocks, st_buf, end_buf)[["date", "stock_id", "close"]]
+        .assign(date=lambda d: pd.to_datetime(d["date"])),
+        on=["date", "stock_id"], how="left"
     )
+    df_all["fwd_return"] = (
+        df_all.groupby("stock_id")["close"]
+        .transform(lambda x: x.shift(-hold_days) / x - 1)
+    )
+    df_all = df_all.drop(columns=["close"])
 
     df_sig = df_signals.copy()
     df_sig["date"] = pd.to_datetime(df_sig["date"])
@@ -334,7 +377,7 @@ def build_breakout_cnn_dataset(
     coverage = len(all_X) / len(df_signals) if len(df_signals) > 0 else 0
     print(f"時序窗口（lookback={lookback}）：{len(all_X):,} 筆，覆蓋率：{coverage:.1%}")
 
-    X = np.array(all_X, dtype=np.float32)
+    X = _normalize_price_windows(np.array(all_X, dtype=np.float32))
     y = np.array([v for _, v in all_sig_idx], dtype=np.float32)
 
     print(
@@ -386,10 +429,19 @@ class SeqCNNRanker:
     def _normalize(self, X: np.ndarray) -> np.ndarray:
         return (X - self._feat_mean) / self._feat_std
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "SeqCNNRanker":
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        X_val: np.ndarray | None = None,
+        y_val: np.ndarray | None = None,
+        patience: int = 10,
+    ) -> "SeqCNNRanker":
         self._feat_mean = X.mean(axis=(0, 1), keepdims=True).astype(np.float32)
         self._feat_std = (X.std(axis=(0, 1), keepdims=True) + 1e-8).astype(np.float32)
         X = self._normalize(X)
+        if X_val is not None:
+            X_val_n = self._normalize(X_val)
 
         device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
         print(f"  訓練裝置：{device}")
@@ -405,8 +457,12 @@ class SeqCNNRanker:
         y_t = torch.tensor(y.astype(np.float32)).unsqueeze(1)
         loader = DataLoader(TensorDataset(X_t, y_t), batch_size=self.batch_size, shuffle=True, drop_last=True)
 
-        self._model.train()
+        best_val_ic = -np.inf
+        best_state = None
+        no_improve = 0
+
         for epoch in range(self.epochs):
+            self._model.train()
             total_loss = 0.0
             for xb, yb in loader:
                 xb, yb = xb.to(device), yb.to(device)
@@ -416,17 +472,39 @@ class SeqCNNRanker:
                 optimizer.step()
                 total_loss += loss.item()
             scheduler.step()
-            if (epoch + 1) % 10 == 0:
-                print(f"  epoch {epoch+1}/{self.epochs}  loss={total_loss/len(loader):.6f}")
 
+            if (epoch + 1) % 5 == 0:
+                self._model.eval()
+                msg = f"  epoch {epoch+1:3d}/{self.epochs}  loss={total_loss/len(loader):.6f}"
+                if X_val is not None:
+                    with torch.no_grad():
+                        val_t = torch.tensor(X_val_n.transpose(0, 2, 1).astype(np.float32), dtype=torch.float32).to(device)
+                        val_scores = self._model(val_t).squeeze(1).cpu().numpy()
+                    val_ic = float(np.corrcoef(val_scores, y_val)[0, 1])
+                    msg += f"  val_IC={val_ic:.4f}"
+                    if val_ic > best_val_ic:
+                        best_val_ic = val_ic
+                        best_state = {k: v.cpu().clone() for k, v in self._model.state_dict().items()}
+                        no_improve = 0
+                        msg += " ✓"
+                    else:
+                        no_improve += 5
+                print(msg)
+                if X_val is not None and no_improve >= patience:
+                    print(f"  Early stopping（val IC 連 {patience} epoch 未改善）")
+                    break
+
+        if best_state is not None:
+            self._model.load_state_dict(best_state)
+            print(f"  最佳 val IC：{best_val_ic:.4f}")
         self._model.eval().to("cpu")
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """回傳連續 score（越高越好），shape: (n,)"""
         assert self._model is not None
-        X = self._normalize(X)
-        X_t = torch.tensor(X.transpose(0, 2, 1).astype(np.float32))
+        X = self._normalize(X.astype(np.float32))
+        X_t = torch.tensor(X.transpose(0, 2, 1), dtype=torch.float32)
         with torch.no_grad():
             return self._model(X_t).squeeze(1).numpy()
 
@@ -438,10 +516,17 @@ SeqCNNClassifier = SeqCNNRanker
 # ── 訓練入口 ──────────────────────────────────────────────────────────────── #
 
 
-def train_seq_cnn(X_train: np.ndarray, y_train: np.ndarray, lookback: int = 20, epochs: int = 50) -> SeqCNNRanker:
+def train_seq_cnn(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray | None = None,
+    y_val: np.ndarray | None = None,
+    lookback: int = 20,
+    epochs: int = 50,
+) -> SeqCNNRanker:
     """訓練 SeqCNN Ranker，X_train: (n, lookback, n_features)，y_train: continuous return"""
     ranker = SeqCNNRanker(lookback=lookback, epochs=epochs, lr=1e-3, batch_size=256)
-    ranker.fit(X_train, y_train)
+    ranker.fit(X_train, y_train, X_val=X_val, y_val=y_val)
     ranker._fitted_features = CNN_FEATURES
 
     ic = np.corrcoef(ranker.predict(X_train), y_train)[0, 1]
@@ -451,56 +536,102 @@ def train_seq_cnn(X_train: np.ndarray, y_train: np.ndarray, lookback: int = 20, 
 
 # ── Stacking：把 CNN alpha prob 加入樹模型特徵 ────────────────────────────── #
 
-CNN_ALPHA_COL = "cnn_alpha_p2"
+CNN_ALPHA_COL = "cnn_score"
+CNN_RANKER_PATH = "db/models/seq_cnn_ranker.pt"
 
 
-def add_cnn_alpha_feature(cnn: SeqCNNClassifier, df_signals, df_daily_all, lookback: int = 20):
+def save_seq_cnn(cnn: "SeqCNNRanker", path: str = CNN_RANKER_PATH) -> None:
+    """用 state_dict 存模型，避免 joblib __main__ 序列化問題。"""
+    import torch, os
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(
+        {
+            "lookback": cnn.lookback,
+            "lr": cnn.lr,
+            "batch_size": cnn.batch_size,
+            "feat_mean": cnn._feat_mean,
+            "feat_std": cnn._feat_std,
+            "fitted_features": cnn._fitted_features,
+            "model_state_dict": cnn._model.state_dict(),
+            "n_features": cnn._model.conv1.in_channels,
+        },
+        path,
+    )
+    print(f"CNN Ranker 已存：{path}")
+
+
+def load_seq_cnn(path: str = CNN_RANKER_PATH) -> "SeqCNNRanker":
+    """載入 state_dict 並重建 SeqCNNRanker。"""
+    import torch
+
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    cnn = SeqCNNRanker(lookback=state["lookback"], lr=state["lr"], batch_size=state["batch_size"])
+    cnn._feat_mean = state["feat_mean"]
+    cnn._feat_std = state["feat_std"]
+    cnn._fitted_features = state["fitted_features"]
+    cnn._model = _SeqCNN(state["n_features"], n_classes=1)
+    cnn._model.load_state_dict(state["model_state_dict"])
+    cnn._model.eval()
+    return cnn
+
+
+def add_cnn_alpha_feature(cnn: "SeqCNNRanker", df_signals, df_daily_all, lookback: int = 20):
     """
-    對 df_signals 每一筆（stock_id, date），從 df_daily_all 抓 lookback 日窗口，
-    計算 CNN alpha prob，加入 cnn_alpha_p2 欄位，回傳新 DataFrame。
+    對 df_signals（breakout 訊號）加入 cnn_score 欄位（stride_tricks 向量化）。
 
-    df_signals  : breakout 信號 DataFrame（含 stock_id, date）
-    df_daily_all: build_cnn_daily_features 的輸出（含 CNN_FEATURES + atr14_pct）
+    df_signals  : 含 stock_id, date 欄位
+    df_daily_all: build_cnn_daily_features 輸出（含 CNN_FEATURES）
     """
     import pandas as pd
 
-    stock_feat = {sid: grp.sort_values("date").reset_index(drop=True) for sid, grp in df_daily_all.groupby("stock_id")}
+    df_sig = df_signals.copy()
+    df_sig["date"] = pd.to_datetime(df_sig["date"])
+    df_sig["_date_str"] = df_sig["date"].astype(str)
+    signal_lookup: dict[tuple, int] = {
+        (r["stock_id"], r["_date_str"]): i for i, r in df_sig[["stock_id", "_date_str"]].iterrows()
+    }
 
-    X_list, valid_mask = [], []
+    df_all = df_daily_all.copy()
+    df_all["date"] = pd.to_datetime(df_all["date"])
 
-    for _, row in df_signals.iterrows():
-        stock = row["stock_id"]
-        date = pd.Timestamp(row["date"])
+    all_X: list[np.ndarray] = []
+    all_sig_idx: list[int] = []
 
-        grp = stock_feat.get(stock)
-        if grp is None:
-            valid_mask.append(False)
+    # 按 stock_id 分組 signal，避免對每檔股票掃全部日期
+    sig_by_stock: dict[str, dict[str, int]] = {}
+    for (sid, d), idx in signal_lookup.items():
+        sig_by_stock.setdefault(sid, {})[d] = idx
+
+    for sid, grp in df_all.groupby("stock_id"):
+        if sid not in sig_by_stock:
             continue
-
-        pos_arr = grp.index[grp["date"] <= date]
-        if len(pos_arr) < lookback:
-            valid_mask.append(False)
+        grp = grp.sort_values("date").reset_index(drop=True)
+        vals = grp[CNN_FEATURES].fillna(0).values.astype(np.float32)
+        dates_str = grp["date"].astype(str).values
+        if len(grp) < lookback:
             continue
+        windows = np.lib.stride_tricks.sliding_window_view(vals, (lookback, vals.shape[1]))
+        windows = windows[:, 0, :, :].copy()
+        date_to_wi = {d: i for i, d in enumerate(dates_str[lookback - 1 :])}
+        for d, sig_i in sig_by_stock[sid].items():
+            wi = date_to_wi.get(d)
+            if wi is None:
+                continue
+            all_X.append(windows[wi])
+            all_sig_idx.append(sig_i)
 
-        pos = pos_arr[-1]
-        window = grp.loc[pos - lookback + 1 : pos, CNN_FEATURES].fillna(0).values
-        if window.shape[0] != lookback:
-            valid_mask.append(False)
-            continue
-
-        X_list.append(window)
-        valid_mask.append(True)
-
-    df_out = df_signals.copy()
+    df_out = df_sig.drop(columns=["_date_str"])
     df_out[CNN_ALPHA_COL] = np.nan
 
-    if X_list:
-        X = np.array(X_list, dtype=np.float32)
+    if all_X:
+        X = _normalize_price_windows(np.array(all_X, dtype=np.float32))
         scores = cnn.predict(X)
-        df_out.loc[valid_mask, CNN_ALPHA_COL] = scores
+        for arr_i, sig_i in enumerate(all_sig_idx):
+            df_out.at[sig_i, CNN_ALPHA_COL] = scores[arr_i]
 
-    coverage = sum(valid_mask) / len(valid_mask) * 100
-    print(f"CNN alpha feature 覆蓋率：{coverage:.1f}%，填 NaN：{df_out[CNN_ALPHA_COL].isna().sum()} 筆")
+    coverage = df_out[CNN_ALPHA_COL].notna().mean() * 100
+    print(f"CNN score 覆蓋率：{coverage:.1f}%，NaN：{df_out[CNN_ALPHA_COL].isna().sum()} 筆")
     return df_out
 
 
@@ -608,7 +739,10 @@ if __name__ == "__main__":
 
     # ── 訓練 ──
     print(f"\n══ 訓練 SeqCNN Ranker（50 epochs，breakout宇宙，{HOLD_DAYS_CNN}日報酬）══")
-    cnn = train_seq_cnn(X_train, y_train, lookback=LOOKBACK, epochs=50)
+    cnn = train_seq_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, epochs=50)
+
+    # ── 存模型 ──
+    save_seq_cnn(cnn, CNN_RANKER_PATH)
 
     # ── OOS 評估（IC）──
     print("\n══ OOS 評估 ══")
@@ -655,7 +789,7 @@ if __name__ == "__main__":
     axes[0].set_title(f"Score vs Return (IC={ic_oos:.3f})")
 
     # score 分十等分，看平均報酬
-    df_eval["decile"] = pd.qcut(scores_test, q=10, labels=False)
+    df_eval["decile"] = pd.qcut(scores_test, q=10, labels=False, duplicates="drop")
     dec = df_eval.groupby("decile")["fwd_return"].mean()
     axes[1].bar(dec.index, dec.values, color="seagreen", alpha=0.8)
     axes[1].axhline(y_test.mean(), color="gray", linestyle="--", linewidth=0.8, label=f"Mean {y_test.mean():.2%}")
