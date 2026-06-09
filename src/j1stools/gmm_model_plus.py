@@ -338,13 +338,16 @@ if __name__ == "__main__":
     #  breakout_compare  : 【模型選型】RFC / XGB / LGBM 三個校準曲線對比
     #                      → 找出信心分最準的模型
     #
-    #  breakout_signal   : 【門檻確認】單一模型校準曲線 + 達標率表
+    #  breakout_tune     : 【參數最佳化】Optuna 調 LGBM 超參數（以 df_val OOS AUC 為目標）
+    #                      → 找最佳參數後印出，再填入 train_lgbm 使用
+    #
+    #  breakout_signal   : 【門檻確認】LGBM 校準曲線 + 達標率表
     #                      → 決定 backtest 的 prob threshold
     #
-    #  breakout_backtest : 【策略驗證】LGBM+GMM 叢集 2/7/9 vs 全叢集 baseline
-    #                      → 確認 GMM 過濾是否有效
+    #  breakout_backtest : 【策略驗證】RFC/XGB/LGBM + GMM 叢集 2/7/9 vs 全叢集 baseline
+    #                      → 確認模型選擇與 GMM 過濾是否有效
     #
-    MODE = "breakout_backtest"  # "breakout_compare" | "breakout_signal" | "breakout_backtest"
+    MODE = "breakout_tune"  # "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -382,7 +385,51 @@ if __name__ == "__main__":
         volume_ratio_min=VOLUME_RATIO_MIN,
     )
 
-    if MODE == "breakout_compare":
+    if MODE == "breakout_tune":
+        import optuna
+
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+        avail = [c for c in CLASSIFY_FEATURES if c in df_train.columns]
+        X_tr = df_train[avail].fillna(0.5)
+        y_tr = df_train["Y"].values
+        X_val = df_val[avail].fillna(0.5)
+        y_val = df_val["Y"].values
+
+        def objective(trial):
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 100, 600),
+                "max_depth": trial.suggest_int("max_depth", 3, 10),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+                "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+                "min_child_samples": trial.suggest_int("min_child_samples", 10, 100),
+                "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+                "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),
+                "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
+                "class_weight": "balanced",
+                "random_state": 42,
+                "n_jobs": -1,
+                "verbosity": -1,
+            }
+            m = LGBMClassifier(**params)
+            m.fit(X_tr, y_tr)
+            if len(set(y_val)) < 3:
+                return 0.0
+            return roc_auc_score(y_val, m.predict_proba(X_val), multi_class="ovr", average="macro")
+
+        TUNE_TRIALS = 50
+        print(f"\n── Optuna 調參（{TUNE_TRIALS} trials，目標：Val OOS AUC）──")
+        study = optuna.create_study(direction="maximize")
+        study.optimize(objective, n_trials=TUNE_TRIALS, show_progress_bar=True)
+
+        best = study.best_params
+        print(f"\n最佳 Val AUC：{study.best_value:.4f}")
+        print("最佳參數：")
+        for k, v in best.items():
+            print(f"  {k}: {v}")
+
+    elif MODE == "breakout_compare":
         rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
         xgb = train_xgb(df_train, features=CLASSIFY_FEATURES)
         lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
