@@ -69,6 +69,8 @@ CLASSIFY_FEATURES = [
 N_CLUSTERS = 10
 BREAKOUT_GMM_MODEL_PATH = "db/models/ib_margin_breakout_gmm.joblib"
 MARKET_PROXY = "0050"  # 大盤代理（台灣50）
+MIN_ATR_PCT = 0.05  # ATR 過濾門檻（GMM 訓練與 LGBM 資料共用）
+VOLUME_RATIO_MIN = 1  # 放量門檻（None = 關閉）
 
 
 def load_transition_stocks(
@@ -110,7 +112,7 @@ def load_breakout_stocks(
     st: str,
     end: str = "2099-01-01",
     min_atr_pct: float = 0.02,
-    volume_ratio_min: float = 2.0,
+    volume_ratio_min: float | None = VOLUME_RATIO_MIN,  # None = 關閉放量過濾
     require_complete: bool = False,
 ) -> pd.DataFrame:
     """
@@ -118,18 +120,28 @@ def load_breakout_stocks(
 
     假設：量能放大 + 價格上漲 = 有人在買且市場認可。
     搭配 GMM 分群，找出「哪種籌碼型態下的放量最可靠」。
+
+    volume_ratio_min=None：關閉放量過濾，保留所有上漲日。
     """
     df = load_data(stocks, st, end, min_atr_pct=min_atr_pct, require_complete=require_complete)
 
-    mask = (df["f_volume_ratio_20d"] >= volume_ratio_min) & (df["f_daily_return"] > 0)
-    result = df[mask].copy()
-
-    total = len(df)
-    n = len(result)
-    print(
-        f"放量上漲過濾（量>={volume_ratio_min:.0f}x均量 & 上漲）："
-        f"{total:,} → {n:,} 筆（{n/total:.1%}），唯一股票：{result['stock_id'].nunique()} 支"
-    )
+    if volume_ratio_min is not None:
+        mask = (df["f_volume_ratio_20d"] >= volume_ratio_min) & (df["f_daily_return"] > 0)
+        result = df[mask].copy()
+        total = len(df)
+        n = len(result)
+        print(
+            f"放量上漲過濾（量>={volume_ratio_min:.1f}x均量 & 上漲）："
+            f"{total:,} → {n:,} 筆（{n/total:.1%}），唯一股票：{result['stock_id'].nunique()} 支"
+        )
+    else:
+        result = df[df["f_daily_return"] > 0].copy()
+        total = len(df)
+        n = len(result)
+        print(
+            f"上漲過濾（放量過濾已關閉）："
+            f"{total:,} → {n:,} 筆（{n/total:.1%}），唯一股票：{result['stock_id'].nunique()} 支"
+        )
     return result
 
 
@@ -734,7 +746,7 @@ if __name__ == "__main__":
     #  breakout : 【訓練用】GMM 分群，分析叢集報酬，儲存模型
     #             → 儲存至 BREAKOUT_GMM_MODEL_PATH，供 gmm_model_plus.py 使用
     #
-    MODE = "scan"  # "scan" | "pca" | "breakout"
+    MODE = "breakout"  # "scan" | "pca" | "breakout"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]

@@ -3,7 +3,7 @@
 
 流程：
   全市場 → ATR 過濾 → 放量上漲（量>=2x + 當日上漲）
-        → IBMarginGMM 分群 → 選叢集 2/7/9
+        → IBMarginGMM 分群 → 選叢集（BREAKOUT_CLUSTERS，排除叢集 2/4/5）
         → LGBM 打達標信心分（class 2）
         → prob >= 0.5 進場
 
@@ -11,7 +11,7 @@ profit_label 三分類：0=盤整, 1=停損(-10%), 2=達標(+10%)，持有期 HO
 
 MODE:
   breakout_signal   : 訊號品質分析（prob 分布 + 校準曲線）
-  breakout_backtest : 回測（LGBM+GMM 叢集 2/7/9 vs 全叢集 baseline 對照）
+  breakout_backtest : 回測（LGBM+GMM BREAKOUT_CLUSTERS vs 全叢集 baseline 對照）
 """
 
 import numpy as np
@@ -26,6 +26,8 @@ from j1stools.ib_margin_classify import (
     BREAKOUT_GMM_MODEL_PATH,
     CLASSIFY_FEATURES,
     IBMarginGMM,
+    MIN_ATR_PCT,
+    VOLUME_RATIO_MIN,
     load_breakout_stocks,
 )
 from j1stools.label_builder import profit_label
@@ -155,18 +157,18 @@ def train_lgbm(df_train: pd.DataFrame, features: list | None = None) -> LGBMClas
 
 
 def train_lgbm_tuned(df_train: pd.DataFrame, features: list | None = None) -> LGBMClassifier:
-    """LGBM（Optuna 最佳化）：Val AUC 0.7467，比預設版多正則化、防止過擬合"""
+    """LGBM（Optuna 最佳化）：Val AUC 0.6760，叢集 [1,2,3,5,7]，上漲日宇宙"""
     return _fit(
         LGBMClassifier(
-            n_estimators=316,
+            n_estimators=491,
             max_depth=5,
-            learning_rate=0.02954,
-            num_leaves=19,
-            min_child_samples=22,
-            subsample=0.6007,
-            colsample_bytree=0.7352,
-            reg_alpha=1.6968,
-            reg_lambda=0.01427,
+            learning_rate=0.02522006977039476,
+            num_leaves=15,
+            min_child_samples=82,
+            subsample=0.6155595042032475,
+            colsample_bytree=0.550787808634972,
+            reg_alpha=0.0032483628032381746,
+            reg_lambda=0.0024074809500550767,
             class_weight="balanced",
             random_state=42,
             n_jobs=-1,
@@ -302,10 +304,11 @@ def eval_signal(
             }
         )
 
+    cluster_info = sorted(df_test["cluster"].unique().tolist()) if "cluster" in df_test.columns else "全叢集"
     result = pd.DataFrame(rows)
     print(f"\n{'='*68}")
     print(f"Breakout 訊號品質  {date_range}  共 {n_dates} 個交易日")
-    print(f"基準達標率（叢集 2/7/9 全宇宙）：{base_rate:.1%}")
+    print(f"基準達標率（叢集 {cluster_info} 全宇宙）：{base_rate:.1%}")
     print(f"{'='*68}")
     print(
         result.to_string(
@@ -336,7 +339,7 @@ def eval_signal(
     axes[1].set_ylabel("達標率")
     axes[1].legend()
 
-    plt.suptitle("Breakout 訊號品質分析（GMM 叢集 2/7/9）")
+    plt.suptitle(f"Breakout 訊號品質分析（GMM 叢集 {cluster_info}）")
     plt.tight_layout()
     plt.show()
     return df_out
@@ -353,32 +356,64 @@ if __name__ == "__main__":
     VAL_END = "2023-12-31"  # 訓練 / 驗證結束
     EVAL_ST = "2024-01-01"  # OOS 測試起點
 
-    BREAKOUT_CLUSTERS = [2, 7, 9]  # 叢集 2（外資強）、7（外資主力）、9（最佳報酬）
-    VOLUME_RATIO_MIN = 2.0  # 放量門檻：今日量 >= N 倍 20日均量
+    EXCLUDE_CLUSTERS = [6, 8]  # 排除達標率最差、樣本過少的叢集
+    # VOLUME_RATIO_MIN 從 ib_margin_classify 共用（目前 0.02）
 
     # ── 切換模式 ──────────────────────────────────────────────────────────── #
+    #
+    #  cluster_inspect   : 【叢集選擇】GMM 重訓後必跑，確認哪些叢集達標率高
+    #                      → 用全宇宙（clusters=None）在訓練期跑 profit_label
+    #                      → 依達標率排序，更新下方 EXCLUDE_CLUSTERS
+    #                      ⚠️  每次 ib_margin_classify.py 重訓 GMM 後都要重跑
+    #                      ⚠️  時間範圍固定為 TRAIN_ST ~ VAL_ST（避免 lookahead）
+    #                      ⚠️  若某段 OOS 表現異常（如 no-trade 期），可改時間範圍診斷
     #
     #  breakout_compare  : 【模型選型】RFC / XGB / LGBM 三個校準曲線對比
     #                      → 找出信心分最準的模型
     #
     #  breakout_tune     : 【參數最佳化】Optuna 調 LGBM 超參數（以 df_val OOS AUC 為目標）
-    #                      → 找最佳參數後印出，再填入 train_lgbm 使用
+    #                      → 找最佳參數後印出，再填入 train_lgbm_tuned 使用
+    #                      ⚠️  EXCLUDE_CLUSTERS / VOLUME_RATIO_MIN / MIN_ATR_PCT 改變後需重跑
     #
     #  breakout_signal   : 【門檻確認】LGBM 校準曲線 + 達標率表
     #                      → 決定 backtest 的 prob threshold
     #
-    #  breakout_backtest      : 【策略驗證】RFC/XGB/LGBM + GMM 叢集 2/7/9 vs 全叢集 baseline
-    #                           → 確認模型選擇與 GMM 過濾是否有效
+    #  breakout_backtest : 【策略驗證】RFC/XGB/LGBM + GMM EXCLUDE_CLUSTERS vs 全叢集 baseline
+    #                      → 確認模型選擇與 GMM 過濾是否有效
     #
     #  breakout_tune_backtest : 【回測參數最佳化】Optuna 調 backtest 參數（LGBM 固定）
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_tune_backtest"  # "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
     clf_breakout = IBMarginGMM.load(BREAKOUT_GMM_MODEL_PATH)
+    all_clusters = list(range(clf_breakout.n_components))
+    BREAKOUT_CLUSTERS = [c for c in all_clusters if c not in EXCLUDE_CLUSTERS]
+
+    if MODE == "cluster_inspect":
+        df_all = build_dataset_breakout(
+            clf_breakout,
+            stocks,
+            TRAIN_ST,
+            VAL_ST,
+            clusters=None,
+            volume_ratio_min=VOLUME_RATIO_MIN,
+            min_atr_pct=MIN_ATR_PCT,
+        )
+        summary = (
+            df_all.groupby("cluster")
+            .agg(筆數=("Y", "count"), 達標率=("Y", lambda x: (x == 2).mean()))
+            .assign(佔比=lambda d: d["筆數"] / d["筆數"].sum())
+            .sort_values("達標率", ascending=False)
+        )
+        print("\n── 叢集達標率分析（訓練期全宇宙）──")
+        print(summary.to_string(float_format="{:.1%}".format))
+        import sys
+
+        sys.exit(0)
 
     print("── 建立 Breakout 訓練集 ──")
     df_train = build_dataset_breakout(
@@ -388,6 +423,7 @@ if __name__ == "__main__":
         VAL_ST,
         clusters=BREAKOUT_CLUSTERS,
         volume_ratio_min=VOLUME_RATIO_MIN,
+        min_atr_pct=MIN_ATR_PCT,
     )
 
     print("\n── 建立 Breakout 驗證集 ──")
@@ -398,6 +434,7 @@ if __name__ == "__main__":
         VAL_END,
         clusters=BREAKOUT_CLUSTERS,
         volume_ratio_min=VOLUME_RATIO_MIN,
+        min_atr_pct=MIN_ATR_PCT,
     )
 
     print("\n── 訓練 Ensemble（RFC + XGB + LGBM）──")
@@ -410,6 +447,7 @@ if __name__ == "__main__":
         EVAL_ST,
         clusters=BREAKOUT_CLUSTERS,
         volume_ratio_min=VOLUME_RATIO_MIN,
+        min_atr_pct=MIN_ATR_PCT,
     )
 
     if MODE == "breakout_tune":
@@ -463,8 +501,13 @@ if __name__ == "__main__":
 
         lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
         signal = make_signal_breakout(
-            lgbm, clf_breakout, stocks, st=EVAL_ST,
-            clusters=BREAKOUT_CLUSTERS, volume_ratio_min=VOLUME_RATIO_MIN,
+            lgbm,
+            clf_breakout,
+            stocks,
+            st=EVAL_ST,
+            clusters=BREAKOUT_CLUSTERS,
+            volume_ratio_min=VOLUME_RATIO_MIN,
+            min_atr_pct=MIN_ATR_PCT,
         )
         backtest_platform.optimize_optuna(signal, n_trials=100)
 
@@ -488,7 +531,7 @@ if __name__ == "__main__":
         lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
         lgbm_tune = train_lgbm_tuned(df_train, features=CLASSIFY_FEATURES)
 
-        def _run_backtest(label, m, clusters):
+        def _run_backtest(label, m, clusters, threshold=0.50):
             print(f"\n{'='*60}\n【{label}】\n{'='*60}")
             sig = make_signal_breakout(
                 m,
@@ -497,11 +540,12 @@ if __name__ == "__main__":
                 st=EVAL_ST,
                 clusters=clusters,
                 volume_ratio_min=VOLUME_RATIO_MIN,
+                min_atr_pct=MIN_ATR_PCT,
             )
             pv, td, _, _ = backtest_platform.prepare_data_backtest(
                 sig,
                 top_n=5,
-                threshold=0.50,
+                threshold=threshold,
                 max_positions=5,
                 use_sl_trail=False,
                 use_fixed_sl=True,
@@ -515,9 +559,9 @@ if __name__ == "__main__":
             )
             j1s_chart.plot_performance(pv, td)
 
-        # ── 四模型比較（GMM 叢集 2/7/9）──
-        for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", lgbm), ("LGBM Tuned", lgbm_tune)]:
-            _run_backtest(f"{name} + GMM 叢集 2/7/9", m, BREAKOUT_CLUSTERS)
+        # ── 四模型比較 ──
+        for name, m, thr in [("RFC", rfc, 0.50), ("XGB", xgb, 0.60), ("LGBM", lgbm, 0.70), ("LGBM Tuned", lgbm_tune, 0.70)]:
+            _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr)
 
         # ── Baseline：全叢集（驗證 GMM 是否有效）──
         print("\n── 建立 Baseline 訓練集（全叢集）──")
