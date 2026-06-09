@@ -255,6 +255,167 @@ def local_signals(file_name):
     return signal
 
 
+def optimize_optuna(signal, n_trials: int = 100):
+    """
+    Optuna Bayesian 搜尋最佳 backtest 參數。
+
+    與 optimize() 的差異：
+      - 連續範圍搜尋（不限離散選項）
+      - Bayesian 優化（學習哪個方向有效）
+      - 輸出分布圖，說明最佳值是否穩定
+
+    ⚠️ 目標為 OOS 總報酬，對測試集調參有過擬合風險，
+       結果應參考中位數而非最大值。
+    """
+    import optuna
+    import matplotlib.pyplot as plt
+
+    plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    def objective(trial):
+        threshold = trial.suggest_float("threshold", 0.30, 0.70)
+        top_n = trial.suggest_int("top_n", 3, 8)
+        max_positions = trial.suggest_int("max_positions", 2, 6)
+        hold_days = trial.suggest_int("hold_days", 5, 20)
+        group_limit = trial.suggest_int("group_limit", 1, 4)
+        sl_stop = trial.suggest_float("sl_stop", 0.05, 0.20)
+        tp_stop = trial.suggest_float("tp_stop", 0.05, 0.25)
+        try:
+            pv, _, _ = prepare_data_backtest(
+                signal,
+                top_n=top_n,
+                threshold=threshold,
+                max_positions=max_positions,
+                use_sl_trail=False,
+                use_fixed_sl=True,
+                sl_stop=sl_stop,
+                use_fixed_tp=True,
+                tp_stop=tp_stop,
+                use_hold_days=True,
+                hold_days=hold_days,
+                group_limit=group_limit,
+                min_volume=200,
+            )[:3]
+            return pv["total"].iloc[-1] / pv["total"].iloc[0] - 1
+        except Exception:
+            return -1.0
+
+    print(f"\n── Optuna 回測參數最佳化（{n_trials} trials）──")
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    trials_df = study.trials_dataframe()
+    returns = trials_df["value"].dropna()
+
+    print(f"\n{'='*55}")
+    print(f"Optuna 報告（{n_trials} trials）")
+    print(f"{'='*55}")
+    print(f"  最佳報酬  : {returns.max():.2%}")
+    print(f"  中位數    : {returns.median():.2%}")
+    print(f"  平均值    : {returns.mean():.2%}")
+    print(f"  標準差    : {returns.std():.2%}")
+    print(f"  >100% 次數: {(returns > 1.0).sum()} / {len(returns)}")
+    print(f"  虧損次數  : {(returns < 0).sum()} / {len(returns)}")
+
+    best = study.best_params
+    print(f"\n最佳參數（trial {study.best_trial.number}，報酬 {study.best_value:.2%}）：")
+    for k, v in best.items():
+        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+
+    _, axes = plt.subplots(1, 2, figsize=(12, 4))
+    axes[0].hist(returns * 100, bins=20, color="steelblue", edgecolor="white", linewidth=0.5)
+    axes[0].axvline(
+        returns.median() * 100, color="orange", linestyle="--", linewidth=1.5, label=f"中位數 {returns.median():.1%}"
+    )
+    axes[0].axvline(returns.max() * 100, color="red", linestyle=":", linewidth=1.5, label=f"最佳 {returns.max():.1%}")
+    axes[0].set_title(f"{n_trials} Trials 報酬率分布")
+    axes[0].set_xlabel("總報酬率 (%)")
+    axes[0].set_ylabel("次數")
+    axes[0].legend()
+
+    best_so_far = returns.cummax()
+    axes[1].plot(trials_df["number"], returns * 100, alpha=0.4, color="steelblue", label="每次報酬")
+    axes[1].plot(trials_df["number"], best_so_far * 100, color="red", linewidth=1.5, label="歷史最佳")
+    axes[1].set_title("Trials 過程（最佳值收斂）")
+    axes[1].set_xlabel("Trial")
+    axes[1].set_ylabel("總報酬率 (%)")
+    axes[1].legend()
+
+    plt.suptitle("⚠️  最佳值僅出現少數次，過擬合風險高，參數穩定性請參考中位數", fontsize=10, color="red")
+    plt.tight_layout()
+    plt.show()
+    return study
+
+
+def plot_optuna_compare(studies: dict):
+    """
+    比較多個策略的 Optuna 結果分布。
+
+    Parameters
+    ----------
+    studies : dict
+        {策略名稱: optuna.Study} 例如：
+        {
+            "Breakout LGBM":  study_breakout,
+            "rfc_macd_6xx":   study_6xx,
+        }
+
+    用法：
+        s1 = optimize_optuna(signal_breakout)
+        s2 = optimize_optuna(signal_6xx)
+        plot_optuna_compare({"Breakout": s1, "rfc_macd_6xx": s2})
+    """
+    import matplotlib.pyplot as plt
+
+    plt.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
+
+    n = len(studies)
+    _, axes = plt.subplots(1, n, figsize=(6 * n, 5), sharey=False)
+    if n == 1:
+        axes = [axes]
+
+    colors = ["steelblue", "seagreen", "tomato", "goldenrod"]
+
+    summary = []
+    for ax, (label, study), color in zip(axes, studies.items(), colors):
+        returns = study.trials_dataframe()["value"].dropna()
+        med = returns.median()
+        best = returns.max()
+        losing = (returns < 0).sum()
+
+        ax.hist(returns * 100, bins=20, color=color, edgecolor="white", linewidth=0.5, alpha=0.85)
+        ax.axvline(med * 100, color="orange", linestyle="--", linewidth=1.5, label=f"中位數 {med:.1%}")
+        ax.axvline(best * 100, color="red", linestyle=":", linewidth=1.5, label=f"最佳 {best:.1%}")
+        ax.set_title(label)
+        ax.set_xlabel("總報酬率 (%)")
+        ax.set_ylabel("次數")
+        ax.legend(fontsize=8)
+
+        summary.append(
+            {
+                "策略": label,
+                "最佳": f"{best:.1%}",
+                "中位數": f"{med:.1%}",
+                "平均": f"{returns.mean():.1%}",
+                "虧損次數": f"{losing}/{len(returns)}",
+                ">100% 次數": f"{(returns > 1.0).sum()}/{len(returns)}",
+            }
+        )
+
+    import pandas as pd
+
+    summary_df = pd.DataFrame(summary).set_index("策略")
+    plt.suptitle(
+        "Optuna 回測參數最佳化：策略比較\n（中位數是穩定期望值，最佳值有過擬合風險）", fontsize=11, color="darkred"
+    )
+    plt.tight_layout()
+    plt.show()
+
+    print(f"\n{'='*60}\n策略比較摘要\n{'='*60}")
+    print(summary_df.to_string())
+
+
 def optimize(signal):
 
     import itertools
@@ -433,7 +594,12 @@ def main(
 #############################################################
 # optimize(local_signals())
 if __name__ == "__main__":
-    main()
+
+    from j1stools import backtest_platform
+
+    signal = backtest_platform.local_signals("rfc_macd_6xx.csv")
+    backtest_platform.optimize_optuna(signal, n_trials=100)
+    # main()
 # raise Exception("未完成")
 # 2024-03-18沒資料，之後再檢查
 # x, y, z = query_last()
