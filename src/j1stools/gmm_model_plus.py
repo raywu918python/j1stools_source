@@ -154,6 +154,29 @@ def train_lgbm(df_train: pd.DataFrame, features: list | None = None) -> LGBMClas
     )
 
 
+def train_lgbm_tuned(df_train: pd.DataFrame, features: list | None = None) -> LGBMClassifier:
+    """LGBM（Optuna 最佳化）：Val AUC 0.7467，比預設版多正則化、防止過擬合"""
+    return _fit(
+        LGBMClassifier(
+            n_estimators=316,
+            max_depth=5,
+            learning_rate=0.02954,
+            num_leaves=19,
+            min_child_samples=22,
+            subsample=0.6007,
+            colsample_bytree=0.7352,
+            reg_alpha=1.6968,
+            reg_lambda=0.01427,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+            verbosity=-1,
+        ),
+        df_train,
+        features,
+    )
+
+
 class EnsembleModel:
     """RFC + XGB + LGBM 加權平均，相容 eval_signal / make_signal_breakout 介面。"""
 
@@ -347,7 +370,7 @@ if __name__ == "__main__":
     #  breakout_backtest : 【策略驗證】RFC/XGB/LGBM + GMM 叢集 2/7/9 vs 全叢集 baseline
     #                      → 確認模型選擇與 GMM 過濾是否有效
     #
-    MODE = "breakout_tune"  # "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest"
+    MODE = "breakout_backtest"  # "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -449,6 +472,7 @@ if __name__ == "__main__":
         rfc = train_rfc(df_train, features=CLASSIFY_FEATURES)
         xgb = train_xgb(df_train, features=CLASSIFY_FEATURES)
         lgbm = train_lgbm(df_train, features=CLASSIFY_FEATURES)
+        lgbm_tune = train_lgbm_tuned(df_train, features=CLASSIFY_FEATURES)
 
         def _run_backtest(label, m, clusters):
             print(f"\n{'='*60}\n【{label}】\n{'='*60}")
@@ -475,10 +499,10 @@ if __name__ == "__main__":
                 group_limit=2,
                 min_volume=200,
             )
-            # j1s_chart.plot_performance(pv, td)
+            j1s_chart.plot_performance(pv, td)
 
-        # ── 第一步：三模型比較（GMM 叢集 2/7/9）──
-        for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", lgbm)]:
+        # ── 四模型比較（GMM 叢集 2/7/9）──
+        for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", lgbm), ("LGBM Tuned", lgbm_tune)]:
             _run_backtest(f"{name} + GMM 叢集 2/7/9", m, BREAKOUT_CLUSTERS)
 
         # ── Baseline：全叢集（驗證 GMM 是否有效）──
