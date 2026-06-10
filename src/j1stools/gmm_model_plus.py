@@ -85,6 +85,19 @@ def make_signal_breakout(
         df = df[df["cluster"].isin(clusters)].copy()
 
     avail = model._fitted_features
+    _CNN_COL = "cnn_score"
+    if _CNN_COL in avail and _CNN_COL not in df.columns:
+        import os as _os2
+
+        _scores_path = "db/models/seq_cnn_scores.parquet"
+        if _os2.path.exists(_scores_path):
+            _sc = pd.read_parquet(_scores_path)[["date", "stock_id", _CNN_COL]]
+            _sc["date"] = pd.to_datetime(_sc["date"])
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.merge(_sc, on=["date", "stock_id"], how="left")
+            df[_CNN_COL] = df[_CNN_COL].fillna(0.0)
+        else:
+            df[_CNN_COL] = 0.0
     proba = model.predict_proba(df[avail].fillna(0.5))
     df["2"] = proba[:, 2]
 
@@ -410,7 +423,8 @@ if __name__ == "__main__":
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_tune_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    USE_CNN = False  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -474,6 +488,34 @@ if __name__ == "__main__":
         volume_ratio_min=VOLUME_RATIO_MIN,
         min_atr_pct=MIN_ATR_PCT,
     )
+
+    # ── CNN stacking feature（讀預計算 parquet，避免載入 torch 造成 OpenMP 衝突）──
+    import os as _os
+
+    _CNN_SCORES_PATH = "db/models/seq_cnn_scores.parquet"
+    _CNN_ALPHA_COL = "cnn_score"
+
+    if USE_CNN and _os.path.exists(_CNN_SCORES_PATH):
+        print("\n── 載入 CNN scores parquet，加入 cnn_score 特徵 ──")
+        import pandas as _pd
+
+        _scores = _pd.read_parquet(_CNN_SCORES_PATH)[["date", "stock_id", _CNN_ALPHA_COL]]
+        _scores["date"] = _pd.to_datetime(_scores["date"])
+        df_train["date"] = _pd.to_datetime(df_train["date"])
+        df_val["date"] = _pd.to_datetime(df_val["date"])
+        df_test["date"] = _pd.to_datetime(df_test["date"])
+        df_train = df_train.merge(_scores, on=["date", "stock_id"], how="left")
+        df_val = df_val.merge(_scores, on=["date", "stock_id"], how="left")
+        df_test = df_test.merge(_scores, on=["date", "stock_id"], how="left")
+        df_train[_CNN_ALPHA_COL] = df_train[_CNN_ALPHA_COL].fillna(0.0)
+        df_val[_CNN_ALPHA_COL] = df_val[_CNN_ALPHA_COL].fillna(0.0)
+        df_test[_CNN_ALPHA_COL] = df_test[_CNN_ALPHA_COL].fillna(0.0)
+        _tr_cov = (df_train[_CNN_ALPHA_COL] != 0).mean()
+        print(f"  train 覆蓋率：{_tr_cov:.1%}，parquet 筆數：{len(_scores):,}")
+        FEATURES_EXT = CLASSIFIER_FEATURES + [_CNN_ALPHA_COL]
+        print(f"特徵數：{len(CLASSIFIER_FEATURES)} → {len(FEATURES_EXT)}（+cnn_score）")
+    else:
+        FEATURES_EXT = CLASSIFIER_FEATURES
 
     if MODE == "breakout_tune":
         import optuna
@@ -570,11 +612,11 @@ if __name__ == "__main__":
             eval_signal(m, df_test)
 
     elif MODE == "breakout_signal":
-        rfc = train_rfc(df_train, features=CLASSIFIER_FEATURES)
-        xgb = train_xgb(df_train, features=CLASSIFIER_FEATURES)
-        xgb_tune = train_xgb_tuned(df_train, features=CLASSIFIER_FEATURES)
-        model = train_lgbm(df_train, features=CLASSIFIER_FEATURES)
-        lgbm_tune = train_lgbm_tuned(df_train, features=CLASSIFIER_FEATURES)
+        rfc = train_rfc(df_train, features=FEATURES_EXT)
+        xgb = train_xgb(df_train, features=FEATURES_EXT)
+        xgb_tune = train_xgb_tuned(df_train, features=FEATURES_EXT)
+        model = train_lgbm(df_train, features=FEATURES_EXT)
+        lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
         for name, m in [
             ("RFC", rfc),
             ("XGB", xgb),
@@ -587,11 +629,11 @@ if __name__ == "__main__":
     elif MODE == "breakout_backtest":
         from j1stools import backtest_platform
 
-        rfc = train_rfc(df_train, features=CLASSIFIER_FEATURES)
-        xgb = train_xgb(df_train, features=CLASSIFIER_FEATURES)
-        xgb_tune = train_xgb_tuned(df_train, features=CLASSIFIER_FEATURES)
-        model = train_lgbm(df_train, features=CLASSIFIER_FEATURES)
-        lgbm_tune = train_lgbm_tuned(df_train, features=CLASSIFIER_FEATURES)
+        rfc = train_rfc(df_train, features=FEATURES_EXT)
+        xgb = train_xgb(df_train, features=FEATURES_EXT)
+        xgb_tune = train_xgb_tuned(df_train, features=FEATURES_EXT)
+        model = train_lgbm(df_train, features=FEATURES_EXT)
+        lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
 
         def _run_backtest(label, m, clusters, threshold=0.50):
             print(f"\n{'='*60}\n【{label}】\n{'='*60}")
@@ -623,11 +665,11 @@ if __name__ == "__main__":
 
         # ── 五模型比較 ──
         for name, m, thr in [
-            ("RFC", rfc, 0.50),
+            # ("RFC", rfc, 0.50),
             ("XGB", xgb, 0.75),
-            ("XGB Tuned", xgb_tune, 0.75),
-            ("LGBM", model, 0.75),
-            ("LGBM Tuned", lgbm_tune, 0.75),
+            # ("XGB Tuned", xgb_tune, 0.75),
+            # ("LGBM", model, 0.75),
+            # ("LGBM Tuned", lgbm_tune, 0.75),
         ]:
             _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr)
 
@@ -642,4 +684,5 @@ if __name__ == "__main__":
             volume_ratio_min=VOLUME_RATIO_MIN,
         )
         lgbm_all = train_lgbm(df_train_all, features=CLASSIFIER_FEATURES)
+        # xgb = train_xgb(df_train_all, features=CLASSIFIER_FEATURES)
         _run_backtest("LGBM Baseline（全叢集，無 GMM 過濾）", lgbm_all, None)

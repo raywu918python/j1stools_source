@@ -73,7 +73,7 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     df_mkt = parquet_db.query_price([MARKET_PROXY], st, end)
     df_mkt["date"] = pd.to_datetime(df_mkt["date"])
     df_mkt = df_mkt.sort_values("date")
-    df_mkt["mkt_return"] = df_mkt["close"].pct_change()
+    df_mkt["mkt_return"] = df_mkt["close"].pct_change(fill_method=None)
 
     # ── 個股價格特徵 ──
     df_price = parquet_db.query_price(stocks, st, end)
@@ -81,7 +81,7 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     df_price["date"] = pd.to_datetime(df_price["date"])
     df_price = df_price.sort_values(["stock_id", "date"])
 
-    df_price["cnn_daily_return"] = df_price.groupby("stock_id")["close"].pct_change()
+    df_price["cnn_daily_return"] = df_price.groupby("stock_id")["close"].pct_change(fill_method=None)
     df_price["cnn_volume_ratio"] = df_price.groupby("stock_id")["volume"].transform(
         lambda x: x / x.rolling(20, min_periods=5).mean()
     )
@@ -101,7 +101,7 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
         ).max(axis=1)
         return tr.rolling(14, min_periods=5).mean() / grp["close"].replace(0, np.nan)
 
-    df_price["atr14_pct"] = df_price.groupby("stock_id", group_keys=False).apply(_atr14)
+    df_price["atr14_pct"] = df_price.groupby("stock_id", group_keys=False).apply(_atr14, include_groups=False)
 
     feat = df_price[
         [
@@ -180,7 +180,7 @@ def build_cnn_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     _hist_long = _hist.stack(future_stack=True).rename("cnn_macd_hist").reset_index()
     df_price = df_price.merge(_hist_long, on=["date", "stock_id"], how="left")
     # 背離：用已算好的 hist，不重複跑 EWM
-    price_slope = df_price.groupby("stock_id")["close"].pct_change(5)
+    price_slope = df_price.groupby("stock_id")["close"].pct_change(5, fill_method=None)
     macd_slope = df_price.groupby("stock_id")["cnn_macd_hist"].diff(5)
     df_price["cnn_macd_div"] = price_slope * macd_slope
     feat = feat.merge(
@@ -241,7 +241,7 @@ def build_alpha_label_dataset(
     df_mkt_fut = parquet_db.query_price([MARKET_PROXY], st_buf, end_buf)
     df_mkt_fut["date"] = pd.to_datetime(df_mkt_fut["date"])
     df_mkt_fut = df_mkt_fut.sort_values("date")
-    mkt_daily = df_mkt_fut["close"].pct_change()
+    mkt_daily = df_mkt_fut["close"].pct_change(fill_method=None)
     mkt_10d = (1 + mkt_daily).rolling(hold_days).apply(np.prod, raw=True).shift(-hold_days) - 1
     df_mkt_fut["mkt_future"] = mkt_10d
     df_all = df_all.merge(df_mkt_fut[["date", "mkt_future"]], on="date", how="left")
@@ -523,60 +523,109 @@ def train_seq_cnn(
     y_val: np.ndarray | None = None,
     lookback: int = 20,
     epochs: int = 50,
+    n_runs: int = 3,
 ) -> SeqCNNRanker:
-    """訓練 SeqCNN Ranker，X_train: (n, lookback, n_features)，y_train: continuous return"""
-    ranker = SeqCNNRanker(lookback=lookback, epochs=epochs, lr=1e-3, batch_size=256)
-    ranker.fit(X_train, y_train, X_val=X_val, y_val=y_val)
-    ranker._fitted_features = CNN_FEATURES
-
-    ic = np.corrcoef(ranker.predict(X_train), y_train)[0, 1]
+    """訓練 n_runs 次取 val IC 最佳的模型。"""
+    best_ic = -np.inf
+    best_ranker = None
+    for run in range(n_runs):
+        print(f"\n── Run {run+1}/{n_runs} ──")
+        ranker = SeqCNNRanker(lookback=lookback, epochs=epochs, lr=1e-3, batch_size=256)
+        ranker.fit(X_train, y_train, X_val=X_val, y_val=y_val)
+        ranker._fitted_features = CNN_FEATURES
+        val_ic = float(np.corrcoef(ranker.predict(X_val), y_val)[0, 1]) if X_val is not None else 0.0
+        print(f"  Run {run+1} val IC：{val_ic:.4f}")
+        if val_ic > best_ic:
+            best_ic = val_ic
+            best_ranker = ranker
+    print(f"\n最佳 Run val IC：{best_ic:.4f}")
+    ic = np.corrcoef(best_ranker.predict(X_train), y_train)[0, 1]
     print(f"訓練集 IC：{ic:.4f}（in-sample）")
-    return ranker
+    return best_ranker
 
 
 # ── Stacking：把 CNN alpha prob 加入樹模型特徵 ────────────────────────────── #
 
 CNN_ALPHA_COL = "cnn_score"
 CNN_RANKER_PATH = "db/models/seq_cnn_ranker.pt"
+CNN_SCORES_PATH = "db/models/seq_cnn_scores.parquet"
 
 
 def save_seq_cnn(cnn: "SeqCNNRanker", path: str = CNN_RANKER_PATH) -> None:
-    """用 state_dict 存模型，避免 joblib __main__ 序列化問題。"""
-    import torch, os
+    """state_dict tensor 全轉 numpy，用 joblib 存（避免 torch.load hang 問題）。"""
+    import joblib, os
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    torch.save(
+    joblib.dump(
         {
             "lookback": cnn.lookback,
             "lr": cnn.lr,
             "batch_size": cnn.batch_size,
             "feat_mean": cnn._feat_mean,
             "feat_std": cnn._feat_std,
-            "fitted_features": cnn._fitted_features,
-            "model_state_dict": cnn._model.state_dict(),
             "n_features": cnn._model.conv1.in_channels,
+            "weights": {k: v.cpu().numpy() for k, v in cnn._model.state_dict().items()},
         },
         path,
     )
     print(f"CNN Ranker 已存：{path}")
 
 
+def save_cnn_scores(
+    cnn: "SeqCNNRanker",
+    df_signals,
+    lookback: int = 30,
+    path: str = CNN_SCORES_PATH,
+) -> None:
+    """
+    計算 df_signals 每筆訊號的 CNN score，存成 parquet（date, stock_id, cnn_score）。
+    供 gmm_model_plus.py 直接讀取，避免在該 process 載入 torch（OpenMP 衝突問題）。
+    """
+    import pandas as pd, os
+
+    stocks = df_signals["stock_id"].unique().tolist()
+    dates = pd.to_datetime(df_signals["date"])
+    st_buf = (dates.min() - pd.DateOffset(days=lookback * 3)).strftime("%Y-%m-%d")
+    end_buf = (dates.max() + pd.DateOffset(days=5)).strftime("%Y-%m-%d")
+
+    print(f"  [save_cnn_scores] 載入日資料 {st_buf} ~ {end_buf}...")
+    df_daily = build_cnn_daily_features(stocks, st_buf, end_buf)
+    df_scored = add_cnn_alpha_feature(cnn, df_signals, df_daily, lookback=lookback)
+
+    out = df_scored[["date", "stock_id", CNN_ALPHA_COL]].copy()
+    out["date"] = pd.to_datetime(out["date"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    out.to_parquet(path, index=False)
+    print(f"CNN scores 已存：{path}（{len(out):,} 筆，覆蓋率：{out[CNN_ALPHA_COL].notna().mean():.1%}）")
+
+
 def load_seq_cnn(path: str = CNN_RANKER_PATH) -> "SeqCNNRanker":
-    """載入 state_dict 並重建 SeqCNNRanker。"""
+    """joblib 載入，numpy weights 轉回 tensor 重建模型。"""
+    import joblib
     import torch
 
-    state = torch.load(path, map_location="cpu", weights_only=False)
+    print(f"  [load_seq_cnn] joblib.load {path} ...")
+    state = joblib.load(path)
+    print(f"  [load_seq_cnn] 建立 SeqCNNRanker ...")
     cnn = SeqCNNRanker(lookback=state["lookback"], lr=state["lr"], batch_size=state["batch_size"])
     cnn._feat_mean = state["feat_mean"]
     cnn._feat_std = state["feat_std"]
-    cnn._fitted_features = state["fitted_features"]
+    cnn._fitted_features = CNN_FEATURES
+    print(f"  [load_seq_cnn] 建立 _SeqCNN ...")
     cnn._model = _SeqCNN(state["n_features"], n_classes=1)
-    cnn._model.load_state_dict(state["model_state_dict"])
+    print(f"  [load_seq_cnn] 轉換 weights ({len(state['weights'])} 個)...")
+    sd = {}
+    for k, v in state["weights"].items():
+        print(f"    {k}: {v.shape}")
+        sd[k] = torch.from_numpy(v.copy())
+    print(f"  [load_seq_cnn] load_state_dict ...")
+    cnn._model.load_state_dict(sd)
     cnn._model.eval()
+    print(f"  [load_seq_cnn] 完成")
     return cnn
 
 
-def add_cnn_alpha_feature(cnn: "SeqCNNRanker", df_signals, df_daily_all, lookback: int = 20):
+def add_cnn_alpha_feature(cnn: "SeqCNNRanker", df_signals, df_daily_all, lookback: int = 30):
     """
     對 df_signals（breakout 訊號）加入 cnn_score 欄位（stride_tricks 向量化）。
 
@@ -708,6 +757,7 @@ if __name__ == "__main__":
     from j1stools.gmm_model_plus import build_dataset_breakout
     from j1stools.ib_margin_classify import IBMarginGMM, BREAKOUT_GMM_MODEL_PATH
 
+    RETRAIN = True          # False = 載現有模型重算 scores，不重訓
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
     LOOKBACK = 30
@@ -719,11 +769,21 @@ if __name__ == "__main__":
     clf_gmm = IBMarginGMM.load(BREAKOUT_GMM_MODEL_PATH)
     BREAKOUT_CLUSTERS = [c for c in range(clf_gmm.n_components) if c not in EXCLUDE_CLUSTERS]
 
-    # ── Breakout 訊號資料集 ──
+    # ── Breakout 訊號資料集（train/predict 都需要）──
     print("\n══ Breakout 訓練集（GMM 過濾，2015-2024）══")
     df_train = build_dataset_breakout(clf_gmm, stocks, TRAIN_ST, EVAL_ST, clusters=BREAKOUT_CLUSTERS)
     print("\n══ Breakout 測試集（GMM 過濾，2024-）══")
     df_test = build_dataset_breakout(clf_gmm, stocks, EVAL_ST, clusters=BREAKOUT_CLUSTERS)
+
+    if not RETRAIN and os.path.exists(CNN_RANKER_PATH):
+        # ── 預測模式：載現有模型，重算 scores ──
+        print(f"\n══ 預測模式：載入現有模型 {CNN_RANKER_PATH} ══")
+        cnn = load_seq_cnn(CNN_RANKER_PATH)
+        print("── 計算並存儲 CNN scores parquet ──")
+        _all_sigs_for_scores = pd.concat([df_train, df_test], ignore_index=True)
+        save_cnn_scores(cnn, _all_sigs_for_scores, lookback=LOOKBACK, path=CNN_SCORES_PATH)
+        print("\n完成。可直接跑 gmm_model_plus.py。")
+        import sys; sys.exit(0)
 
     # ── CNN 時序窗口 ──
     print("\n── CNN 窗口（訓練集）──")
@@ -743,6 +803,11 @@ if __name__ == "__main__":
 
     # ── 存模型 ──
     save_seq_cnn(cnn, CNN_RANKER_PATH)
+
+    # ── 存 CNN scores parquet（供 gmm_model_plus.py 用，避免 OpenMP 衝突）──
+    print("\n── 計算並存儲 CNN scores parquet ──")
+    _all_sigs_for_scores = pd.concat([df_train, df_test], ignore_index=True)
+    save_cnn_scores(cnn, _all_sigs_for_scores, lookback=LOOKBACK, path=CNN_SCORES_PATH)
 
     # ── OOS 評估（IC）──
     print("\n══ OOS 評估 ══")
