@@ -613,16 +613,23 @@ if __name__ == "__main__":
         xgb = train_xgb(df_train, features=FEATURES_EXT)
         rfc = train_rfc(df_train, features=FEATURES_EXT)
 
-        signal = make_signal_breakout(
-            xgb,
-            clf_breakout,
-            stocks,
-            st=EVAL_ST,
-            clusters=_clusters,
-            volume_ratio_min=VOLUME_RATIO_MIN,
-            min_atr_pct=MIN_ATR_PCT,
-        )
-        backtest_platform.optimize_optuna(signal, n_trials=100, save_path="backtest_optuna.csv")
+        studies = {}
+        for name, model in [("LGBM", lgbm), ("XGB", xgb), ("RFC", rfc)]:
+            print(f"\n{'='*60}\n【{name}】回測參數最佳化\n{'='*60}")
+            sig = make_signal_breakout(
+                model,
+                clf_breakout,
+                stocks,
+                st=EVAL_ST,
+                clusters=_clusters,
+                volume_ratio_min=VOLUME_RATIO_MIN,
+                min_atr_pct=MIN_ATR_PCT,
+            )
+            studies[name] = backtest_platform.optimize_optuna(
+                sig, n_trials=100, save_path=f"backtest_optuna_{name.lower()}.csv"
+            )
+
+        backtest_platform.plot_optuna_compare(studies)
 
     elif MODE == "breakout_compare":
         rfc = train_rfc(df_train, features=FEATURES_EXT)
@@ -656,7 +663,21 @@ if __name__ == "__main__":
         model = train_lgbm(df_train, features=FEATURES_EXT)
         lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
 
-        def _run_backtest(label, m, clusters, threshold=0.50):
+        _DEFAULT_BT_PARAMS = dict(
+            top_n=5,
+            max_positions=3,
+            use_sl_trail=False,
+            use_fixed_sl=True,
+            sl_stop=0.10,
+            use_fixed_tp=True,
+            tp_stop=0.15,
+            use_hold_days=True,
+            hold_days=HOLD_DAYS,
+            group_limit=2,
+            min_volume=200,
+        )
+
+        def _run_backtest(label, m, clusters, threshold=0.50, **bt_params):
             print(f"\n{'='*60}\n【{label}】\n{'='*60}")
             sig = make_signal_breakout(
                 m,
@@ -668,32 +689,17 @@ if __name__ == "__main__":
                 min_atr_pct=MIN_ATR_PCT,
                 mkt_filter=USE_MKT_FILTER,
             )
-            pv, td, _, _ = backtest_platform.prepare_data_backtest(
-                sig,
-                top_n=5,
-                threshold=threshold,
-                max_positions=3,
-                use_sl_trail=False,
-                use_fixed_sl=True,
-                sl_stop=0.10,
-                use_fixed_tp=True,
-                tp_stop=0.15,
-                use_hold_days=True,
-                hold_days=HOLD_DAYS,
-                group_limit=2,
-                min_volume=200,
-            )
+            params = {**_DEFAULT_BT_PARAMS, **bt_params}
+            pv, td, _, _ = backtest_platform.prepare_data_backtest(sig, threshold=threshold, **params)
             j1s_chart.plot_performance(pv, td)
 
-        # ── 五模型比較 ──
-        for name, m, thr in [
-            # ("RFC", rfc, 0.40),  # 50
-            ("XGB", xgb, 0.50),  # 75
-            # ("XGB Tuned", xgb_tune, 0.40),  # 75
-            ("LGBM", model, 0.35),  # 75
-            # ("LGBM Tuned", lgbm_tune, 0.50),  # 75
+        # ── 三模型比較（各自最佳參數）──
+        for name, m, thr, extra in [
+            ("RFC", rfc, 0.40, dict()),
+            ("XGB", xgb, 0.50, dict()),
+            ("LGBM", model, 0.35, dict()),
         ]:
-            _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr)
+            _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr, **extra)
 
         # ── Baseline：全叢集（驗證 GMM 是否有效）──
         print("\n── 建立 Baseline 訓練集（全叢集）──")
