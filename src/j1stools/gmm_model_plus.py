@@ -650,7 +650,7 @@ if __name__ == "__main__":
                 sig,
                 top_n=5,
                 threshold=threshold,
-                max_positions=5,
+                max_positions=3,
                 use_sl_trail=False,
                 use_fixed_sl=True,
                 sl_stop=0.10,
@@ -665,11 +665,11 @@ if __name__ == "__main__":
 
         # ── 五模型比較 ──
         for name, m, thr in [
-            # ("RFC", rfc, 0.50),
-            ("XGB", xgb, 0.50),
-            # ("XGB Tuned", xgb_tune, 0.75),
-            # ("LGBM", model, 0.75),
-            # ("LGBM Tuned", lgbm_tune, 0.75),
+            ("RFC", rfc, 0.40),  # 50
+            ("XGB", xgb, 0.40),  # 75
+            ("XGB Tuned", xgb_tune, 0.40),  # 75
+            ("LGBM", model, 0.5),  # 75
+            ("LGBM Tuned", lgbm_tune, 0.50),  # 75
         ]:
             _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr)
 
@@ -684,4 +684,4 @@ if __name__ == "__main__":
             volume_ratio_min=VOLUME_RATIO_MIN,
         )
         xgb_all = train_xgb(df_train_all, features=CLASSIFIER_FEATURES)
-        _run_backtest("Baseline（全叢集，無 GMM 過濾）", xgb_all, None, threshold=0.50)
+        _run_backtest("Baseline（全叢集，無 GMM 過濾）", xgb_all, None, threshold=0.40)
