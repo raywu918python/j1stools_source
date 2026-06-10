@@ -77,6 +77,7 @@ def make_signal_breakout(
     clusters: list[int] | None = None,
     min_atr_pct: float = 0.02,
     volume_ratio_min: float = 2.0,
+    mkt_filter: bool = False,
 ) -> pd.DataFrame:
     """放量上漲過濾 → GMM 叢集 → LGBM 信心分，產生 backtest_platform 格式訊號。"""
     df = load_breakout_stocks(stocks, st, end, min_atr_pct=min_atr_pct, volume_ratio_min=volume_ratio_min)
@@ -103,6 +104,21 @@ def make_signal_breakout(
 
     signal = df[["date", "stock_id", "2"]].copy()
     signal["date"] = pd.to_datetime(signal["date"])
+
+    # ── 市場狀態過濾：大盤在 20MA 以下的日期不開新倉 ──
+    if mkt_filter:
+        _mkt = parquet_db.query_price(
+            ["0050"], signal["date"].min().strftime("%Y-%m-%d"), signal["date"].max().strftime("%Y-%m-%d")
+        )
+        _mkt["date"] = pd.to_datetime(_mkt["date"])
+        _mkt = _mkt.sort_values("date")
+        _mkt["ma20"] = _mkt["close"].rolling(20).mean()
+        _mkt["above_ma20"] = _mkt["close"] >= _mkt["ma20"]
+        signal = signal.merge(_mkt[["date", "above_ma20"]], on="date", how="left")
+        n_before = len(signal)
+        signal = signal[signal["above_ma20"].fillna(True)].drop(columns=["above_ma20"])
+        print(f"市場過濾（大盤 20MA）：{n_before:,} → {len(signal):,} 筆（移除 {n_before-len(signal):,} 筆）")
+
     print(f"訊號筆數：{len(signal):,}  日期：{signal['date'].min().date()} ~ {signal['date'].max().date()}")
     return signal
 
@@ -425,6 +441,7 @@ if __name__ == "__main__":
     #
     MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
     USE_CNN = True  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
+    USE_MKT_FILTER = False  # True = 大盤低於 20MA 的日期不開新倉，False = 不過濾
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -645,6 +662,7 @@ if __name__ == "__main__":
                 clusters=clusters,
                 volume_ratio_min=VOLUME_RATIO_MIN,
                 min_atr_pct=MIN_ATR_PCT,
+                mkt_filter=USE_MKT_FILTER,
             )
             pv, td, _, _ = backtest_platform.prepare_data_backtest(
                 sig,
@@ -666,8 +684,8 @@ if __name__ == "__main__":
         # ── 五模型比較 ──
         for name, m, thr in [
             # ("RFC", rfc, 0.40),  # 50
-            ("XGB", xgb, 0.40),  # 75
-            ("XGB Tuned", xgb_tune, 0.40),  # 75
+            ("XGB", xgb, 0.50),  # 75
+            # ("XGB Tuned", xgb_tune, 0.40),  # 75
             # ("LGBM", model, 0.5),  # 75
             # ("LGBM Tuned", lgbm_tune, 0.50),  # 75
         ]:

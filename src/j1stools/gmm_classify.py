@@ -403,7 +403,7 @@ class IBMarginGMM:
 
 def find_optimal_gmm_components(
     df: pd.DataFrame,
-    k_range: range = range(2, 16),
+    k_range: range = range(2, 21),
 ) -> pd.DataFrame:
     """
     用 BIC + AIC 找最佳 GMM n_components，畫折線圖。
@@ -428,7 +428,7 @@ def find_optimal_gmm_components(
     rows = []
     print("掃描最佳 GMM k 值...")
     for k in k_range:
-        gmm = GaussianMixture(n_components=k, covariance_type="full", random_state=42, n_init=1)
+        gmm = GaussianMixture(n_components=k, covariance_type="full", random_state=42, n_init=10, reg_covar=1e-3)
         gmm.fit(X)
         rows.append({"k": k, "BIC": gmm.bic(X), "AIC": gmm.aic(X)})
         print(f"  k={k}: BIC={gmm.bic(X):,.0f}, AIC={gmm.aic(X):,.0f}")
@@ -750,7 +750,7 @@ if __name__ == "__main__":
     #  breakout : 【訓練用】GMM 分群，分析叢集報酬，儲存模型
     #             → 儲存至 BREAKOUT_GMM_MODEL_PATH，供 gmm_model_plus.py 使用
     #
-    MODE = "breakout"  # "scan" | "pca" | "breakout"
+    MODE = "scan"  # "scan" | "pca" | "breakout"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
