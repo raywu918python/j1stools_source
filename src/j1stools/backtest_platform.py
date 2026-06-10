@@ -205,6 +205,7 @@ def prepare_data_backtest(
     use_hold_days=False,
     use_fixed_sl=False,
     use_fixed_tp=False,
+    use_fixed_sl_tp=False,
     min_volume=200,
 ):
 
@@ -229,6 +230,7 @@ def prepare_data_backtest(
         sl_stop=sl_stop,
         group_limit=group_limit,
         tp_stop=tp_stop,
+        use_fixed_sl_tp=use_fixed_sl_tp,
         stock_group=p.stock_group,
     )
     # j1s_chart.chart_allocation(portfolio_value, trades_df, close=p.close)
