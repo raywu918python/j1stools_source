@@ -26,7 +26,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from j1stools import parquet_db
-from j1stools.ib_margin_classify import load_data, analyze_cluster_returns, evaluate_clustering, plot_clusters
+from j1stools.gmm_classify import load_data, analyze_cluster_returns, evaluate_clustering, plot_clusters
 
 # 純技術面特徵（不依賴 IB/Margin 資料，外資忽視股也有完整值）
 NEGLECTED_FEATURES = [

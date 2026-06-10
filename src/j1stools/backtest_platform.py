@@ -255,7 +255,7 @@ def local_signals(file_name):
     return signal
 
 
-def optimize_optuna(signal, n_trials: int = 100):
+def optimize_optuna(signal, n_trials: int = 100, save_path: str | None = None, top_n_show: int = 10):
     """
     Optuna Bayesian 搜尋最佳 backtest 參數。
 
@@ -322,6 +322,19 @@ def optimize_optuna(signal, n_trials: int = 100):
     print(f"\n最佳參數（trial {study.best_trial.number}，報酬 {study.best_value:.2%}）：")
     for k, v in best.items():
         print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+
+    param_cols = [c for c in trials_df.columns if c.startswith("params_")]
+    top_df = trials_df[["number", "value"] + param_cols].sort_values("value", ascending=False).head(top_n_show)
+    top_df = top_df.rename(columns={"number": "trial", "value": "return", **{c: c[7:] for c in param_cols}})
+    top_df["return"] = top_df["return"].map("{:.2%}".format)
+    print(f"\nTop-{top_n_show} trials：")
+    print(top_df.to_string(index=False))
+
+    if save_path:
+        all_df = trials_df[["number", "value"] + param_cols].sort_values("value", ascending=False)
+        all_df = all_df.rename(columns={"number": "trial", "value": "return", **{c: c[7:] for c in param_cols}})
+        all_df.to_csv(save_path, index=False)
+        print(f"\n全部 {len(all_df)} 筆 trials 已存至：{save_path}")
 
     _, axes = plt.subplots(1, 2, figsize=(12, 4))
     axes[0].hist(returns * 100, bins=20, color="steelblue", edgecolor="white", linewidth=0.5)

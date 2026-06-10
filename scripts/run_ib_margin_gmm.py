@@ -1,10 +1,15 @@
 import os, sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from j1stools import parquet_db
-from j1stools.ib_margin_classify import (
-    load_data, run, predict_today,
-    evaluate_clustering, analyze_cluster_returns, plot_clusters,
+from j1stools.gmm_classify import (
+    load_data,
+    run,
+    predict_today,
+    evaluate_clustering,
+    analyze_cluster_returns,
+    plot_clusters,
 )
 
 MIN_ATR = 0.02

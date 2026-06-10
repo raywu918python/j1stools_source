@@ -750,7 +750,7 @@ if __name__ == "__main__":
     #  breakout : 【訓練用】GMM 分群，分析叢集報酬，儲存模型
     #             → 儲存至 BREAKOUT_GMM_MODEL_PATH，供 gmm_model_plus.py 使用
     #
-    MODE = "scan"  # "scan" | "pca" | "breakout"
+    MODE = "breakout"  # "scan" | "pca" | "breakout"
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -786,7 +786,7 @@ if __name__ == "__main__":
     elif MODE == "scan":
         # 用訓練期資料掃最佳 k，不能用 OOS（否則等於用未來資料調參）
         df = load_breakout_stocks(stocks, TRAIN_ST, TRAIN_END, min_atr_pct=MIN_ATR)
-        find_optimal_gmm_components(df, k_range=range(2, 16))
+        find_optimal_gmm_components(df, k_range=range(2, 21))
 
     elif MODE == "pca":
         df = load_breakout_stocks(stocks, TRAIN_ST, TRAIN_END, min_atr_pct=MIN_ATR)

@@ -47,6 +47,7 @@ CNN_FEATURES = [
 def _normalize_price_windows(X: np.ndarray) -> np.ndarray:
     return X
 
+
 HOLD_DAYS = 10
 ALPHA_TARGET = 0.05  # 超越大盤 5% = 達標
 ALPHA_STOP = -0.05  # 落後大盤 5% = 停損
@@ -334,14 +335,13 @@ def build_breakout_cnn_dataset(
 
     # 計算 hold_days 後報酬（直接用 price，避免 clipped return 失真）
     df_all = df_all.merge(
-        parquet_db.query_price(stocks, st_buf, end_buf)[["date", "stock_id", "close"]]
-        .assign(date=lambda d: pd.to_datetime(d["date"])),
-        on=["date", "stock_id"], how="left"
+        parquet_db.query_price(stocks, st_buf, end_buf)[["date", "stock_id", "close"]].assign(
+            date=lambda d: pd.to_datetime(d["date"])
+        ),
+        on=["date", "stock_id"],
+        how="left",
     )
-    df_all["fwd_return"] = (
-        df_all.groupby("stock_id")["close"]
-        .transform(lambda x: x.shift(-hold_days) / x - 1)
-    )
+    df_all["fwd_return"] = df_all.groupby("stock_id")["close"].transform(lambda x: x.shift(-hold_days) / x - 1)
     df_all = df_all.drop(columns=["close"])
 
     df_sig = df_signals.copy()
@@ -478,7 +478,9 @@ class SeqCNNRanker:
                 msg = f"  epoch {epoch+1:3d}/{self.epochs}  loss={total_loss/len(loader):.6f}"
                 if X_val is not None:
                     with torch.no_grad():
-                        val_t = torch.tensor(X_val_n.transpose(0, 2, 1).astype(np.float32), dtype=torch.float32).to(device)
+                        val_t = torch.tensor(X_val_n.transpose(0, 2, 1).astype(np.float32), dtype=torch.float32).to(
+                            device
+                        )
                         val_scores = self._model(val_t).squeeze(1).cpu().numpy()
                     val_ic = float(np.corrcoef(val_scores, y_val)[0, 1])
                     msg += f"  val_IC={val_ic:.4f}"
@@ -755,9 +757,9 @@ if __name__ == "__main__":
 
     from j1stools import backtest_platform, j1s_chart, parquet_db
     from j1stools.gmm_model_plus import build_dataset_breakout
-    from j1stools.ib_margin_classify import IBMarginGMM, BREAKOUT_GMM_MODEL_PATH
+    from j1stools.gmm_classify import IBMarginGMM, BREAKOUT_GMM_MODEL_PATH
 
-    RETRAIN = True          # False = 載現有模型重算 scores，不重訓
+    RETRAIN = False  # False = 載現有模型重算 scores，不重訓
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
     LOOKBACK = 30
@@ -783,7 +785,9 @@ if __name__ == "__main__":
         _all_sigs_for_scores = pd.concat([df_train, df_test], ignore_index=True)
         save_cnn_scores(cnn, _all_sigs_for_scores, lookback=LOOKBACK, path=CNN_SCORES_PATH)
         print("\n完成。可直接跑 gmm_model_plus.py。")
-        import sys; sys.exit(0)
+        import sys
+
+        sys.exit(0)
 
     # ── CNN 時序窗口 ──
     print("\n── CNN 窗口（訓練集）──")

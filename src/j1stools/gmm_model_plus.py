@@ -22,7 +22,7 @@ from sklearn.metrics import classification_report, roc_auc_score
 from xgboost import XGBClassifier
 
 from j1stools import j1s_chart, parquet_db
-from j1stools.ib_margin_classify import (
+from j1stools.gmm_classify import (
     BREAKOUT_GMM_MODEL_PATH,
     CLASSIFIER_FEATURES,
     IBMarginGMM,
@@ -439,15 +439,17 @@ if __name__ == "__main__":
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_tune_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
     USE_CNN = True  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
     USE_MKT_FILTER = False  # True = 大盤低於 20MA 的日期不開新倉，False = 不過濾
+    USE_GMM = True  # True = 用 BREAKOUT_CLUSTERS 過濾，False = 全叢集（驗證 GMM 是否有效）
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
     clf_breakout = IBMarginGMM.load(BREAKOUT_GMM_MODEL_PATH)
     all_clusters = list(range(clf_breakout.n_components))
     BREAKOUT_CLUSTERS = [c for c in all_clusters if c not in EXCLUDE_CLUSTERS]
+    _clusters = BREAKOUT_CLUSTERS if USE_GMM else None
 
     if MODE == "cluster_inspect":
         df_all = build_dataset_breakout(
@@ -477,7 +479,7 @@ if __name__ == "__main__":
         stocks,
         TRAIN_ST,
         VAL_ST,
-        clusters=BREAKOUT_CLUSTERS,
+        clusters=_clusters,
         volume_ratio_min=VOLUME_RATIO_MIN,
         min_atr_pct=MIN_ATR_PCT,
     )
@@ -488,7 +490,7 @@ if __name__ == "__main__":
         stocks,
         VAL_ST,
         VAL_END,
-        clusters=BREAKOUT_CLUSTERS,
+        clusters=_clusters,
         volume_ratio_min=VOLUME_RATIO_MIN,
         min_atr_pct=MIN_ATR_PCT,
     )
@@ -501,7 +503,7 @@ if __name__ == "__main__":
         clf_breakout,
         stocks,
         EVAL_ST,
-        clusters=BREAKOUT_CLUSTERS,
+        clusters=_clusters,
         volume_ratio_min=VOLUME_RATIO_MIN,
         min_atr_pct=MIN_ATR_PCT,
     )
@@ -607,18 +609,20 @@ if __name__ == "__main__":
         from j1stools import backtest_platform
 
         backtest_platform.IS_USE_CACHE = True
-        # lgbm = train_lgbm(df_train, features=FEATURES_EXT)
-        model = train_xgb(df_train, features=FEATURES_EXT)
+        lgbm = train_lgbm(df_train, features=FEATURES_EXT)
+        xgb = train_xgb(df_train, features=FEATURES_EXT)
+        rfc = train_rfc(df_train, features=FEATURES_EXT)
+
         signal = make_signal_breakout(
-            model,
+            xgb,
             clf_breakout,
             stocks,
             st=EVAL_ST,
-            clusters=BREAKOUT_CLUSTERS,
+            clusters=_clusters,
             volume_ratio_min=VOLUME_RATIO_MIN,
             min_atr_pct=MIN_ATR_PCT,
         )
-        backtest_platform.optimize_optuna(signal, n_trials=100)
+        backtest_platform.optimize_optuna(signal, n_trials=100, save_path="backtest_optuna.csv")
 
     elif MODE == "breakout_compare":
         rfc = train_rfc(df_train, features=FEATURES_EXT)
@@ -673,7 +677,7 @@ if __name__ == "__main__":
                 use_fixed_sl=True,
                 sl_stop=0.10,
                 use_fixed_tp=True,
-                tp_stop=0.10,
+                tp_stop=0.15,
                 use_hold_days=True,
                 hold_days=HOLD_DAYS,
                 group_limit=2,
@@ -686,7 +690,7 @@ if __name__ == "__main__":
             # ("RFC", rfc, 0.40),  # 50
             ("XGB", xgb, 0.50),  # 75
             # ("XGB Tuned", xgb_tune, 0.40),  # 75
-            # ("LGBM", model, 0.5),  # 75
+            ("LGBM", model, 0.35),  # 75
             # ("LGBM Tuned", lgbm_tune, 0.50),  # 75
         ]:
             _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr)
