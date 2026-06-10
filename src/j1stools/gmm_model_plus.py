@@ -439,9 +439,9 @@ if __name__ == "__main__":
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_tune_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
     USE_CNN = True  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
-    USE_MKT_FILTER = False  # True = 大盤低於 20MA 的日期不開新倉，False = 不過濾
+    USE_MKT_FILTER = True  # True = 大盤低於 20MA 的日期不開新倉，False = 不過濾
     USE_GMM = True  # True = 用 BREAKOUT_CLUSTERS 過濾，False = 全叢集（驗證 GMM 是否有效）
     # ─────────────────────────────────────────────────────────────────────── #
 
@@ -667,15 +667,17 @@ if __name__ == "__main__":
         _DEFAULT_BT_PARAMS = dict(
             top_n=5,
             max_positions=3,
-            use_sl_trail=False,
-            use_fixed_sl=True,
             sl_stop=0.10,
-            use_fixed_tp=True,
             tp_stop=0.15,
             use_hold_days=True,
             hold_days=HOLD_DAYS,
             group_limit=2,
             min_volume=200,
+            sl_trail=0.10,
+            use_fixed_tp=True,
+            use_fixed_sl=True,
+            use_sl_trail=False,
+            use_fixed_sl_tp=False,
         )
 
         def _run_backtest(label, m, clusters, threshold=0.50, **bt_params):
@@ -696,10 +698,27 @@ if __name__ == "__main__":
 
         # ── 三模型比較（各自最佳參數）──
         for name, m, thr, extra in [
-            ("RFC", rfc, 0.40, dict()),
-            ("XGB", xgb, 0.50, dict()),
-            ("LGBM", lgbm, 0.35, dict()),
-            ("ensemble", ensemble, 0.35, dict()),
+            # ("RFC", rfc, 0.40, dict()),
+            # ("XGB", xgb, 0.50, dict()),
+            # ("LGBM", lgbm, 0.35, dict()),
+            (
+                "ensemble",
+                ensemble,
+                0.434,
+                dict(top_n=8, max_positions=2, hold_days=9, sl_stop=0.195, tp_stop=0.162, group_limit=2),
+            ),
+            # (
+            #     "ensemble_分散",
+            #     ensemble,
+            #     0.416,
+            #     dict(top_n=5, max_positions=5, hold_days=10, sl_stop=0.140, tp_stop=0.111, group_limit=4),
+            # ),
+            # (
+            #     "ensemble_長抱",
+            #     ensemble,
+            #     0.428,
+            #     dict(top_n=8, max_positions=2, hold_days=16, sl_stop=0.155, tp_stop=0.148, group_limit=1),
+            # ),
         ]:
             _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr, **extra)
 
