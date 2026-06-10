@@ -251,14 +251,14 @@ class EnsembleModel:
         return proba
 
 
-def train_ensemble(df_train: pd.DataFrame, df_val: pd.DataFrame) -> EnsembleModel:
+def train_ensemble(df_train: pd.DataFrame, df_val: pd.DataFrame, features=None) -> EnsembleModel:
     """
     訓練 RFC + XGB + LGBM 並以 df_val 的 OOS AUC 加權組成 Ensemble。
     df_val 必須與 df_train 不重疊（時間上在後）。
     """
-    rfc = train_rfc(df_train)
-    xgb = train_xgb(df_train)
-    lgbm = train_lgbm(df_train)
+    rfc = train_rfc(df_train, features=features)
+    xgb = train_xgb(df_train, features=features)
+    lgbm = train_lgbm(df_train, features=features)
 
     def oos_auc(m):
         avail = m._fitted_features
@@ -439,7 +439,7 @@ if __name__ == "__main__":
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_tune_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_tune"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
     USE_CNN = True  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
     USE_MKT_FILTER = False  # True = 大盤低於 20MA 的日期不開新倉，False = 不過濾
     USE_GMM = True  # True = 用 BREAKOUT_CLUSTERS 過濾，False = 全叢集（驗證 GMM 是否有效）
@@ -612,9 +612,10 @@ if __name__ == "__main__":
         lgbm = train_lgbm(df_train, features=FEATURES_EXT)
         xgb = train_xgb(df_train, features=FEATURES_EXT)
         rfc = train_rfc(df_train, features=FEATURES_EXT)
+        ensemble = train_ensemble(df_train, df_val, features=FEATURES_EXT)
 
         studies = {}
-        for name, model in [("LGBM", lgbm), ("XGB", xgb), ("RFC", rfc)]:
+        for name, model in [("LGBM", lgbm), ("XGB", xgb), ("RFC", rfc), ("Ensemble", ensemble)]:
             print(f"\n{'='*60}\n【{name}】回測參數最佳化\n{'='*60}")
             sig = make_signal_breakout(
                 model,
@@ -659,10 +660,10 @@ if __name__ == "__main__":
 
         rfc = train_rfc(df_train, features=FEATURES_EXT)
         xgb = train_xgb(df_train, features=FEATURES_EXT)
-        xgb_tune = train_xgb_tuned(df_train, features=FEATURES_EXT)
-        model = train_lgbm(df_train, features=FEATURES_EXT)
-        lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
-
+        # xgb_tune = train_xgb_tuned(df_train, features=FEATURES_EXT)
+        lgbm = train_lgbm(df_train, features=FEATURES_EXT)
+        # lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
+        ensemble = train_ensemble(df_train, df_val, features=FEATURES_EXT)
         _DEFAULT_BT_PARAMS = dict(
             top_n=5,
             max_positions=3,
@@ -697,7 +698,8 @@ if __name__ == "__main__":
         for name, m, thr, extra in [
             ("RFC", rfc, 0.40, dict()),
             ("XGB", xgb, 0.50, dict()),
-            ("LGBM", model, 0.35, dict()),
+            ("LGBM", lgbm, 0.35, dict()),
+            ("ensemble", ensemble, 0.35, dict()),
         ]:
             _run_backtest(f"{name} + GMM 叢集 {BREAKOUT_CLUSTERS}", m, BREAKOUT_CLUSTERS, threshold=thr, **extra)
 
