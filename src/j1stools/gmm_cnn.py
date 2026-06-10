@@ -311,16 +311,16 @@ def build_breakout_cnn_dataset(
     lookback: int = 20,
     hold_days: int = 5,
     return_target: float = 0.03,
+    cs_normalize: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     從 build_dataset_breakout 輸出（breakout 宇宙）建構 CNN 時序資料集。
-    標籤從價格資料重新計算（hold_days 後漲幅 > return_target = 1），
-    不依賴樹模型的 Y 欄位。
 
-    df_signals: 含 stock_id, date 欄位的 breakout 訊號 df
-    回傳 (X, y_binary)：
-        X        : (n, lookback, n_features) float32
-        y_binary : (n,) int，1=達標, 0=未達標
+    df_signals   : 含 stock_id, date 欄位的 breakout 訊號 df
+    cs_normalize : True = 對每個交易日做截面 z-score，訓練排名用；False = 原始報酬率，評估 IC 用
+    回傳 (X, y)：
+        X : (n, lookback, n_features) float32
+        y : (n,) float32，cs_normalize=True 時為截面 z-score，否則為 hold_days 後報酬率
     """
     import pandas as pd
 
@@ -372,18 +372,30 @@ def build_breakout_cnn_dataset(
             if np.isnan(fwd[lookback - 1 + i]):
                 continue
             all_X.append(windows[i])
-            all_sig_idx.append((signal_lookup[key], fwd[lookback - 1 + i]))
+            all_sig_idx.append((signal_lookup[key], fwd[lookback - 1 + i], d))
 
     coverage = len(all_X) / len(df_signals) if len(df_signals) > 0 else 0
     print(f"時序窗口（lookback={lookback}）：{len(all_X):,} 筆，覆蓋率：{coverage:.1%}")
 
     X = _normalize_price_windows(np.array(all_X, dtype=np.float32))
-    y = np.array([v for _, v in all_sig_idx], dtype=np.float32)
+    y_raw = np.array([v for _, v, _ in all_sig_idx], dtype=np.float32)
 
     print(
-        f"標籤：{hold_days}日後報酬  mean={y.mean():.2%}  std={y.std():.2%}  "
-        f">{return_target:.0%} 達標率：{(y >= return_target).mean():.1%}"
+        f"標籤：{hold_days}日後報酬  mean={y_raw.mean():.2%}  std={y_raw.std():.2%}  "
+        f">{return_target:.0%} 達標率：{(y_raw >= return_target).mean():.1%}"
     )
+
+    if cs_normalize:
+        date_arr = [d for _, _, d in all_sig_idx]
+        df_y = pd.DataFrame({"date": date_arr, "y": y_raw})
+        df_y["y_cs"] = df_y.groupby("date")["y"].transform(
+            lambda x: (x - x.mean()) / (x.std() + 1e-8)
+        )
+        y = df_y["y_cs"].values.astype(np.float32)
+        print(f"截面 z-score 後：mean={y.mean():.4f}  std={y.std():.4f}")
+    else:
+        y = y_raw
+
     return X, y
 
 
@@ -416,11 +428,19 @@ class SeqCNNRanker:
     輸出連續分數（regression），用 IC 評估，取 top-N 選股。
     """
 
-    def __init__(self, lookback: int = 20, epochs: int = 50, lr: float = 1e-3, batch_size: int = 256):
+    def __init__(
+        self,
+        lookback: int = 20,
+        epochs: int = 50,
+        lr: float = 1e-3,
+        batch_size: int = 256,
+        loss: str = "mse",  # "mse" | "correlation" | "listnet"
+    ):
         self.lookback = lookback
         self.epochs = epochs
         self.lr = lr
         self.batch_size = batch_size
+        self.loss = loss
         self._fitted_features: list = []
         self._model: _SeqCNN | None = None
         self._feat_mean: np.ndarray | None = None
@@ -449,7 +469,21 @@ class SeqCNNRanker:
         n_features = X.shape[2]
         self._model = _SeqCNN(n_features, n_classes=1).to(device)
 
-        criterion = nn.MSELoss()
+        def _correlation_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            p = pred.flatten() - pred.flatten().mean()
+            t = target.flatten() - target.flatten().mean()
+            return -torch.nn.functional.cosine_similarity(p.unsqueeze(0), t.unsqueeze(0))
+
+        def _listnet_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            p = torch.nn.functional.softmax(pred.flatten(), dim=0)
+            t = torch.nn.functional.softmax(target.flatten(), dim=0)
+            return -(t * torch.log(p + 1e-9)).sum()
+
+        _loss_map = {"mse": nn.MSELoss(), "correlation": _correlation_loss, "listnet": _listnet_loss}
+        if self.loss not in _loss_map:
+            raise ValueError(f"loss 必須是 {list(_loss_map)} 之一，收到：{self.loss!r}")
+        criterion = _loss_map[self.loss]
+        print(f"  Loss function：{self.loss}")
         optimizer = torch.optim.Adam(self._model.parameters(), lr=self.lr, weight_decay=1e-4)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs, eta_min=1e-5)
 
@@ -526,13 +560,14 @@ def train_seq_cnn(
     lookback: int = 20,
     epochs: int = 50,
     n_runs: int = 3,
+    loss: str = "mse",
 ) -> SeqCNNRanker:
     """訓練 n_runs 次取 val IC 最佳的模型。"""
     best_ic = -np.inf
     best_ranker = None
     for run in range(n_runs):
         print(f"\n── Run {run+1}/{n_runs} ──")
-        ranker = SeqCNNRanker(lookback=lookback, epochs=epochs, lr=1e-3, batch_size=256)
+        ranker = SeqCNNRanker(lookback=lookback, epochs=epochs, lr=1e-3, batch_size=256, loss=loss)
         ranker.fit(X_train, y_train, X_val=X_val, y_val=y_val)
         ranker._fitted_features = CNN_FEATURES
         val_ic = float(np.corrcoef(ranker.predict(X_val), y_val)[0, 1]) if X_val is not None else 0.0
@@ -759,7 +794,7 @@ if __name__ == "__main__":
     from j1stools.gmm_model_plus import build_dataset_breakout
     from j1stools.gmm_classify import IBMarginGMM, BREAKOUT_GMM_MODEL_PATH
 
-    RETRAIN = False  # False = 載現有模型重算 scores，不重訓
+    # ── 參數 ─────────────────────────────────────────────────────────────────── #
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
     LOOKBACK = 30
@@ -767,122 +802,134 @@ if __name__ == "__main__":
     RETURN_TARGET = 0.03
     EXCLUDE_CLUSTERS = [6, 8]
 
+    # ── 切換模式 ──────────────────────────────────────────────────────────────── #
+    #
+    #  train     : 【重新訓練】建 CNN 時序窗口 → 訓練 SeqCNNRanker → 存模型 + scores parquet
+    #              ⚠️  完成後需重跑 gmm_model_plus.py 以更新 cnn_score 特徵
+    #
+    #  scores    : 【只更新 scores】載現有模型 → 重算並存 scores parquet（不重訓）
+    #              適合 GMM/訊號宇宙有變動，但 CNN 模型不動的情況
+    #
+    #  eval      : 【OOS 評估】載現有模型 → IC 散點圖 + decile 報酬圖
+    #              ⚠️  y_test 使用原始報酬率（非 z-score），圖表數字為真實 %
+    #
+    #  backtest  : 【獨立回測】載現有模型 → make_signal → backtest_platform
+    #
+    MODE = "eval"  # "train" | "scores" | "eval" | "backtest"
+    # ──────────────────────────────────────────────────────────────────────────── #
+
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
     clf_gmm = IBMarginGMM.load(BREAKOUT_GMM_MODEL_PATH)
     BREAKOUT_CLUSTERS = [c for c in range(clf_gmm.n_components) if c not in EXCLUDE_CLUSTERS]
 
-    # ── Breakout 訊號資料集（train/predict 都需要）──
-    print("\n══ Breakout 訓練集（GMM 過濾，2015-2024）══")
+    print("\n══ Breakout 訓練集（GMM 過濾）══")
     df_train = build_dataset_breakout(clf_gmm, stocks, TRAIN_ST, EVAL_ST, clusters=BREAKOUT_CLUSTERS)
-    print("\n══ Breakout 測試集（GMM 過濾，2024-）══")
+    print("\n══ Breakout 測試集（GMM 過濾，OOS）══")
     df_test = build_dataset_breakout(clf_gmm, stocks, EVAL_ST, clusters=BREAKOUT_CLUSTERS)
 
-    if not RETRAIN and os.path.exists(CNN_RANKER_PATH):
-        # ── 預測模式：載現有模型，重算 scores ──
-        print(f"\n══ 預測模式：載入現有模型 {CNN_RANKER_PATH} ══")
-        cnn = load_seq_cnn(CNN_RANKER_PATH)
-        print("── 計算並存儲 CNN scores parquet ──")
-        _all_sigs_for_scores = pd.concat([df_train, df_test], ignore_index=True)
-        save_cnn_scores(cnn, _all_sigs_for_scores, lookback=LOOKBACK, path=CNN_SCORES_PATH)
+    if MODE == "train":
+        print("\n── CNN 窗口（訓練集，截面 z-score）──")
+        X_train, y_train = build_breakout_cnn_dataset(
+            df_train, lookback=LOOKBACK, hold_days=HOLD_DAYS_CNN,
+            return_target=RETURN_TARGET, cs_normalize=True,
+        )
+        print("\n── CNN 窗口（測試集，原始報酬）──")
+        X_test, y_test = build_breakout_cnn_dataset(
+            df_test, lookback=LOOKBACK, hold_days=HOLD_DAYS_CNN,
+            return_target=RETURN_TARGET, cs_normalize=False,
+        )
+        print(f"訓練集：{X_train.shape}  測試集：{X_test.shape}")
+
+        print(f"\n══ 訓練 SeqCNN Ranker（breakout宇宙，{HOLD_DAYS_CNN}日截面排名）══")
+        cnn = train_seq_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, epochs=50)
+        save_seq_cnn(cnn, CNN_RANKER_PATH)
+
+        print("\n── 存儲 CNN scores parquet ──")
+        _all = pd.concat([df_train, df_test], ignore_index=True)
+        save_cnn_scores(cnn, _all, lookback=LOOKBACK, path=CNN_SCORES_PATH)
         print("\n完成。可直接跑 gmm_model_plus.py。")
-        import sys
 
-        sys.exit(0)
+    elif MODE == "scores":
+        print(f"\n══ 載入現有模型 {CNN_RANKER_PATH} ══")
+        cnn = load_seq_cnn(CNN_RANKER_PATH)
+        print("── 重算並存儲 CNN scores parquet ──")
+        _all = pd.concat([df_train, df_test], ignore_index=True)
+        save_cnn_scores(cnn, _all, lookback=LOOKBACK, path=CNN_SCORES_PATH)
+        print("\n完成。可直接跑 gmm_model_plus.py。")
 
-    # ── CNN 時序窗口 ──
-    print("\n── CNN 窗口（訓練集）──")
-    X_train, y_train = build_breakout_cnn_dataset(
-        df_train, lookback=LOOKBACK, hold_days=HOLD_DAYS_CNN, return_target=RETURN_TARGET
-    )
-    print("\n── CNN 窗口（測試集）──")
-    X_test, y_test = build_breakout_cnn_dataset(
-        df_test, lookback=LOOKBACK, hold_days=HOLD_DAYS_CNN, return_target=RETURN_TARGET
-    )
+    elif MODE == "eval":
+        print(f"\n══ 載入現有模型 {CNN_RANKER_PATH} ══")
+        cnn = load_seq_cnn(CNN_RANKER_PATH)
 
-    print(f"訓練集：{X_train.shape}  測試集：{X_test.shape}")
+        print("\n── CNN 窗口（測試集，原始報酬）──")
+        X_test, y_test = build_breakout_cnn_dataset(
+            df_test, lookback=LOOKBACK, hold_days=HOLD_DAYS_CNN,
+            return_target=RETURN_TARGET, cs_normalize=False,
+        )
+        scores_test = cnn.predict(X_test)
+        ic_oos = np.corrcoef(scores_test, y_test)[0, 1]
+        print(f"\nOOS IC：{ic_oos:.4f}（目標 > 0.05）")
 
-    # ── 訓練 ──
-    print(f"\n══ 訓練 SeqCNN Ranker（50 epochs，breakout宇宙，{HOLD_DAYS_CNN}日報酬）══")
-    cnn = train_seq_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, epochs=50)
+        top_n = 20
+        df_eval = pd.concat(
+            [
+                df_test.iloc[: len(scores_test)].reset_index(drop=True),
+                pd.Series(scores_test, name="pred_score"),
+                pd.Series(y_test, name="fwd_return"),
+            ],
+            axis=1,
+        )
+        top = df_eval.nlargest(top_n, "pred_score")
+        bot = df_eval.nsmallest(top_n, "pred_score")
+        print(f"\n{'':=<50}")
+        print(f"【前 {top_n} 名（CNN 看好）】")
+        print(
+            f"  平均報酬：{top['fwd_return'].mean():.2%}  "
+            f"勝率>0%：{(top['fwd_return']>0).mean():.1%}  "
+            f"勝率>3%：{(top['fwd_return']>0.03).mean():.1%}"
+        )
+        print(f"【後 {top_n} 名（CNN 看壞）】")
+        print(
+            f"  平均報酬：{bot['fwd_return'].mean():.2%}  "
+            f"勝率>0%：{(bot['fwd_return']>0).mean():.1%}  "
+            f"勝率>3%：{(bot['fwd_return']>0.03).mean():.1%}"
+        )
+        print(f"【區別能力】報酬差：{top['fwd_return'].mean()-bot['fwd_return'].mean():.2%}")
+        print(f"{'':=<50}")
 
-    # ── 存模型 ──
-    save_seq_cnn(cnn, CNN_RANKER_PATH)
+        _, axes = plt.subplots(1, 2, figsize=(12, 4))
+        axes[0].scatter(scores_test, y_test, alpha=0.2, s=5, color="steelblue")
+        axes[0].axhline(0, color="gray", linewidth=0.5)
+        axes[0].axvline(0, color="gray", linewidth=0.5)
+        axes[0].set_xlabel("CNN score")
+        axes[0].set_ylabel(f"{HOLD_DAYS_CNN}d return")
+        axes[0].set_title(f"Score vs Return (IC={ic_oos:.3f})")
 
-    # ── 存 CNN scores parquet（供 gmm_model_plus.py 用，避免 OpenMP 衝突）──
-    print("\n── 計算並存儲 CNN scores parquet ──")
-    _all_sigs_for_scores = pd.concat([df_train, df_test], ignore_index=True)
-    save_cnn_scores(cnn, _all_sigs_for_scores, lookback=LOOKBACK, path=CNN_SCORES_PATH)
+        df_eval["decile"] = pd.qcut(scores_test, q=10, labels=False, duplicates="drop")
+        dec = df_eval.groupby("decile")["fwd_return"].mean()
+        axes[1].bar(dec.index, dec.values, color="seagreen", alpha=0.8)
+        axes[1].axhline(y_test.mean(), color="gray", linestyle="--", linewidth=0.8, label=f"Mean {y_test.mean():.2%}")
+        axes[1].set_xlabel("Score decile (0=lowest)")
+        axes[1].set_ylabel("Avg return")
+        axes[1].set_title("Return by score decile (OOS)")
+        axes[1].legend()
+        plt.suptitle(f"SeqCNN Ranker | {HOLD_DAYS_CNN}d return | Breakout universe")
+        plt.tight_layout()
+        plt.show()
 
-    # ── OOS 評估（IC）──
-    print("\n══ OOS 評估 ══")
-    scores_test = cnn.predict(X_test)
-    ic_oos = np.corrcoef(scores_test, y_test)[0, 1]
-    print(f"OOS IC：{ic_oos:.4f}（目標 > 0.05 有意義）")
+    elif MODE == "backtest":
+        print(f"\n══ 載入現有模型 {CNN_RANKER_PATH} ══")
+        cnn = load_seq_cnn(CNN_RANKER_PATH)
 
-    # top / bottom 比較（參考 margin_lgbm_main evaluate_selection）
-    top_n = 20
-    df_eval = pd.concat(
-        [
-            df_test.iloc[: len(scores_test)].reset_index(drop=True),
-            pd.Series(scores_test, name="pred_score"),
-            pd.Series(y_test, name="fwd_return"),
-        ],
-        axis=1,
-    )
+        print("\n══ 獨立回測 ══")
+        backtest_platform.IS_USE_CACHE = True
+        sig = make_signal_seq_cnn(cnn, stocks, st=EVAL_ST, lookback=LOOKBACK)
 
-    top = df_eval.nlargest(top_n, "pred_score")
-    bot = df_eval.nsmallest(top_n, "pred_score")
-    print(f"\n{'':=<50}")
-    print(f"【前 {top_n} 名（CNN 看好）】")
-    print(
-        f"  平均報酬：{top['fwd_return'].mean():.2%}  "
-        f"勝率>0%：{(top['fwd_return']>0).mean():.1%}  "
-        f"勝率>3%：{(top['fwd_return']>0.03).mean():.1%}"
-    )
-    print(f"【後 {top_n} 名（CNN 看壞）】")
-    print(
-        f"  平均報酬：{bot['fwd_return'].mean():.2%}  "
-        f"勝率>0%：{(bot['fwd_return']>0).mean():.1%}  "
-        f"勝率>3%：{(bot['fwd_return']>0.03).mean():.1%}"
-    )
-    print(f"【區別能力】報酬差：{top['fwd_return'].mean()-bot['fwd_return'].mean():.2%}")
-    print(f"{'':=<50}")
-
-    # ── 散點圖：pred score vs actual return ──
-    _, axes = plt.subplots(1, 2, figsize=(12, 4))
-    axes[0].scatter(scores_test, y_test, alpha=0.2, s=5, color="steelblue")
-    axes[0].axhline(0, color="gray", linewidth=0.5)
-    axes[0].axvline(0, color="gray", linewidth=0.5)
-    axes[0].set_xlabel("CNN score")
-    axes[0].set_ylabel(f"{HOLD_DAYS_CNN}d return")
-    axes[0].set_title(f"Score vs Return (IC={ic_oos:.3f})")
-
-    # score 分十等分，看平均報酬
-    df_eval["decile"] = pd.qcut(scores_test, q=10, labels=False, duplicates="drop")
-    dec = df_eval.groupby("decile")["fwd_return"].mean()
-    axes[1].bar(dec.index, dec.values, color="seagreen", alpha=0.8)
-    axes[1].axhline(y_test.mean(), color="gray", linestyle="--", linewidth=0.8, label=f"Mean {y_test.mean():.2%}")
-    axes[1].set_xlabel("Score decile (0=lowest)")
-    axes[1].set_ylabel("Avg return")
-    axes[1].set_title("Return by score decile (OOS)")
-    axes[1].legend()
-    plt.suptitle(f"SeqCNN Ranker | {HOLD_DAYS_CNN}d return | Breakout universe")
-    plt.tight_layout()
-    plt.show()
-
-    # ── 回測（取 score top-N）──
-    print("\n══ 獨立回測 ══")
-    backtest_platform.IS_USE_CACHE = True
-    sig = make_signal_seq_cnn(cnn, stocks, st=EVAL_ST, lookback=LOOKBACK)
-
-    for label, thr, hold in [
-        ("SeqCNN top score（無門檻）+ 持有5日", None, 5),
-    ]:
-        print(f"\n{'='*60}\n【{label}】\n{'='*60}")
+        print(f"\n{'='*60}\n【SeqCNN top score + 持有{HOLD_DAYS_CNN}日】\n{'='*60}")
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
             top_n=5,
-            threshold=thr,
+            threshold=None,
             max_positions=5,
             use_sl_trail=False,
             use_fixed_sl=True,
@@ -890,8 +937,11 @@ if __name__ == "__main__":
             use_fixed_tp=True,
             tp_stop=0.07,
             use_hold_days=True,
-            hold_days=hold,
+            hold_days=HOLD_DAYS_CNN,
             group_limit=2,
             min_volume=200,
         )
         j1s_chart.plot_performance(pv, td)
+
+    else:
+        print(f"未知 MODE：{MODE!r}，請選 train / scores / eval / backtest")
