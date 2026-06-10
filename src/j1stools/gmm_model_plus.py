@@ -424,7 +424,7 @@ if __name__ == "__main__":
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
     MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
-    USE_CNN = False  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
+    USE_CNN = True  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -661,12 +661,12 @@ if __name__ == "__main__":
                 group_limit=2,
                 min_volume=200,
             )
-            j1s_chart.plot_performance(pv, td)
+            # j1s_chart.plot_performance(pv, td)
 
         # ── 五模型比較 ──
         for name, m, thr in [
             # ("RFC", rfc, 0.50),
-            ("XGB", xgb, 0.75),
+            ("XGB", xgb, 0.50),
             # ("XGB Tuned", xgb_tune, 0.75),
             # ("LGBM", model, 0.75),
             # ("LGBM Tuned", lgbm_tune, 0.75),
@@ -683,6 +683,5 @@ if __name__ == "__main__":
             clusters=None,
             volume_ratio_min=VOLUME_RATIO_MIN,
         )
-        lgbm_all = train_lgbm(df_train_all, features=CLASSIFIER_FEATURES)
-        # xgb = train_xgb(df_train_all, features=CLASSIFIER_FEATURES)
-        _run_backtest("LGBM Baseline（全叢集，無 GMM 過濾）", lgbm_all, None)
+        xgb_all = train_xgb(df_train_all, features=CLASSIFIER_FEATURES)
+        _run_backtest("Baseline（全叢集，無 GMM 過濾）", xgb_all, None, threshold=0.50)
