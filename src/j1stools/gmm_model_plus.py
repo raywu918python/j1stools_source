@@ -423,7 +423,7 @@ if __name__ == "__main__":
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_tune_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
     USE_CNN = True  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
     # ─────────────────────────────────────────────────────────────────────── #
 
@@ -590,8 +590,8 @@ if __name__ == "__main__":
         from j1stools import backtest_platform
 
         backtest_platform.IS_USE_CACHE = True
-        # lgbm = train_lgbm(df_train, features=CLASSIFIER_FEATURES)
-        model = train_xgb(df_train, features=CLASSIFIER_FEATURES)
+        # lgbm = train_lgbm(df_train, features=FEATURES_EXT)
+        model = train_xgb(df_train, features=FEATURES_EXT)
         signal = make_signal_breakout(
             model,
             clf_breakout,
@@ -604,9 +604,9 @@ if __name__ == "__main__":
         backtest_platform.optimize_optuna(signal, n_trials=100)
 
     elif MODE == "breakout_compare":
-        rfc = train_rfc(df_train, features=CLASSIFIER_FEATURES)
-        xgb = train_xgb(df_train, features=CLASSIFIER_FEATURES)
-        model = train_lgbm(df_train, features=CLASSIFIER_FEATURES)
+        rfc = train_rfc(df_train, features=FEATURES_EXT)
+        xgb = train_xgb(df_train, features=FEATURES_EXT)
+        model = train_lgbm(df_train, features=FEATURES_EXT)
         for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", model)]:
             print(f"\n{'='*60}\n【{name} 訊號品質】\n{'='*60}")
             eval_signal(m, df_test)
