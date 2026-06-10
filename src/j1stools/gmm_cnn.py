@@ -306,21 +306,34 @@ def build_alpha_label_dataset(
 # ── Breakout 宇宙資料集（Option B）──────────────────────────────────────── #
 
 
+def _cs_normalize_features_df(df: "pd.DataFrame") -> "pd.DataFrame":
+    """每個交易日對 CNN_FEATURES 做截面 z-score（ddof=0），讓模型看相對排名而非絕對值。"""
+    import pandas as pd
+
+    df = df.copy()
+    for col in CNN_FEATURES:
+        if col in df.columns:
+            df[col] = df.groupby("date")[col].transform(lambda x: (x - x.mean()) / (x.std(ddof=0) + 1e-8))
+    return df
+
+
 def build_breakout_cnn_dataset(
     df_signals: "pd.DataFrame",
     lookback: int = 20,
     hold_days: int = 5,
     return_target: float = 0.03,
     cs_normalize: bool = True,
+    cs_normalize_features: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     從 build_dataset_breakout 輸出（breakout 宇宙）建構 CNN 時序資料集。
 
-    df_signals   : 含 stock_id, date 欄位的 breakout 訊號 df
-    cs_normalize : True = 對每個交易日做截面 z-score，訓練排名用；False = 原始報酬率，評估 IC 用
+    df_signals            : 含 stock_id, date 欄位的 breakout 訊號 df
+    cs_normalize          : True = label 做截面 z-score（訓練用）；False = 原始報酬率（評估用）
+    cs_normalize_features : True = 特徵也做截面 z-score，讓模型學相對排名
     回傳 (X, y)：
         X : (n, lookback, n_features) float32
-        y : (n,) float32，cs_normalize=True 時為截面 z-score，否則為 hold_days 後報酬率
+        y : (n,) float32
     """
     import pandas as pd
 
@@ -332,6 +345,10 @@ def build_breakout_cnn_dataset(
     print(f"── 載入 CNN 原始特徵（{st_buf} ~ {end_buf}）──")
     df_all = build_cnn_daily_features(stocks, st_buf, end_buf)
     df_all["date"] = pd.to_datetime(df_all["date"])
+
+    if cs_normalize_features:
+        print("  特徵截面 z-score...")
+        df_all = _cs_normalize_features_df(df_all)
 
     # 計算 hold_days 後報酬（直接用 price，避免 clipped return 失真）
     df_all = df_all.merge(
@@ -388,9 +405,7 @@ def build_breakout_cnn_dataset(
     if cs_normalize:
         date_arr = [d for _, _, d in all_sig_idx]
         df_y = pd.DataFrame({"date": date_arr, "y": y_raw})
-        df_y["y_cs"] = df_y.groupby("date")["y"].transform(
-            lambda x: (x - x.mean()) / (x.std() + 1e-8)
-        )
+        df_y["y_cs"] = df_y.groupby("date")["y"].transform(lambda x: (x - x.mean()) / (x.std(ddof=0) + 1e-8))
         y = df_y["y_cs"].values.astype(np.float32)
         print(f"截面 z-score 後：mean={y.mean():.4f}  std={y.std():.4f}")
     else:
@@ -516,7 +531,8 @@ class SeqCNNRanker:
                             device
                         )
                         val_scores = self._model(val_t).squeeze(1).cpu().numpy()
-                    val_ic = float(np.corrcoef(val_scores, y_val)[0, 1])
+                    _corr = np.corrcoef(val_scores, y_val)[0, 1]
+                    val_ic = float(_corr) if np.isfinite(_corr) else 0.0
                     msg += f"  val_IC={val_ic:.4f}"
                     if val_ic > best_val_ic:
                         best_val_ic = val_ic
@@ -570,11 +586,17 @@ def train_seq_cnn(
         ranker = SeqCNNRanker(lookback=lookback, epochs=epochs, lr=1e-3, batch_size=256, loss=loss)
         ranker.fit(X_train, y_train, X_val=X_val, y_val=y_val)
         ranker._fitted_features = CNN_FEATURES
-        val_ic = float(np.corrcoef(ranker.predict(X_val), y_val)[0, 1]) if X_val is not None else 0.0
+        if X_val is not None:
+            _c = np.corrcoef(ranker.predict(X_val), y_val)[0, 1]
+            val_ic = float(_c) if np.isfinite(_c) else 0.0
+        else:
+            val_ic = 0.0
         print(f"  Run {run+1} val IC：{val_ic:.4f}")
         if val_ic > best_ic:
             best_ic = val_ic
             best_ranker = ranker
+    if best_ranker is None:
+        best_ranker = ranker  # fallback：全部 run IC 都是 NaN 時取最後一個
     print(f"\n最佳 Run val IC：{best_ic:.4f}")
     ic = np.corrcoef(best_ranker.predict(X_train), y_train)[0, 1]
     print(f"訓練集 IC：{ic:.4f}（in-sample）")
@@ -731,12 +753,15 @@ def make_signal_seq_cnn(
     end: str = "2099-01-01",
     lookback: int = 20,
     min_atr_pct: float = MIN_ATR_PCT,
+    cs_normalize_features: bool = False,
 ):
     """掃全市場（ATR 過濾）產生 CNN 訊號，回傳 backtest_platform 格式 signal df。"""
     import pandas as pd
 
     st_buf = (pd.Timestamp(st) - pd.DateOffset(days=lookback * 3)).strftime("%Y-%m-%d")
     df_all = build_cnn_daily_features(stocks, st_buf, end)
+    if cs_normalize_features:
+        df_all = _cs_normalize_features_df(df_all)
     df_all = df_all.sort_values(["stock_id", "date"])
 
     # 只對信號區間 + ATR 合格的日期建立窗口
@@ -815,7 +840,7 @@ if __name__ == "__main__":
     #
     #  backtest  : 【獨立回測】載現有模型 → make_signal → backtest_platform
     #
-    MODE = "eval"  # "train" | "scores" | "eval" | "backtest"
+    MODE = "scores"  # "train" | "scores" | "eval" | "backtest"
     # ──────────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -830,13 +855,21 @@ if __name__ == "__main__":
     if MODE == "train":
         print("\n── CNN 窗口（訓練集，截面 z-score）──")
         X_train, y_train = build_breakout_cnn_dataset(
-            df_train, lookback=LOOKBACK, hold_days=HOLD_DAYS_CNN,
-            return_target=RETURN_TARGET, cs_normalize=True,
+            df_train,
+            lookback=LOOKBACK,
+            hold_days=HOLD_DAYS_CNN,
+            return_target=RETURN_TARGET,
+            cs_normalize=True,
+            cs_normalize_features=False,
         )
         print("\n── CNN 窗口（測試集，原始報酬）──")
         X_test, y_test = build_breakout_cnn_dataset(
-            df_test, lookback=LOOKBACK, hold_days=HOLD_DAYS_CNN,
-            return_target=RETURN_TARGET, cs_normalize=False,
+            df_test,
+            lookback=LOOKBACK,
+            hold_days=HOLD_DAYS_CNN,
+            return_target=RETURN_TARGET,
+            cs_normalize=False,
+            cs_normalize_features=False,
         )
         print(f"訓練集：{X_train.shape}  測試集：{X_test.shape}")
 
@@ -863,8 +896,12 @@ if __name__ == "__main__":
 
         print("\n── CNN 窗口（測試集，原始報酬）──")
         X_test, y_test = build_breakout_cnn_dataset(
-            df_test, lookback=LOOKBACK, hold_days=HOLD_DAYS_CNN,
-            return_target=RETURN_TARGET, cs_normalize=False,
+            df_test,
+            lookback=LOOKBACK,
+            hold_days=HOLD_DAYS_CNN,
+            return_target=RETURN_TARGET,
+            cs_normalize=False,
+            cs_normalize_features=False,
         )
         scores_test = cnn.predict(X_test)
         ic_oos = np.corrcoef(scores_test, y_test)[0, 1]
