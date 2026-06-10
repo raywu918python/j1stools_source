@@ -170,18 +170,18 @@ def train_lgbm(df_train: pd.DataFrame, features: list | None = None) -> LGBMClas
 
 
 def train_lgbm_tuned(df_train: pd.DataFrame, features: list | None = None) -> LGBMClassifier:
-    """LGBM（Optuna 最佳化）：Val AUC 0.6738，排除叢集 [6,8]，27 特徵"""
+    """LGBM（Optuna 最佳化）：Val AUC 0.6748，排除叢集 [6,8]，含 cnn_score"""
     return _fit(
         LGBMClassifier(
-            n_estimators=483,
+            n_estimators=316,
             max_depth=3,
-            learning_rate=0.011309696199358326,
-            num_leaves=70,
-            min_child_samples=66,
-            subsample=0.5684781131909383,
-            colsample_bytree=0.5342311112649019,
-            reg_alpha=0.4555576418233763,
-            reg_lambda=0.00010022911141773666,
+            learning_rate=0.0275558789873696,
+            num_leaves=127,
+            min_child_samples=63,
+            subsample=0.6141126278869403,
+            colsample_bytree=0.5281690689569778,
+            reg_alpha=0.006192618319822827,
+            reg_lambda=0.12275534910537497,
             class_weight="balanced",
             random_state=42,
             n_jobs=-1,
@@ -193,17 +193,17 @@ def train_lgbm_tuned(df_train: pd.DataFrame, features: list | None = None) -> LG
 
 
 def train_xgb_tuned(df_train: pd.DataFrame, features: list | None = None) -> XGBClassifier:
-    """XGB（Optuna 最佳化）：Val AUC 0.6828，排除叢集 [6,8]，27 特徵"""
+    """XGB（Optuna 最佳化）：Val AUC 0.6813，排除叢集 [6,8]，含 cnn_score"""
     return _fit(
         XGBClassifier(
-            n_estimators=172,
+            n_estimators=573,
             max_depth=3,
-            learning_rate=0.05009204111676675,
-            min_child_weight=69,
-            subsample=0.5404115103473386,
-            colsample_bytree=0.7644450784682499,
-            reg_alpha=0.002912378245304034,
-            reg_lambda=0.02111571283240814,
+            learning_rate=0.012434863923252755,
+            min_child_weight=25,
+            subsample=0.7138549454615949,
+            colsample_bytree=0.5226165252662076,
+            reg_alpha=0.001420668331397582,
+            reg_lambda=0.0003136985467216657,
             random_state=42,
             n_jobs=-1,
             eval_metric="mlogloss",
@@ -522,7 +522,7 @@ if __name__ == "__main__":
 
         optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-        avail = [c for c in CLASSIFIER_FEATURES if c in df_train.columns]
+        avail = [c for c in FEATURES_EXT if c in df_train.columns]
         X_tr = df_train[avail].fillna(0.5)
         y_tr = df_train["Y"].values
         X_val = df_val[avail].fillna(0.5)
@@ -667,7 +667,7 @@ if __name__ == "__main__":
         for name, m, thr in [
             # ("RFC", rfc, 0.40),  # 50
             ("XGB", xgb, 0.40),  # 75
-            # ("XGB Tuned", xgb_tune, 0.40),  # 75
+            ("XGB Tuned", xgb_tune, 0.40),  # 75
             # ("LGBM", model, 0.5),  # 75
             # ("LGBM Tuned", lgbm_tune, 0.50),  # 75
         ]:
