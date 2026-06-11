@@ -9,6 +9,8 @@ dist/
 *.csv
 .DS_Store
 .env
+.trade_env
+*.pfx
 *.egg-info
 db
 models/
@@ -33,3 +35,4 @@ signal*.txt
 *.md
 *.html
 *.txt
+*.log
