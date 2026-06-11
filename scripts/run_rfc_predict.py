@@ -15,6 +15,7 @@ from j1stools import data_filter, feature_builder, hf_sync, label_builder, parqu
 
 
 def prepare_data(stocks, st, end, use_ib=False):
+    """載入價格與特徵，回傳以 (date, stock_id) 為 index 的 DataFrame。"""
     df = parquet_db.query_price(stocks, st, end)
     print("filter.before:", df.shape)
     df = feature_builder.gen_feature(df, FEATURE_TYPE.macd)
@@ -31,6 +32,7 @@ def prepare_data(stocks, st, end, use_ib=False):
 
 
 def batter_predict(model, xtest):
+    """模型 inference，回傳含 stock_id/date 及各類別機率的 DataFrame。"""
     yproba = model.predict_proba(xtest)
     dfyproba = pd.DataFrame(yproba, index=xtest.index)
     dfyproba.reset_index(drop=False, inplace=True)
@@ -39,6 +41,11 @@ def batter_predict(model, xtest):
 
 
 def predict(stocks, st, end, use_news_filter=False):
+    """對 [st, end] 區間做模型預測。warmup 自動往前 120 天以穩定 rolling 特徵。
+    回傳 DataFrame，欄位含 stock_id / date / 0 / 1 / 2（各類別機率）。
+    注意：profit_label 使用 future_max（未來 10 日高點），最近 N 行的分數
+    會隨新資料入庫而改變，只有當天跑的預測才代表當下的訊號。
+    """
     model = joblib.load(f"models/{MODEL_NAME}.joblib")
     warmup_st = (pd.Timestamp(st) - pd.DateOffset(days=120)).strftime("%Y-%m-%d")
     df = prepare_data(stocks, warmup_st, end, use_ib=USE_IB_FEATURES)

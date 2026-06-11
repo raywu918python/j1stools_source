@@ -22,6 +22,12 @@ pred_dir = f"db/predictions/{MODEL_NAME}"
 
 
 def load_signal(stocks, st="2024-01-01", end="2099-01-01"):
+    """回測訊號來源：近期用每日 pred 檔，更早的歷史用 predict() 重算。
+
+    設計原則：profit_label 的 future_max 使用未來資料，明天跑時昨天的特徵已
+    被新資料污染，分數會改變。因此每個 pred 檔只取自己那天的 row，確保
+    June 10 的訊號永遠來自 pred_2026-06-10.parquet，不被後續資料覆蓋。
+    """
     pred_files = sorted(glob.glob(f"{pred_dir}/pred_*.parquet"))
     if not pred_files:
         return predict(stocks, st, end)
@@ -45,6 +51,7 @@ def load_signal(stocks, st="2024-01-01", end="2099-01-01"):
 
 
 def backtest(st="2024-01-01", end="2099-01-01"):
+    """從 st 到今天跑完整回測，回傳 (portfolio_value, trades_df, open_df, close_df, market_df)。"""
     stocks = parquet_db.query_stocks_no_etf()
     signal = load_signal(stocks, st, end)
 
