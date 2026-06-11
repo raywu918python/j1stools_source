@@ -93,7 +93,7 @@ if __name__ == "__main__":
     stocks = list(set(stocks) - {"0050", "0052", "0056"})
 
     today = datetime.now(_TW).strftime("%Y-%m-%d")
-    st = (datetime.now(_TW) - timedelta(days=10)).strftime("%Y-%m-%d")
+    st = (datetime.now(_TW) - timedelta(days=200)).strftime("%Y-%m-%d")
 
     df = predict(stocks, st, "2099-01-01", use_news_filter=USE_NEWS_FILTER)
 

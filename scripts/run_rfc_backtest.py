@@ -15,6 +15,7 @@ from run_rfc_predict import MODEL_NAME, USE_IB_FEATURES, predict
 pull_dirs = ["db/price", "db/active_stocks", "db/feature_cols", "db/info", "models"]
 if USE_IB_FEATURES:
     pull_dirs.append("db/ib")
+pull_dirs.append(f"db/predictions/{MODEL_NAME}")
 hf_sync.pull(pull_dirs)
 today = datetime.now(_TW).strftime("%Y-%m-%d")
 out_dir = f"db/backtest/{MODEL_NAME}"
