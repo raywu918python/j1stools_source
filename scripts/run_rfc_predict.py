@@ -87,6 +87,7 @@ if __name__ == "__main__":
     pull_dirs = ["db/price", "db/active_stocks", "db/feature_cols", "db/info", "models"]
     if USE_IB_FEATURES:
         pull_dirs.append("db/ib")
+    pull_dirs.append(f"db/predictions/{MODEL_NAME}")
     hf_sync.pull(pull_dirs)
 
     stocks = parquet_db.activate_stocks()
