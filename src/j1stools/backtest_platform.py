@@ -390,7 +390,8 @@ def plot_optuna_compare(studies: dict):
     if n == 1:
         axes = [axes]
 
-    colors = ["steelblue", "seagreen", "tomato", "goldenrod"]
+    _palette = ["steelblue", "seagreen", "tomato", "goldenrod", "mediumpurple", "darkcyan"]
+    colors = (_palette * ((n // len(_palette)) + 1))[:n]
 
     summary = []
     for ax, (label, study), color in zip(axes, studies.items(), colors):
