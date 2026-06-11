@@ -817,7 +817,7 @@ if __name__ == "__main__":
 
     from j1stools import backtest_platform, j1s_chart, parquet_db
     from j1stools.gmm_model_plus import build_dataset_breakout
-    from j1stools.gmm_classify import IBMarginGMM, BREAKOUT_GMM_MODEL_PATH
+    from j1stools.gmm_classify import IBMarginGMM, BREAKOUT_GMM_MODEL_PATH, EXCLUDE_CLUSTERS
 
     # ── 參數 ─────────────────────────────────────────────────────────────────── #
     TRAIN_ST = "2015-01-01"
@@ -825,7 +825,6 @@ if __name__ == "__main__":
     LOOKBACK = 30
     HOLD_DAYS_CNN = 5
     RETURN_TARGET = 0.03
-    EXCLUDE_CLUSTERS = [6, 8]
 
     # ── 切換模式 ──────────────────────────────────────────────────────────────── #
     #
@@ -840,7 +839,7 @@ if __name__ == "__main__":
     #
     #  backtest  : 【獨立回測】載現有模型 → make_signal → backtest_platform
     #
-    MODE = "scores"  # "train" | "scores" | "eval" | "backtest"
+    MODE = "eval"  # "train" | "scores" | "eval" | "backtest"
     # ──────────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]

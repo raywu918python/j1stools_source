@@ -25,6 +25,7 @@ from j1stools import j1s_chart, parquet_db
 from j1stools.gmm_classify import (
     BREAKOUT_GMM_MODEL_PATH,
     CLASSIFIER_FEATURES,
+    EXCLUDE_CLUSTERS,
     IBMarginGMM,
     MIN_ATR_PCT,
     VOLUME_RATIO_MIN,
@@ -186,18 +187,18 @@ def train_lgbm(df_train: pd.DataFrame, features: list | None = None) -> LGBMClas
 
 
 def train_lgbm_tuned(df_train: pd.DataFrame, features: list | None = None) -> LGBMClassifier:
-    """LGBM（Optuna 最佳化）：Val AUC 0.6748，排除叢集 [6,8]，含 cnn_score"""
+    """LGBM（Optuna 最佳化）：Val AUC 0.6821，排除叢集 [1,8]，含 cnn_score"""
     return _fit(
         LGBMClassifier(
-            n_estimators=316,
+            n_estimators=531,
             max_depth=3,
-            learning_rate=0.0275558789873696,
-            num_leaves=127,
-            min_child_samples=63,
-            subsample=0.6141126278869403,
-            colsample_bytree=0.5281690689569778,
-            reg_alpha=0.006192618319822827,
-            reg_lambda=0.12275534910537497,
+            learning_rate=0.02455823023392203,
+            num_leaves=81,
+            min_child_samples=90,
+            subsample=0.8395398616140505,
+            colsample_bytree=0.8168007381689665,
+            reg_alpha=0.01764814485595146,
+            reg_lambda=0.0020721315703970725,
             class_weight="balanced",
             random_state=42,
             n_jobs=-1,
@@ -209,17 +210,17 @@ def train_lgbm_tuned(df_train: pd.DataFrame, features: list | None = None) -> LG
 
 
 def train_xgb_tuned(df_train: pd.DataFrame, features: list | None = None) -> XGBClassifier:
-    """XGB（Optuna 最佳化）：Val AUC 0.6813，排除叢集 [6,8]，含 cnn_score"""
+    """XGB（Optuna 最佳化）：Val AUC 0.6911，排除叢集 [1,8]，含 cnn_score"""
     return _fit(
         XGBClassifier(
-            n_estimators=573,
+            n_estimators=326,
             max_depth=3,
-            learning_rate=0.012434863923252755,
-            min_child_weight=25,
-            subsample=0.7138549454615949,
-            colsample_bytree=0.5226165252662076,
-            reg_alpha=0.001420668331397582,
-            reg_lambda=0.0003136985467216657,
+            learning_rate=0.03417224886109087,
+            min_child_weight=46,
+            subsample=0.6267034896989041,
+            colsample_bytree=0.8230212721287574,
+            reg_alpha=0.00037558084255995863,
+            reg_lambda=0.00015787123444200546,
             random_state=42,
             n_jobs=-1,
             eval_metric="mlogloss",
@@ -259,6 +260,33 @@ def train_ensemble(df_train: pd.DataFrame, df_val: pd.DataFrame, features=None) 
     rfc = train_rfc(df_train, features=features)
     xgb = train_xgb(df_train, features=features)
     lgbm = train_lgbm(df_train, features=features)
+
+    def oos_auc(m):
+        avail = m._fitted_features
+        X = df_val[avail].fillna(0.5)
+        y = df_val["Y"].values
+        if len(set(y)) < 3:
+            print(f"  警告：驗證集只有 {sorted(set(y))} 兩個 class，AUC 無法計算，改用等權")
+            return 1.0
+        return roc_auc_score(y, m.predict_proba(X), multi_class="ovr", average="macro")
+
+    aucs = {m.__class__.__name__: oos_auc(m) for m in [rfc, xgb, lgbm]}
+    for name, auc in aucs.items():
+        print(f"  {name:25s} Val AUC: {auc:.4f}")
+
+    ensemble = EnsembleModel([rfc, xgb, lgbm], weights=list(aucs.values()))
+    print(f"  Ensemble 權重: {[f'{w:.3f}' for w in ensemble.weights]}")
+    return ensemble
+
+
+def train_ensemble_tuned(df_train: pd.DataFrame, df_val: pd.DataFrame, features=None) -> EnsembleModel:
+    """
+    訓練 RFC + XGB(tuned) + LGBM(tuned) 並以 df_val 的 OOS AUC 加權組成 Ensemble。
+    ⚠️  train_xgb_tuned / train_lgbm_tuned 的參數需與當前 EXCLUDE_CLUSTERS 一致。
+    """
+    rfc = train_rfc(df_train, features=features)
+    xgb = train_xgb_tuned(df_train, features=features)
+    lgbm = train_lgbm_tuned(df_train, features=features)
 
     def oos_auc(m):
         avail = m._fitted_features
@@ -410,7 +438,6 @@ if __name__ == "__main__":
     VAL_END = "2023-12-31"  # 訓練 / 驗證結束
     EVAL_ST = "2024-01-01"  # OOS 測試起點
 
-    EXCLUDE_CLUSTERS = [6, 8]  # 排除達標率最差、樣本過少的叢集
     # VOLUME_RATIO_MIN 從 ib_margin_classify 共用（目前 0.02）
 
     # ── 切換模式 ──────────────────────────────────────────────────────────── #
@@ -439,9 +466,9 @@ if __name__ == "__main__":
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_signal"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
     USE_CNN = True  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
-    USE_MKT_FILTER = True  # True = 大盤低於 20MA 的日期不開新倉，False = 不過濾
+    USE_MKT_FILTER = False  # True = 大盤低於 20MA 的日期不開新倉，False = 不過濾
     USE_GMM = True  # True = 用 BREAKOUT_CLUSTERS 過濾，False = 全叢集（驗證 GMM 是否有效）
     # ─────────────────────────────────────────────────────────────────────── #
 
@@ -609,13 +636,20 @@ if __name__ == "__main__":
         from j1stools import backtest_platform
 
         backtest_platform.IS_USE_CACHE = True
-        lgbm = train_lgbm(df_train, features=FEATURES_EXT)
-        xgb = train_xgb(df_train, features=FEATURES_EXT)
         rfc = train_rfc(df_train, features=FEATURES_EXT)
+        lgbm = train_lgbm_tuned(df_train, features=FEATURES_EXT)
+        xgb = train_xgb_tuned(df_train, features=FEATURES_EXT)
         ensemble = train_ensemble(df_train, df_val, features=FEATURES_EXT)
+        ensemble_tuned = train_ensemble_tuned(df_train, df_val, features=FEATURES_EXT)
 
         studies = {}
-        for name, model in [("LGBM", lgbm), ("XGB", xgb), ("RFC", rfc), ("Ensemble", ensemble)]:
+        for name, model in [
+            ("LGBM", lgbm),
+            ("XGB", xgb),
+            ("RFC", rfc),
+            ("Ensemble", ensemble),
+            ("Ensemble_Tuned", ensemble_tuned),
+        ]:
             print(f"\n{'='*60}\n【{name}】回測參數最佳化\n{'='*60}")
             sig = make_signal_breakout(
                 model,
@@ -660,10 +694,11 @@ if __name__ == "__main__":
 
         rfc = train_rfc(df_train, features=FEATURES_EXT)
         xgb = train_xgb(df_train, features=FEATURES_EXT)
-        # xgb_tune = train_xgb_tuned(df_train, features=FEATURES_EXT)
+        xgb_tune = train_xgb_tuned(df_train, features=FEATURES_EXT)
         lgbm = train_lgbm(df_train, features=FEATURES_EXT)
-        # lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
+        lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
         ensemble = train_ensemble(df_train, df_val, features=FEATURES_EXT)
+        ensemble_tuned = train_ensemble_tuned(df_train, df_val, features=FEATURES_EXT)
         _DEFAULT_BT_PARAMS = dict(
             top_n=5,
             max_positions=3,
@@ -698,12 +733,18 @@ if __name__ == "__main__":
 
         # ── 三模型比較（各自最佳參數）──
         for name, m, thr, extra in [
-            # ("RFC", rfc, 0.40, dict()),
+            ("RFC", rfc, 0.60, dict()),
             # ("XGB", xgb, 0.50, dict()),
             # ("LGBM", lgbm, 0.35, dict()),
             (
                 "ensemble",
                 ensemble,
+                0.434,
+                dict(top_n=8, max_positions=2, hold_days=9, sl_stop=0.195, tp_stop=0.162, group_limit=2),
+            ),
+            (
+                "ensemble_tuned",
+                ensemble_tuned,
                 0.434,
                 dict(top_n=8, max_positions=2, hold_days=9, sl_stop=0.195, tp_stop=0.162, group_limit=2),
             ),

@@ -71,6 +71,7 @@ BREAKOUT_GMM_MODEL_PATH = "db/models/ib_margin_breakout_gmm.joblib"
 MARKET_PROXY = "0050"  # 大盤代理（台灣50）
 MIN_ATR_PCT = 0.05  # ATR 過濾門檻（GMM 訓練與 LGBM 資料共用）
 VOLUME_RATIO_MIN = 1  # 放量門檻（None = 關閉）
+EXCLUDE_CLUSTERS: list[int] = [1, 8]  # 達標率最差的叢集，cluster_inspect 後更新
 
 # 分類器額外特徵：量能梯度（GMM 分群不用，分類模型才用）
 CLASSIFIER_FEATURES = CLASSIFY_FEATURES + ["f_volume_ratio_20d_xrank"]
