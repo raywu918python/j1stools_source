@@ -12,7 +12,7 @@ def pull(folders: list, local_dir="."):
         if os.environ.get("GITHUB_ACTIONS") == "true" and os.path.isdir(expected) and any(os.scandir(expected)):
             print(f"[hf_sync] cache hit, skip pull: {folder}")
             continue
-        for attempt in range(3):
+        for attempt in range(5):
             snapshot_download(
                 repo_id=_REPO_ID,
                 repo_type="dataset",
@@ -21,12 +21,12 @@ def pull(folders: list, local_dir="."):
                 token=token,
             )
             expected = os.path.join(local_dir, folder)
-            if os.path.isdir(expected):
+            if os.path.isdir(expected) and any(os.scandir(expected)):
                 print(f"[hf_sync] pulled: {folder}")
                 break
-            if attempt == 2:
-                raise RuntimeError(f"[hf_sync] pull failed after 3 attempts: {folder}")
-            wait = 30 * (attempt + 1)
+            if attempt == 4:
+                raise RuntimeError(f"[hf_sync] pull failed after 5 attempts: {folder}")
+            wait = 90
             print(f"[hf_sync] {folder} not found after pull, retry in {wait}s...")
             time.sleep(wait)
 
