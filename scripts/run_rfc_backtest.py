@@ -15,6 +15,7 @@ from run_rfc_predict import MODEL_NAME, USE_IB_FEATURES, predict
 pull_dirs = ["db/price", "db/active_stocks", "db/feature_cols", "db/info", "models"]
 if USE_IB_FEATURES:
     pull_dirs.append("db/ib")
+pull_dirs.append(f"db/predictions/{MODEL_NAME}")
 hf_sync.pull(pull_dirs)
 today = datetime.now(_TW).strftime("%Y-%m-%d")
 out_dir = f"db/backtest/{MODEL_NAME}"
@@ -26,15 +27,21 @@ def load_signal(stocks, st="2024-01-01", end="2099-01-01"):
     if not pred_files:
         return predict(stocks, st, end)
 
-    # 只用最新那份 pred 檔（含過去 ~200 天的預測，warmup 已穩定）
-    pred_df = pd.read_parquet(pred_files[-1])
-    pred_df["date"] = pd.to_datetime(pred_df["date"])
-    first_pred_date = pred_df["date"].min().strftime("%Y-%m-%d")
-
-    # 更早期的歷史用 predict() 補（那段夠舊，rolling features 已穩定）
+    # 每個 pred 檔只取自己那天的 row，避免不同天重算同一天分數不同的 look-ahead 問題
+    first_pred_date = os.path.basename(pred_files[0]).replace("pred_", "").replace(".parquet", "")
     hist_signal = predict(stocks, st, first_pred_date) if st < first_pred_date else None
 
-    parts = [p for p in [hist_signal, pred_df] if p is not None and not p.empty]
+    pred_dfs = []
+    for f in pred_files:
+        file_date = os.path.basename(f).replace("pred_", "").replace(".parquet", "")
+        df = pd.read_parquet(f)
+        df["date"] = pd.to_datetime(df["date"])
+        day_rows = df[df["date"] == pd.Timestamp(file_date)]
+        if not day_rows.empty:
+            pred_dfs.append(day_rows)
+
+    pred_signal = pd.concat(pred_dfs, ignore_index=True) if pred_dfs else None
+    parts = [p for p in [hist_signal, pred_signal] if p is not None and not p.empty]
     return pd.concat(parts, ignore_index=True)
 
 
