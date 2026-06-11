@@ -106,13 +106,15 @@ if __name__ == "__main__":
     df = predict(stocks, st, "2099-01-01", use_news_filter=USE_NEWS_FILTER)
 
     if df is not None and not df.empty:
+        # 只存今天那天的 row，warmup 200 天僅為穩定 rolling 特徵，不需要全存
+        today_df = df[df["date"] == pd.Timestamp(today)]
 
         out_dir = f"db/predictions/{MODEL_NAME}"
         os.makedirs(out_dir, exist_ok=True)
         out_path = f"{out_dir}/pred_{today}.parquet"
-        df["date"] = df["date"].dt.strftime("%Y-%m-%d")
-        df.to_parquet(out_path, index=False)
-        print(f"saved {len(df)} rows → {out_path}")
+        today_df["date"] = today_df["date"].dt.strftime("%Y-%m-%d")
+        today_df.to_parquet(out_path, index=False)
+        print(f"saved {len(today_df)} rows → {out_path}")
         hf_sync.push([f"db/predictions/{MODEL_NAME}"])
     else:
         print("今日無預測結果")
