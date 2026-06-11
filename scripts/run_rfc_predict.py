@@ -20,6 +20,7 @@ def prepare_data(stocks, st, end, use_ib=False):
     df = feature_builder.gen_feature(df, FEATURE_TYPE.macd)
     if use_ib:
         from j1stools.rfc_main import _add_ib_features
+
         df = _add_ib_features(df, stocks, st, end)
     df = label_builder.profit_label(df)
     df = data_filter.filter(df, True, FILTER_TYPE.none_, FILTER_TYPE.add_)
@@ -55,7 +56,7 @@ def predict(stocks, st, end, use_news_filter=False):
     return result
 
 
-USE_IB_FEATURES = os.getenv("USE_IB_FEATURES", "false").lower() == "true"
+USE_IB_FEATURES = True  # os.getenv("USE_IB_FEATURES", "false").lower() == "true"
 MODEL_NAME = "rfc_macd_ib_6xx" if USE_IB_FEATURES else "rfc_macd_6xx"
 USE_NEWS_FILTER = False  # False → 跳過新聞過濾，直接用模型分數
 NEWS_SCORE_MIN = 50  # 新聞分數低於此值的股票從今日預測中剔除

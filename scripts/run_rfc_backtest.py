@@ -1,3 +1,4 @@
+import glob
 import os, sys
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -17,11 +18,37 @@ if USE_IB_FEATURES:
 hf_sync.pull(pull_dirs)
 today = datetime.now(_TW).strftime("%Y-%m-%d")
 out_dir = f"db/backtest/{MODEL_NAME}"
+pred_dir = f"db/predictions/{MODEL_NAME}"
+
+
+def load_signal(stocks, st="2024-01-01", end="2099-01-01"):
+    pred_files = sorted(glob.glob(f"{pred_dir}/pred_*.parquet"))
+    if not pred_files:
+        return predict(stocks, st, end)
+
+    first_pred_date = os.path.basename(pred_files[0]).replace("pred_", "").replace(".parquet", "")
+
+    hist_signal = predict(stocks, st, first_pred_date) if st < first_pred_date else None
+
+    pred_dfs = []
+    for f in pred_files:
+        file_date = os.path.basename(f).replace("pred_", "").replace(".parquet", "")
+        df = pd.read_parquet(f)
+        df["date"] = pd.to_datetime(df["date"])
+        day_rows = df[df["date"] == pd.Timestamp(file_date)]
+        if not day_rows.empty:
+            pred_dfs.append(day_rows)
+
+    pred_signal = pd.concat(pred_dfs, ignore_index=True) if pred_dfs else None
+
+    parts = [p for p in [hist_signal, pred_signal] if p is not None and not p.empty]
+    signal = pd.concat(parts, ignore_index=True)
+    return signal
 
 
 def backtest(st="2024-01-01", end="2099-01-01"):
     stocks = parquet_db.query_stocks_no_etf()
-    signal = predict(stocks, st, end)
+    signal = load_signal(stocks, st, end)
 
     portfolio_value, trades_df, positions, close_df = backtest_platform.prepare_data_backtest(
         signal,
@@ -89,6 +116,8 @@ if open_df:
     open_positions.to_parquet(f"{out_dir}/open_{today}.parquet", index=False)
     print("=== 目前持倉 ===")
     print(open_positions.to_string(index=False))
+else:
+    print("=== 沒有持倉 ===")
 
 print(f"saved backtest → {out_dir}/ ({today})")
 hf_sync.push([f"db/backtest/{MODEL_NAME}"])
