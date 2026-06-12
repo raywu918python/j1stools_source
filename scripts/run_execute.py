@@ -65,8 +65,8 @@ def execute(open_df: dict, total_capital: float = 1_000_000, simulation: bool = 
     finally:
         try:
             api.logout()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ERROR] execute 失敗：{e}")
 
 
 if __name__ == "__main__":
