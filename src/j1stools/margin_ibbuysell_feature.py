@@ -190,6 +190,7 @@ def add_feature(df, df_ibbuysell, df_market, mode="train"):
     base["f_bias_ma60"] = (base["close"] - ma60) / ma60
     base["f_ma5_slope"] = ma5.groupby(base["stock_id"]).transform(lambda x: x.pct_change(5, fill_method=None))
     base["f_ma20_slope"] = ma20.groupby(base["stock_id"]).transform(lambda x: x.pct_change(10, fill_method=None))
+    base["f_ma60_slope"] = ma60.groupby(base["stock_id"]).transform(lambda x: x.pct_change(20, fill_method=None))
     base["f_momentum_cross"] = base["f_return_5d"] - base["f_return_20d"]
 
     # 相對大盤特徵
@@ -279,8 +280,10 @@ def add_feature(df, df_ibbuysell, df_market, mode="train"):
         # 均線特徵
         "f_bias_ma5",
         "f_bias_ma20",
+        "f_bias_ma60",
         "f_ma5_slope",
         "f_ma20_slope",
+        "f_ma60_slope",
         "f_momentum_cross",
         # 波動率
         "f_stock_volatility_20d",

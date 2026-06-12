@@ -34,26 +34,45 @@ def predict(
     stocks,
     st,
     end,
+    top_n=20,
+    use_filter=True,
 ):
-
     model = joblib.load("models/margin_lgbm.joblib")
     feature_cols = parquet_db.load_feature_cols(MODEL_NAME)
-
     df_feature, df_market = prepare_data(stocks, st, end, model="predict")
-
     df_select_stocks = select_stocks(
         df_today=df_feature,
         df_market_history=df_market,
         feature_cols=feature_cols,
         model=model,
-        top_n=20,
+        top_n=top_n,
+        use_filter=use_filter,
     )
     if df_select_stocks is None:
         return None
+    return df_select_stocks.sort_values(by=["date", "pred_score"], ascending=[False, False])
 
-    df_select_stocks = df_select_stocks.sort_values(by=["date", "pred_score"], ascending=[False, False])
-    # df_select_stocks.to_csv("lgbm_signal_today.csv", index=False)
-    return df_select_stocks
+
+def compute_all_scores(
+    stocks=None,
+    st="2019-01-01",
+    end="2026-12-31",
+    path="db/models/margin_lgbm_scores.parquet",
+):
+    """所有股票每日打分，存成 parquet 供 gmm_model_plus.py USE_MARGIN_LGBM 使用。"""
+    import os
+
+    if stocks is None:
+        stocks = parquet_db.query_stocks_no_etf()
+    out = predict(stocks, st, end, top_n=99999, use_filter=False)
+    if out is None or out.empty:
+        print("無資料")
+        return
+    out = out.rename(columns={"pred_score": "margin_lgbm_score"})
+    out["date"] = pd.to_datetime(out["date"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    out.to_parquet(path, index=False)
+    print(f"margin_lgbm scores 已存：{path}（{len(out):,} 筆）")
 
 
 def main():
@@ -648,5 +667,6 @@ def update_features(feature_list: list):
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    compute_all_scores()
     pass

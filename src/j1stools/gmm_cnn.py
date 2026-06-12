@@ -873,7 +873,7 @@ if __name__ == "__main__":
         print(f"訓練集：{X_train.shape}  測試集：{X_test.shape}")
 
         print(f"\n══ 訓練 SeqCNN Ranker（breakout宇宙，{HOLD_DAYS_CNN}日截面排名）══")
-        cnn = train_seq_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, epochs=50)
+        cnn = train_seq_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, epochs=80)
         save_seq_cnn(cnn, CNN_RANKER_PATH)
 
         print("\n── 存儲 CNN scores parquet ──")

@@ -36,6 +36,7 @@ from j1stools.label_builder import profit_label
 HOLD_DAYS = 10
 PROFIT_TARGET = 0.10
 STOP_LOSS = -0.10
+BINARY_LABEL = True  # True = 達標(1) vs 非達標(0)；False = 三分類 0/1/2
 
 
 def build_dataset_breakout(
@@ -51,8 +52,9 @@ def build_dataset_breakout(
     """放量上漲宇宙 → GMM 叢集過濾 → profit_label 標籤。clusters=None 使用全叢集。"""
     df = load_breakout_stocks(stocks, st, end, min_atr_pct=min_atr_pct, volume_ratio_min=volume_ratio_min)
     df["cluster"] = clf_gmm.predict(df)
-
     if clusters is not None:
+        gmm_proba = clf_gmm.predict_proba(df)
+        df["gmm_max_prob"] = gmm_proba.max(axis=1).values
         df = df[df["cluster"].isin(clusters)].copy()
 
     df_hl = parquet_db.query_price(df["stock_id"].unique().tolist(), st, end)
@@ -61,11 +63,15 @@ def build_dataset_breakout(
 
     df["future_return"] = df.groupby("stock_id")["close"].transform(lambda x: x.shift(-hold_days) / x - 1)
     df = profit_label(df, hold_days=hold_days, profit_target=PROFIT_TARGET, stop_loss=STOP_LOSS)
-    df["Y"] = df["target"].astype(int)
+    if BINARY_LABEL:
+        df["Y"] = (df["target"] == 2).astype(int)
+    else:
+        df["Y"] = df["target"].astype(int)
     df = df.dropna(subset=["future_return"]).drop(columns=["target", "high", "low"], errors="ignore")
 
     cluster_str = f"叢集 {clusters}" if clusters is not None else "全叢集"
-    print(f"資料集：{len(df):,} 筆  達標(2)：{(df['Y']==2).mean():.1%}  {cluster_str}  持有 {hold_days} 日")
+    hit_rate = df["Y"].mean() if BINARY_LABEL else (df["Y"] == 2).mean()
+    print(f"資料集：{len(df):,} 筆  達標率：{hit_rate:.1%}  {cluster_str}  持有 {hold_days} 日")
     return df
 
 
@@ -84,6 +90,8 @@ def make_signal_breakout(
     df = load_breakout_stocks(stocks, st, end, min_atr_pct=min_atr_pct, volume_ratio_min=volume_ratio_min)
     df["cluster"] = clf_gmm.predict(df)
     if clusters is not None:
+        gmm_proba = clf_gmm.predict_proba(df)
+        df["gmm_max_prob"] = gmm_proba.max(axis=1).values
         df = df[df["cluster"].isin(clusters)].copy()
 
     avail = model._fitted_features
@@ -101,7 +109,7 @@ def make_signal_breakout(
         else:
             df[_CNN_COL] = 0.0
     proba = model.predict_proba(df[avail].fillna(0.5))
-    df["2"] = proba[:, 2]
+    df["2"] = proba[:, 1] if BINARY_LABEL else proba[:, 2]
 
     signal = df[["date", "stock_id", "2"]].copy()
     signal["date"] = pd.to_datetime(signal["date"])
@@ -131,7 +139,11 @@ def _fit(model, df_train: pd.DataFrame, features: list | None = None):
     y = df_train["Y"].values
     model.fit(X, y)
     model._fitted_features = avail
-    auc = roc_auc_score(y, model.predict_proba(X), multi_class="ovr", average="macro")
+    proba = model.predict_proba(X)
+    if BINARY_LABEL:
+        auc = roc_auc_score(y, proba[:, 1])
+    else:
+        auc = roc_auc_score(y, proba, multi_class="ovr", average="macro")
     print(f"訓練集 AUC：{auc:.4f}（in-sample，{len(avail)} 特徵）")
     return model
 
@@ -232,14 +244,24 @@ def train_xgb_tuned(df_train: pd.DataFrame, features: list | None = None) -> XGB
 
 
 class EnsembleModel:
-    """RFC + XGB + LGBM 加權平均，相容 eval_signal / make_signal_breakout 介面。"""
+    """RFC + XGB + LGBM 加權平均，相容 eval_signal / make_signal_breakout 介面。
+    各模型可使用不同特徵子集，predict_proba 自動依 _fitted_features 選欄。
+    """
 
     def __init__(self, models: list, weights: list | None = None):
         w = weights if weights is not None else [1.0] * len(models)
         total = sum(w)
         self.models = models
         self.weights = [x / total for x in w]
-        self._fitted_features = models[0]._fitted_features
+        # 所有模型特徵的聯集（去重、保順序），供外部查詢 cnn_score 是否需載入
+        seen: set = set()
+        union: list = []
+        for m in models:
+            for f in m._fitted_features:
+                if f not in seen:
+                    seen.add(f)
+                    union.append(f)
+        self._fitted_features = union
 
     def predict_proba(self, X):
         import warnings
@@ -248,23 +270,54 @@ class EnsembleModel:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             for m, w in zip(self.models, self.weights):
-                proba += w * m.predict_proba(X)
+                proba += w * m.predict_proba(X[m._fitted_features])
         return proba
+
+
+_CHIP_KEYWORDS = ("foreign", "trust", "institutional", "margin", "short", "dt_")
+_SHARED_COLS = ("cnn_score", "margin_lgbm_score")
+
+
+def split_features(features: list) -> tuple[list, list, list]:
+    """
+    將特徵列表切成三組（RFC/XGB/LGBM），保持與 Ensemble 一致。
+      RFC  → 純技術面（量能/趨勢），排除籌碼關鍵字
+      XGB  → 法人籌碼（foreign / trust / institutional）
+      LGBM → 散戶籌碼（margin / short / dt_）
+      全部 → + cnn_score + margin_lgbm_score（如存在）
+    """
+    shared = [f for f in _SHARED_COLS if f in features]
+    rfc_feats = [f for f in features if not any(k in f for k in _CHIP_KEYWORDS) and f not in shared] + shared
+    xgb_feats = [
+        f for f in features if any(k in f for k in ("foreign", "trust", "institutional")) and f not in shared
+    ] + shared
+    lgbm_feats = [f for f in features if any(k in f for k in ("margin", "short", "dt_")) and f not in shared] + shared
+    return rfc_feats, xgb_feats, lgbm_feats
 
 
 def train_ensemble(df_train: pd.DataFrame, df_val: pd.DataFrame, features=None) -> EnsembleModel:
     """
     訓練 RFC + XGB + LGBM 並以 df_val 的 OOS AUC 加權組成 Ensemble。
+    特徵切割統一由 split_features() 處理，與 breakout_signal/breakout_backtest 一致。
     df_val 必須與 df_train 不重疊（時間上在後）。
     """
-    rfc = train_rfc(df_train, features=features)
-    xgb = train_xgb(df_train, features=features)
-    lgbm = train_lgbm(df_train, features=features)
+    base = features if features is not None else CLASSIFIER_FEATURES
+    rfc_feats, xgb_feats, lgbm_feats = split_features(base)
+
+    print(f"RFC  特徵 {len(rfc_feats):2d} 個（純技術）: {rfc_feats}")
+    print(f"XGB  特徵 {len(xgb_feats):2d} 個（法人籌碼）: {xgb_feats}")
+    print(f"LGBM 特徵 {len(lgbm_feats):2d} 個（散戶籌碼）: {lgbm_feats}")
+
+    rfc = train_rfc(df_train, features=rfc_feats)
+    xgb = train_xgb(df_train, features=xgb_feats)
+    lgbm = train_lgbm(df_train, features=lgbm_feats)
 
     def oos_auc(m):
         avail = m._fitted_features
         X = df_val[avail].fillna(0.5)
         y = df_val["Y"].values
+        if BINARY_LABEL:
+            return roc_auc_score(y, m.predict_proba(X)[:, 1])
         if len(set(y)) < 3:
             print(f"  警告：驗證集只有 {sorted(set(y))} 兩個 class，AUC 無法計算，改用等權")
             return 1.0
@@ -282,16 +335,26 @@ def train_ensemble(df_train: pd.DataFrame, df_val: pd.DataFrame, features=None) 
 def train_ensemble_tuned(df_train: pd.DataFrame, df_val: pd.DataFrame, features=None) -> EnsembleModel:
     """
     訓練 RFC + XGB(tuned) + LGBM(tuned) 並以 df_val 的 OOS AUC 加權組成 Ensemble。
+    特徵切割統一由 split_features() 處理，與 breakout_signal/breakout_backtest 一致。
     ⚠️  train_xgb_tuned / train_lgbm_tuned 的參數需與當前 EXCLUDE_CLUSTERS 一致。
     """
-    rfc = train_rfc(df_train, features=features)
-    xgb = train_xgb_tuned(df_train, features=features)
-    lgbm = train_lgbm_tuned(df_train, features=features)
+    base = features if features is not None else CLASSIFIER_FEATURES
+    rfc_feats, xgb_feats, lgbm_feats = split_features(base)
+
+    print(f"RFC  特徵 {len(rfc_feats):2d} 個（純技術）: {rfc_feats}")
+    print(f"XGB  特徵 {len(xgb_feats):2d} 個（法人籌碼）: {xgb_feats}")
+    print(f"LGBM 特徵 {len(lgbm_feats):2d} 個（散戶籌碼）: {lgbm_feats}")
+
+    rfc = train_rfc(df_train, features=rfc_feats)
+    xgb = train_xgb_tuned(df_train, features=xgb_feats)
+    lgbm = train_lgbm_tuned(df_train, features=lgbm_feats)
 
     def oos_auc(m):
         avail = m._fitted_features
         X = df_val[avail].fillna(0.5)
         y = df_val["Y"].values
+        if BINARY_LABEL:
+            return roc_auc_score(y, m.predict_proba(X)[:, 1])
         if len(set(y)) < 3:
             print(f"  警告：驗證集只有 {sorted(set(y))} 兩個 class，AUC 無法計算，改用等權")
             return 1.0
@@ -327,20 +390,24 @@ def eval_signal(
     avail = model._fitted_features
     X = df_test[avail].fillna(0.5)
     proba_all = model.predict_proba(X)
-    prob = proba_all[:, 2]
+    prob = proba_all[:, 1] if BINARY_LABEL else proba_all[:, 2]
 
     y_true = df_test["Y"].values
     if len(set(y_true)) >= 3:
-        auc = roc_auc_score(y_true, proba_all, multi_class="ovr", average="macro")
+        if BINARY_LABEL:
+            auc = roc_auc_score(y_true, proba_all[:, 1])
+        else:
+            auc = roc_auc_score(y_true, proba_all, multi_class="ovr", average="macro")
         print(f"\nOOS AUC：{auc:.4f}")
     else:
         auc = float("nan")
         print(f"\nOOS AUC：N/A（測試集只有 {sorted(set(y_true))} 兩個 class）")
+    _names = ["非達標", "達標"] if BINARY_LABEL else ["盤整", "停損", "達標"]
     print(
         classification_report(
             y_true,
             proba_all.argmax(axis=1),
-            target_names=["盤整", "停損", "達標"],
+            target_names=_names,
             zero_division=0,
         )
     )
@@ -351,38 +418,64 @@ def eval_signal(
 
     n_dates = df_out["date"].nunique()
     date_range = f"{df_out['date'].min().date()} ~ {df_out['date'].max().date()}"
-    base_rate = (df_out["Y"] == 2).mean()
+    base_rate = df_out["Y"].mean() if BINARY_LABEL else (df_out["Y"] == 2).mean()
 
     rows = []
     for thr in thresholds:
         subset = df_out[df_out["prob"] >= thr]
         if len(subset) == 0:
+            if BINARY_LABEL:
+                rows.append(
+                    {
+                        "門檻": f">={thr:.0%}",
+                        "總筆數": 0,
+                        "日均訊號": 0.0,
+                        "非達標": 0,
+                        "達標": 0,
+                        "達標率": float("nan"),
+                        "平均報酬": float("nan"),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "門檻": f">={thr:.0%}",
+                        "總筆數": 0,
+                        "日均訊號": 0.0,
+                        "盤整": 0,
+                        "停損": 0,
+                        "達標": 0,
+                        "達標率": float("nan"),
+                        "平均報酬": float("nan"),
+                    }
+                )
+            continue
+        vc = subset["Y"].value_counts()
+        if BINARY_LABEL:
             rows.append(
                 {
                     "門檻": f">={thr:.0%}",
-                    "總筆數": 0,
-                    "日均訊號": 0.0,
-                    "盤整": 0,
-                    "停損": 0,
-                    "達標": 0,
-                    "達標率": float("nan"),
-                    "平均報酬": float("nan"),
+                    "總筆數": len(subset),
+                    "日均訊號": round(len(subset) / n_dates, 1),
+                    "非達標": vc.get(0, 0),
+                    "達標": vc.get(1, 0),
+                    "達標率": subset["Y"].mean(),
+                    "平均報酬": subset["future_return_clip"].mean(),
                 }
             )
-            continue
-        vc = subset["Y"].value_counts()
-        rows.append(
-            {
-                "門檻": f">={thr:.0%}",
-                "總筆數": len(subset),
-                "日均訊號": round(len(subset) / n_dates, 1),
-                "盤整": vc.get(0, 0),
-                "停損": vc.get(1, 0),
-                "達標": vc.get(2, 0),
-                "達標率": (subset["Y"] == 2).mean(),
-                "平均報酬": subset["future_return_clip"].mean(),
-            }
-        )
+        else:
+            rows.append(
+                {
+                    "門檻": f">={thr:.0%}",
+                    "總筆數": len(subset),
+                    "日均訊號": round(len(subset) / n_dates, 1),
+                    "盤整": vc.get(0, 0),
+                    "停損": vc.get(1, 0),
+                    "達標": vc.get(2, 0),
+                    "達標率": (subset["Y"] == 2).mean(),
+                    "平均報酬": subset["future_return_clip"].mean(),
+                }
+            )
 
     cluster_info = sorted(df_test["cluster"].unique().tolist()) if "cluster" in df_test.columns else "全叢集"
     result = pd.DataFrame(rows)
@@ -410,7 +503,8 @@ def eval_signal(
     axes[0].set_ylabel("筆數")
 
     df_out["prob_bin"] = pd.cut(prob, bins=10)
-    cal = df_out.groupby("prob_bin", observed=True).agg(達標率=("Y", lambda x: (x == 2).mean())).reset_index()
+    _hit = (lambda x: x.mean()) if BINARY_LABEL else (lambda x: (x == 2).mean())
+    cal = df_out.groupby("prob_bin", observed=True).agg(達標率=("Y", _hit)).reset_index()
     bin_mid = cal["prob_bin"].apply(lambda b: b.mid)
     bin_width = cal["prob_bin"].apply(lambda b: b.length).iloc[0] * 0.85
     axes[1].bar(bin_mid, cal["達標率"], width=bin_width, color="seagreen", alpha=0.8, label="實際達標率")
@@ -467,9 +561,12 @@ if __name__ == "__main__":
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
     MODE = "breakout_signal"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
-    USE_CNN = True  # True = 加入 cnn_score stacking 特徵，False = 純樹模型
-    USE_MKT_FILTER = False  # True = 大盤低於 20MA 的日期不開新倉，False = 不過濾
-    USE_GMM = True  # True = 用 BREAKOUT_CLUSTERS 過濾，False = 全叢集（驗證 GMM 是否有效）
+
+    # ── 訊號組合開關（A 選 B/C/D）────────────────────────────────────────── #
+    USE_GMM = False  # B 組：GMM 叢集過濾 + gmm_max_prob 特徵
+    USE_CNN = False  # C 組：cnn_score 特徵
+    USE_MARGIN_LGBM = False  # D 組：margin_lgbm_score 特徵（需先預計算 parquet）
+    USE_MKT_FILTER = False  # 大盤低於 20MA 的日期不開新倉
     # ─────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -563,6 +660,32 @@ if __name__ == "__main__":
     else:
         FEATURES_EXT = CLASSIFIER_FEATURES
 
+    # ── margin_lgbm stacking feature（D 組）──────────────────────────────────
+    _MARGIN_LGBM_PATH = "db/models/margin_lgbm_scores.parquet"
+    _MARGIN_LGBM_COL = "margin_lgbm_score"
+
+    if USE_MARGIN_LGBM and _os.path.exists(_MARGIN_LGBM_PATH):
+        print("\n── 載入 margin_lgbm scores parquet，加入 margin_lgbm_score 特徵 ──")
+        import pandas as _pd2
+
+        _ml_scores = _pd2.read_parquet(_MARGIN_LGBM_PATH)[["date", "stock_id", _MARGIN_LGBM_COL]]
+        _ml_scores["date"] = _pd2.to_datetime(_ml_scores["date"])
+        df_train["date"] = _pd2.to_datetime(df_train["date"])
+        df_val["date"] = _pd2.to_datetime(df_val["date"])
+        df_test["date"] = _pd2.to_datetime(df_test["date"])
+        df_train = df_train.merge(_ml_scores, on=["date", "stock_id"], how="left")
+        df_val = df_val.merge(_ml_scores, on=["date", "stock_id"], how="left")
+        df_test = df_test.merge(_ml_scores, on=["date", "stock_id"], how="left")
+        df_train[_MARGIN_LGBM_COL] = df_train[_MARGIN_LGBM_COL].fillna(0.0)
+        df_val[_MARGIN_LGBM_COL] = df_val[_MARGIN_LGBM_COL].fillna(0.0)
+        df_test[_MARGIN_LGBM_COL] = df_test[_MARGIN_LGBM_COL].fillna(0.0)
+        _ml_cov = (df_train[_MARGIN_LGBM_COL] != 0).mean()
+        print(f"  train 覆蓋率：{_ml_cov:.1%}，parquet 筆數：{len(_ml_scores):,}")
+        FEATURES_EXT = FEATURES_EXT + [_MARGIN_LGBM_COL]
+        print(f"特徵數更新：{len(FEATURES_EXT)}（+margin_lgbm_score）")
+    elif USE_MARGIN_LGBM:
+        print(f"\n⚠️  USE_MARGIN_LGBM=True 但找不到 {_MARGIN_LGBM_PATH}，請先執行 compute_all_scores()")
+
     if MODE == "breakout_tune":
         import optuna
 
@@ -593,9 +716,10 @@ if __name__ == "__main__":
             m = LGBMClassifier(**params)
             m.fit(X_tr, y_tr)
             proba_val = m.predict_proba(X_val)
+            if BINARY_LABEL:
+                return roc_auc_score(y_val, proba_val[:, 1])
             if len(set(y_val)) >= 3:
                 return roc_auc_score(y_val, proba_val, multi_class="ovr", average="macro")
-            # class 不完整時改用 class 2（達標）的二元 AUC
             return roc_auc_score((y_val == 2).astype(int), proba_val[:, 2])
 
         def objective_xgb(trial):
@@ -618,6 +742,8 @@ if __name__ == "__main__":
             m = _XGB(**params)
             m.fit(X_tr, y_tr)
             proba_val = m.predict_proba(X_val)
+            if BINARY_LABEL:
+                return roc_auc_score(y_val, proba_val[:, 1])
             if len(set(y_val)) >= 3:
                 return roc_auc_score(y_val, proba_val, multi_class="ovr", average="macro")
             return roc_auc_score((y_val == 2).astype(int), proba_val[:, 2])
@@ -636,9 +762,10 @@ if __name__ == "__main__":
         from j1stools import backtest_platform
 
         backtest_platform.IS_USE_CACHE = True
-        rfc = train_rfc(df_train, features=FEATURES_EXT)
-        lgbm = train_lgbm_tuned(df_train, features=FEATURES_EXT)
-        xgb = train_xgb_tuned(df_train, features=FEATURES_EXT)
+        _rfc_f, _xgb_f, _lgbm_f = split_features(FEATURES_EXT)
+        rfc = train_rfc(df_train, features=_rfc_f)
+        lgbm = train_lgbm_tuned(df_train, features=_lgbm_f)
+        xgb = train_xgb_tuned(df_train, features=_xgb_f)
         ensemble = train_ensemble(df_train, df_val, features=FEATURES_EXT)
         ensemble_tuned = train_ensemble_tuned(df_train, df_val, features=FEATURES_EXT)
 
@@ -667,19 +794,21 @@ if __name__ == "__main__":
         backtest_platform.plot_optuna_compare(studies)
 
     elif MODE == "breakout_compare":
-        rfc = train_rfc(df_train, features=FEATURES_EXT)
-        xgb = train_xgb(df_train, features=FEATURES_EXT)
-        model = train_lgbm(df_train, features=FEATURES_EXT)
+        _rfc_f, _xgb_f, _lgbm_f = split_features(FEATURES_EXT)
+        rfc = train_rfc(df_train, features=_rfc_f)
+        xgb = train_xgb(df_train, features=_xgb_f)
+        model = train_lgbm(df_train, features=_lgbm_f)
         for name, m in [("RFC", rfc), ("XGB", xgb), ("LGBM", model)]:
             print(f"\n{'='*60}\n【{name} 訊號品質】\n{'='*60}")
             eval_signal(m, df_test)
 
     elif MODE == "breakout_signal":
-        rfc = train_rfc(df_train, features=FEATURES_EXT)
-        xgb = train_xgb(df_train, features=FEATURES_EXT)
-        xgb_tune = train_xgb_tuned(df_train, features=FEATURES_EXT)
-        model = train_lgbm(df_train, features=FEATURES_EXT)
-        lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
+        _rfc_f, _xgb_f, _lgbm_f = split_features(FEATURES_EXT)
+        rfc = train_rfc(df_train, features=_rfc_f)
+        xgb = train_xgb(df_train, features=_xgb_f)
+        xgb_tune = train_xgb_tuned(df_train, features=_xgb_f)
+        model = train_lgbm(df_train, features=_lgbm_f)
+        lgbm_tune = train_lgbm_tuned(df_train, features=_lgbm_f)
         for name, m in [
             ("RFC", rfc),
             ("XGB", xgb),
@@ -692,11 +821,12 @@ if __name__ == "__main__":
     elif MODE == "breakout_backtest":
         from j1stools import backtest_platform
 
-        rfc = train_rfc(df_train, features=FEATURES_EXT)
-        xgb = train_xgb(df_train, features=FEATURES_EXT)
-        xgb_tune = train_xgb_tuned(df_train, features=FEATURES_EXT)
-        lgbm = train_lgbm(df_train, features=FEATURES_EXT)
-        lgbm_tune = train_lgbm_tuned(df_train, features=FEATURES_EXT)
+        _rfc_f, _xgb_f, _lgbm_f = split_features(FEATURES_EXT)
+        rfc = train_rfc(df_train, features=_rfc_f)
+        xgb = train_xgb(df_train, features=_xgb_f)
+        xgb_tune = train_xgb_tuned(df_train, features=_xgb_f)
+        lgbm = train_lgbm(df_train, features=_lgbm_f)
+        lgbm_tune = train_lgbm_tuned(df_train, features=_lgbm_f)
         ensemble = train_ensemble(df_train, df_val, features=FEATURES_EXT)
         ensemble_tuned = train_ensemble_tuned(df_train, df_val, features=FEATURES_EXT)
         _DEFAULT_BT_PARAMS = dict(
@@ -733,21 +863,21 @@ if __name__ == "__main__":
 
         # ── 三模型比較（各自最佳參數）──
         for name, m, thr, extra in [
-            ("RFC", rfc, 0.60, dict()),
-            # ("XGB", xgb, 0.50, dict()),
-            # ("LGBM", lgbm, 0.35, dict()),
+            ("RFC", rfc, 0.40, dict()),
+            ("XGB", xgb, 0.40, dict()),
+            ("LGBM", lgbm, 0.35, dict()),
             (
                 "ensemble",
                 ensemble,
                 0.434,
                 dict(top_n=8, max_positions=2, hold_days=9, sl_stop=0.195, tp_stop=0.162, group_limit=2),
             ),
-            (
-                "ensemble_tuned",
-                ensemble_tuned,
-                0.434,
-                dict(top_n=8, max_positions=2, hold_days=9, sl_stop=0.195, tp_stop=0.162, group_limit=2),
-            ),
+            # (
+            #     "ensemble_tuned",
+            #     ensemble_tuned,
+            #     0.434,
+            #     dict(top_n=8, max_positions=2, hold_days=9, sl_stop=0.195, tp_stop=0.162, group_limit=2),
+            # ),
             # (
             #     "ensemble_分散",
             #     ensemble,

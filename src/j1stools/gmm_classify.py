@@ -60,7 +60,9 @@ CLASSIFY_FEATURES = [
     # ── 價格趨勢（方向，非報酬）────────────────────────────
     "f_ma5_slope_xrank",  # MA5 斜率：短期趨勢方向
     "f_ma20_slope_xrank",  # MA20 斜率：中期趨勢方向
+    "f_ma60_slope_xrank",  # MA60 斜率：中長期趨勢方向
     "f_bias_ma20_xrank",  # 偏離 MA20 程度：高 = 超漲，低 = 超跌
+    "f_bias_ma60_xrank",  # 偏離 MA60 程度：突破時在中長期均線上下
     "f_momentum_cross_xrank",  # MA5/MA20 黃金/死亡交叉訊號
 ]
 # 移除價格動能特徵（f_return_5d_xrank 等）
@@ -69,12 +71,12 @@ CLASSIFY_FEATURES = [
 N_CLUSTERS = 10
 BREAKOUT_GMM_MODEL_PATH = "db/models/ib_margin_breakout_gmm.joblib"
 MARKET_PROXY = "0050"  # 大盤代理（台灣50）
-MIN_ATR_PCT = 0.05  # ATR 過濾門檻（GMM 訓練與 LGBM 資料共用）
+MIN_ATR_PCT = 0.02  # ATR 過濾門檻（GMM 訓練與 LGBM 資料共用）
 VOLUME_RATIO_MIN = 1  # 放量門檻（None = 關閉）
 EXCLUDE_CLUSTERS: list[int] = [1, 8]  # 達標率最差的叢集，cluster_inspect 後更新
 
-# 分類器額外特徵：量能梯度（GMM 分群不用，分類模型才用）
-CLASSIFIER_FEATURES = CLASSIFY_FEATURES + ["f_volume_ratio_20d_xrank"]
+# 分類器額外特徵：量能梯度 + GMM 軟分群信心（GMM 分群本身不用這些）
+CLASSIFIER_FEATURES = CLASSIFY_FEATURES + ["f_volume_ratio_20d_xrank", "gmm_max_prob"]
 
 
 def load_transition_stocks(
