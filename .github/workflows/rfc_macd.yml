@@ -48,5 +48,10 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO_ID: raywu918python/j1s-data
+          SINOPAC_API_KEY: ${{ secrets.SINOPAC_API_KEY }}
+          SINOPAC_SECRET_KEY: ${{ secrets.SINOPAC_SECRET_KEY }}
+          SINOPAC_CA_B64: ${{ secrets.SINOPAC_CA_B64 }}
+          SINOPAC_CA_PASSWD: ${{ secrets.SINOPAC_CA_PASSWD }}
+          SINOPAC_PERSON_ID: ${{ secrets.SINOPAC_PERSON_ID }}
           PYTHONUNBUFFERED: "1"
         run: python scripts/run_rfc_backtest.py
