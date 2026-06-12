@@ -1,4 +1,6 @@
+import base64
 import os
+import tempfile
 from pathlib import Path
 
 import shioaji as sj
@@ -13,8 +15,12 @@ def login() -> sj.Shioaji:
         api_key=os.environ["SINOPAC_API_KEY"],
         secret_key=os.environ["SINOPAC_SECRET_KEY"],
     )
+    pfx_data = base64.b64decode(os.environ["SINOPAC_CA_B64"])
+    with tempfile.NamedTemporaryFile(suffix=".pfx", delete=False) as f:
+        f.write(pfx_data)
+        ca_path = f.name
     api.activate_ca(
-        ca_path=os.environ["SINOPAC_CA_PATH"],
+        ca_path=ca_path,
         ca_passwd=os.environ["SINOPAC_CA_PASSWD"],
         person_id=os.environ["SINOPAC_PERSON_ID"],
     )
@@ -125,7 +131,8 @@ def get_settlements(api: sj.Shioaji) -> list:
 
 
 if __name__ == "__main__":
-    api = test()
+    # api = test()
+    api = login()
     # print(open(api, "0050", 1))
     # for i in list_orders(api):
     # print(i)
@@ -134,5 +141,3 @@ if __name__ == "__main__":
     # print(s)
 
     api.logout()
-    # api = login()
-    # api.logout()
