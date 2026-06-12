@@ -130,10 +130,9 @@ if __name__ == "__main__":
     # for i in list_orders(api):
     # print(i)
 
-    for s in get_settlements(api):
-        print(s)
+    # for s in get_settlements(api):
+    # print(s)
 
     api.logout()
-
     # api = login()
     # api.logout()
