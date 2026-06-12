@@ -19,3 +19,4 @@ patsy
 xgboost
 plotly
 vectorbt
+shioaji

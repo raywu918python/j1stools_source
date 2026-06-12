@@ -126,3 +126,9 @@ else:
 
 print(f"saved backtest → {out_dir}/ ({today})")
 hf_sync.push([f"db/backtest/{MODEL_NAME}"])
+
+try:
+    from run_execute import execute
+    execute(open_df)
+except Exception as e:
+    print(f"[WARN] execute 失敗，不影響回測結果：{e}")
