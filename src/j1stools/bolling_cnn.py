@@ -694,7 +694,7 @@ if __name__ == "__main__":
         print(classification_report(y_test, pred, target_names=["中性", "向下", "向上"]))
 
         # 圖：向上機率分布（按真實標籤）
-        plt.rcParams["font.family"] = ["PingFang HK", "PingFang TC", "STHeiti", "Arial Unicode MS"]
+        plt.rcParams["font.family"] = ["Arial Unicode MS", "sans-serif"]
 
         _, axes = plt.subplots(1, 2, figsize=(12, 4))
         for cls, label, color in [
