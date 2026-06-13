@@ -485,7 +485,7 @@ def train_bolling_cnn(
 
 # ── 存取模型 ──────────────────────────────────────────────────────────────── #
 
-BOLLING_CNN_PATH = "db/models/bolling_cnn.joblib"
+BOLLING_CNN_PATH = "db/models/bolling_cnn_down.joblib"
 
 
 def save_bolling_cnn(clf: BollingCNNClassifier, path: str = BOLLING_CNN_PATH, hold_days: int = HOLD_DAYS) -> None:
