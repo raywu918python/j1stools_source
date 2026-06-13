@@ -1,36 +1,23 @@
 """
-BollingCNN Bounce：20日時序 → 從下軌反彈到中軌後方向預測（3分類）
+BollingCNN Bounce：20日時序 → 下軌觸碰後反彈方向預測（3分類）
 
-信號進場條件：
-  1. 過去 LOWER_LOOKBACK(5) 天內曾碰到下軌（close <= bb_lower * (1 + TOUCH_TOL)）
-  2. 當天收盤回到中軌以上（close >= bb_mid）
-  3. 當天紅K（close > open）
-  4. 當天成交量 >= 1.2x 均量（bb_volume_ratio >= 1.2）
+信號進場條件（entry filter）：
+  1. 過去 LOWER_LOOKBACK 天內曾碰到下軌（bb_lower_touch_recent）
+  2. 當天已離開下軌（close > bb_lower * (1 + TOUCH_TOL)）
+  3. 當天未碰到上軌（close < bb_upper * (1 - TOUCH_TOL)）
 
 標籤（N日後報酬）：
     Y=2  向上：future_return >= +LABEL_TARGET
     Y=1  向下：future_return <= -LABEL_TARGET
     Y=0  中性：其餘
 
-BB_FEATURES (18):
-  bb_daily_return   日報酬率
-  bb_volume_ratio   成交量 / 20日均量
-  bb_hl_range       (high - low) / close
-  bb_close_pos      (close - low) / (high - low)
-  bb_pos_in_band    (close - BB_lower) / BB_width  （0~1+）
-  bb_width_pct      (BB_upper - BB_lower) / BB_mid  （通道寬度）
-  bb_atr_pct        ATR14 / close
-  bb_rsi            RSI14 正規化至 [-1, 1]
-  bb_macd_hist      MACD histogram / close
-  bb_foreign_net    外資淨買 / 成交量
-  bb_margin_chg     融資餘額日增率
-  bb_dt_ratio       當沖成交量 / 總成交量
-  bb_days_since_lower  距離上次碰下軌的天數（1~LOWER_LOOKBACK，0=未碰）
-  bb_pos_mean3      前3天 bb_pos_in_band 平均
-  bb_body_ratio     K棒實體 / 總寬
-  bb_upper_shadow   上影線 / 總寬
-  bb_lower_shadow   下影線 / 總寬
-  bb_gap            開盤跳空率
+BB_FEATURES (6):
+  bb_pos_in_band         (close - BB_lower) / BB_width（0~1）
+  bb_volume_ratio        成交量 / 20日均量
+  bb_atr_pct             ATR14 / close
+  bb_atr_slope           ATR/close 近5日斜率（是否上漲）
+  bb_foreign_consec_days 外資連續買入天數（0=未買，正數=連買，上限20）
+  bb_days_since_lower    距上次碰下軌天數（1~LOWER_LOOKBACK）
 """
 
 import numpy as np
@@ -40,20 +27,12 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 BB_FEATURES = [
-    "bb_volume_ratio",
-    "bb_close_pos",
     "bb_pos_in_band",
-    "bb_width_pct",
+    "bb_volume_ratio",
     "bb_atr_pct",
-    "bb_rsi",
-    "bb_macd_hist",
-    "bb_foreign_net",
-    "bb_margin_chg",
-    "bb_dt_ratio",
+    "bb_atr_slope",
+    "bb_foreign_consec_days",
     "bb_days_since_lower",
-    "bb_body_ratio",
-    "bb_upper_shadow",
-    "bb_gap",
 ]
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
@@ -62,7 +41,7 @@ LABEL_TARGET = 0.03  # ±3% 判定方向
 BB_PERIOD = 20
 BB_STD = 2.0
 TOUCH_TOL = 0.01  # close <= lower * (1+0.01) 視為碰下軌
-LOWER_LOOKBACK = 5  # 過去幾天內曾碰下軌
+LOWER_LOOKBACK = 10  # 過去幾天內曾碰下軌
 MIN_ATR_PCT = 0.03
 
 
@@ -88,29 +67,9 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     df_price["date"] = pd.to_datetime(df_price["date"])
     df_price = df_price.sort_values(["stock_id", "date"])
 
-    # ── 日報酬 ──
-    df_price["bb_daily_return"] = df_price.groupby("stock_id")["close"].pct_change(fill_method=None)
-
     # ── 成交量比 ──
     df_price["bb_volume_ratio"] = df_price.groupby("stock_id")["volume"].transform(
         lambda x: x / x.rolling(20, min_periods=5).mean()
-    )
-
-    # ── K 棒特徵 ──
-    hl = (df_price["high"] - df_price["low"]).replace(0, np.nan)
-    df_price["bb_hl_range"] = hl / df_price["close"].replace(0, np.nan)
-    df_price["bb_close_pos"] = (df_price["close"] - df_price["low"]) / hl
-
-    # ── K 棒型態（需要 open）──
-    body_top = df_price[["open", "close"]].max(axis=1)
-    body_bot = df_price[["open", "close"]].min(axis=1)
-    df_price["bb_body_ratio"] = ((body_top - body_bot) / hl).clip(0, 1)
-    df_price["bb_upper_shadow"] = ((df_price["high"] - body_top) / hl).clip(0, 1)
-    df_price["bb_lower_shadow"] = ((body_bot - df_price["low"]) / hl).clip(0, 1)
-    df_price["bb_gap"] = (
-        df_price.groupby("stock_id", group_keys=False)
-        .apply(lambda g: (g["open"] / g["close"].shift(1) - 1), include_groups=False)
-        .clip(-0.1, 0.1)
     )
 
     # ── ATR14 ──
@@ -127,6 +86,11 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
 
     df_price["atr14_pct"] = df_price.groupby("stock_id", group_keys=False).apply(_atr14, include_groups=False)
     df_price["bb_atr_pct"] = df_price["atr14_pct"]
+
+    # ATR 近5日斜率（是否上漲）
+    df_price["bb_atr_slope"] = df_price.groupby("stock_id")["bb_atr_pct"].transform(
+        lambda x: (x - x.shift(5)).clip(-0.05, 0.05)
+    )
 
     # ── Bollinger Bands（向量化）──
     _pv = df_price.pivot(index="date", columns="stock_id", values="close")
@@ -145,28 +109,8 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     df_price = df_price.merge(_stack_col(_bb_width, "bb_width"), on=["date", "stock_id"], how="left")
 
     df_price["bb_pos_in_band"] = (df_price["close"] - df_price["bb_lower"]) / df_price["bb_width"]
-    df_price["bb_width_pct"] = df_price["bb_width"] / df_price["bb_mid"].replace(0, np.nan)
 
-    # ── RSI14 ──
-    _ret = _pv.pct_change(fill_method=None)
-    _gain = _ret.clip(lower=0)
-    _loss = (-_ret).clip(lower=0)
-    _avg_gain = _gain.ewm(com=13, adjust=False).mean()
-    _avg_loss = _loss.ewm(com=13, adjust=False).mean()
-    _rs = _avg_gain / (_avg_loss + 1e-9)
-    _rsi = 100 - 100 / (1 + _rs)
-    _rsi_norm = (_rsi / 50 - 1).clip(-1, 1)
-    df_price = df_price.merge(_stack_col(_rsi_norm, "bb_rsi"), on=["date", "stock_id"], how="left")
-
-    # ── MACD histogram ──
-    _ema12 = _pv.ewm(span=12, adjust=False).mean()
-    _ema26 = _pv.ewm(span=26, adjust=False).mean()
-    _macd = _ema12 - _ema26
-    _sig = _macd.ewm(span=9, adjust=False).mean()
-    _hist = (_macd - _sig) / _pv.replace(0, np.nan)
-    df_price = df_price.merge(_stack_col(_hist, "bb_macd_hist"), on=["date", "stock_id"], how="left")
-
-    # ── 籌碼：外資 ──
+    # ── 籌碼：外資連買天數 ──
     print(f"  [BounceCNN] ib... ({_time.time()-_t0:.1f}s)")
     df_ib = parquet_db.query_ib(stocks, st, end)
     df_ib["date"] = pd.to_datetime(df_ib["date"])
@@ -179,44 +123,25 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
         .rename(columns={"net": "_foreign_net_raw"})
     )
     df_price = df_price.merge(tmp_foreign, on=["date", "stock_id"], how="left")
-    vol = df_price["volume"].replace(0, np.nan)
-    df_price["bb_foreign_net"] = df_price["_foreign_net_raw"].fillna(0) / vol
+    df_price["_foreign_net_raw"] = df_price["_foreign_net_raw"].fillna(0)
+
+    def _foreign_consec(x):
+        result = np.zeros(len(x), dtype=np.float32)
+        count = 0
+        for i, v in enumerate(x.values):
+            count = (count + 1) if v > 0 else 0
+            result[i] = min(count, 20)
+        return pd.Series(result, index=x.index)
+
+    df_price["bb_foreign_consec_days"] = df_price.groupby("stock_id", group_keys=False).apply(
+        lambda g: _foreign_consec(df_price.loc[g.index, "_foreign_net_raw"]), include_groups=False
+    )
     df_price = df_price.drop(columns=["_foreign_net_raw"])
 
-    # ── 籌碼：融資 ──
-    print(f"  [BounceCNN] margin... ({_time.time()-_t0:.1f}s)")
-    df_margin = parquet_db.query_margin(stocks, st, end)
-    df_margin["date"] = pd.to_datetime(df_margin["date"])
-    base = df_margin["margin_purchase_yesterday_balance"].replace(0, np.nan)
-    df_margin["_margin_chg"] = (
-        df_margin["margin_purchase_today_balance"] - df_margin["margin_purchase_yesterday_balance"]
-    ) / base
-    df_price = df_price.merge(df_margin[["date", "stock_id", "_margin_chg"]], on=["date", "stock_id"], how="left")
-    df_price["bb_margin_chg"] = df_price["_margin_chg"].fillna(0)
-    df_price = df_price.drop(columns=["_margin_chg"])
-
-    # ── 籌碼：當沖 ──
-    print(f"  [BounceCNN] day_trade... ({_time.time()-_t0:.1f}s)")
-    df_dt = parquet_db.query_day_trade(stocks, st, end)
-    df_dt["date"] = pd.to_datetime(df_dt["date"])
-    df_price = df_price.merge(
-        df_dt[["date", "stock_id", "volume"]].rename(columns={"volume": "_dt_vol"}),
-        on=["date", "stock_id"],
-        how="left",
-    )
-    df_price["bb_dt_ratio"] = df_price["_dt_vol"].fillna(0) / vol
-    df_price = df_price.drop(columns=["_dt_vol"])
-
     # ── Clip 極端值 ──
-    df_price["bb_daily_return"] = df_price["bb_daily_return"].clip(-0.3, 0.3)
     df_price["bb_volume_ratio"] = df_price["bb_volume_ratio"].clip(0, 10)
     df_price["bb_pos_in_band"] = df_price["bb_pos_in_band"].clip(-0.5, 2.5)
-    df_price["bb_width_pct"] = df_price["bb_width_pct"].clip(0, 0.5)
     df_price["bb_atr_pct"] = df_price["bb_atr_pct"].clip(0, 0.3)
-    df_price["bb_macd_hist"] = df_price["bb_macd_hist"].clip(-0.05, 0.05)
-    df_price["bb_foreign_net"] = df_price["bb_foreign_net"].clip(-5, 5)
-    df_price["bb_margin_chg"] = df_price["bb_margin_chg"].clip(-5, 5)
-    df_price["bb_dt_ratio"] = df_price["bb_dt_ratio"].clip(0, 1)
 
     # ── 下軌碰觸信號 ──
     df_price["bb_lower_touch"] = (df_price["close"] <= df_price["bb_lower"] * (1 + TOUCH_TOL)).astype(np.int8)
@@ -229,12 +154,11 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
         .astype(np.int8)
     )
 
-    # 進場信號：前幾天碰過下軌 + 今天回到中軌以上 + 紅K + 放量
+    # 進場信號：曾碰下軌 + 已離開下軌 + 未碰上軌
     df_price["bb_bounce_signal"] = (
         (df_price["bb_lower_touch_recent"] == 1)
-        & (df_price["close"] >= df_price["bb_mid"])
-        & (df_price["close"] > df_price["open"])
-        & (df_price["bb_volume_ratio"] >= 1.2)
+        & (df_price["close"] > df_price["bb_lower"] * (1 + TOUCH_TOL))
+        & (df_price["close"] < df_price["bb_upper"] * (1 - TOUCH_TOL))
     ).astype(np.int8)
 
     # 距離上次碰下軌的天數（給 CNN 時序參考）
@@ -251,13 +175,6 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
 
     df_price["bb_days_since_lower"] = df_price.groupby("stock_id", group_keys=False).apply(
         lambda g: _days_since(df_price.loc[g.index, "bb_lower_touch"]), include_groups=False
-    )
-
-    # ── 前3天 bb_pos_in_band 平均 ──
-    df_price["bb_pos_mean3"] = (
-        df_price.groupby("stock_id")["bb_pos_in_band"]
-        .transform(lambda x: x.shift(1).rolling(3, min_periods=2).mean())
-        .clip(-0.5, 2.5)
     )
 
     cols = ["date", "stock_id", "atr14_pct", "bb_bounce_signal", "bb_lower_touch_recent"] + BB_FEATURES
@@ -377,13 +294,14 @@ class _FocalLoss(nn.Module):
 class _BollingCNN(nn.Module):
     def __init__(self, n_features: int, n_classes: int = 3):
         super().__init__()
+        # Input: (batch, n_features, time_steps) = (batch, 6, 20)
         self.conv1 = nn.Conv1d(n_features, 64, kernel_size=5, padding=2)
         self.bn1 = nn.BatchNorm1d(64)
         self.conv2 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm1d(128)
         self.conv3 = nn.Conv1d(128, 64, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm1d(64)
-        self.pool = nn.AdaptiveAvgPool1d(10)
+        self.pool = nn.AdaptiveAvgPool1d(10)  # 20/10=2 ✓
         self.dropout = nn.Dropout(0.4)
         self.fc1 = nn.Linear(64 * 10, 64)
         self.fc2 = nn.Linear(64, n_classes)
@@ -707,7 +625,7 @@ if __name__ == "__main__":
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
     LOOKBACK = 20
-    MODE = "train"  # "train" | "eval" | "backtest"
+    MODE = "eval"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
