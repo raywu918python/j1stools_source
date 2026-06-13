@@ -44,7 +44,7 @@ BB_FEATURES = [
 ]
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
-HOLD_DAYS = 5
+HOLD_DAYS = 10
 LABEL_TARGET = 0.03  # ±3% 判定方向
 BB_PERIOD = 20
 BB_STD = 2.0
@@ -486,10 +486,9 @@ def train_bolling_cnn(
 # ── 存取模型 ──────────────────────────────────────────────────────────────── #
 
 BOLLING_CNN_PATH = "db/models/bolling_cnn.joblib"
-BOLLING_SCORES_PATH = "db/models/bolling_cnn_scores.parquet"
 
 
-def save_bolling_cnn(clf: BollingCNNClassifier, path: str = BOLLING_CNN_PATH) -> None:
+def save_bolling_cnn(clf: BollingCNNClassifier, path: str = BOLLING_CNN_PATH, hold_days: int = HOLD_DAYS) -> None:
     import joblib, os
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -498,6 +497,7 @@ def save_bolling_cnn(clf: BollingCNNClassifier, path: str = BOLLING_CNN_PATH) ->
             "lookback": clf.lookback,
             "lr": clf.lr,
             "batch_size": clf.batch_size,
+            "hold_days": hold_days,
             "feat_mean": clf._feat_mean,
             "feat_std": clf._feat_std,
             "n_features": clf._model.conv1.in_channels,
@@ -505,10 +505,10 @@ def save_bolling_cnn(clf: BollingCNNClassifier, path: str = BOLLING_CNN_PATH) ->
         },
         path,
     )
-    print(f"BollingCNN 已存：{path}")
+    print(f"BollingCNN 已存：{path}（hold_days={hold_days}）")
 
 
-def load_bolling_cnn(path: str = BOLLING_CNN_PATH) -> BollingCNNClassifier:
+def load_bolling_cnn(path: str = BOLLING_CNN_PATH) -> tuple["BollingCNNClassifier", int]:
     import joblib
 
     state = joblib.load(path)
@@ -519,8 +519,9 @@ def load_bolling_cnn(path: str = BOLLING_CNN_PATH) -> BollingCNNClassifier:
     sd = {k: torch.from_numpy(v.copy()) for k, v in state["weights"].items()}
     clf._model.load_state_dict(sd)
     clf._model.eval()
-    print(f"BollingCNN 已載入：{path}")
-    return clf
+    hold_days = state.get("hold_days", HOLD_DAYS)
+    print(f"BollingCNN 已載入：{path}（hold_days={hold_days}）")
+    return clf, hold_days
 
 
 # ── 信號生成（回測用）────────────────────────────────────────────────────── #
@@ -626,8 +627,6 @@ if __name__ == "__main__":
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
     LOOKBACK = 20
-    HOLD_DAYS_CFG = 10
-
     # ── 切換模式 ──────────────────────────────────────────────────────────────── #
     #
     #  train    : 【重新訓練】建窗口 → 訓練 BollingCNNClassifier → 存模型
@@ -636,7 +635,7 @@ if __name__ == "__main__":
     #
     #  backtest : 【獨立回測】載現有模型 → make_signal → backtest_platform
     #
-    MODE = "backtest"  # "train" | "eval" | "backtest"
+    MODE = "eval"  # "train" | "eval" | "backtest"
     # ──────────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -644,22 +643,22 @@ if __name__ == "__main__":
     if MODE == "train":
         print("\n══ 建立訓練集 ══")
         X_train, y_train, df_tr = build_bolling_dataset(
-            stocks, TRAIN_ST, EVAL_ST, lookback=LOOKBACK, hold_days=HOLD_DAYS_CFG
+            stocks, TRAIN_ST, EVAL_ST, lookback=LOOKBACK, hold_days=HOLD_DAYS
         )
         print("\n══ 建立測試集 ══")
-        X_test, y_test, df_te = build_bolling_dataset(stocks, EVAL_ST, lookback=LOOKBACK, hold_days=HOLD_DAYS_CFG)
+        X_test, y_test, df_te = build_bolling_dataset(stocks, EVAL_ST, lookback=LOOKBACK, hold_days=HOLD_DAYS)
         print(f"訓練集：{X_train.shape}  測試集：{X_test.shape}")
 
-        print(f"\n══ 訓練 BollingCNN（{HOLD_DAYS_CFG}日方向分類）══")
-        clf = train_bolling_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK)
-        save_bolling_cnn(clf, BOLLING_CNN_PATH)
+        print(f"\n══ 訓練 BollingCNN（{HOLD_DAYS}日方向分類）══")
+        clf = train_bolling_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, n_runs=1)
+        save_bolling_cnn(clf, BOLLING_CNN_PATH, hold_days=HOLD_DAYS)
 
     elif MODE == "eval":
         print(f"\n══ 載入模型 {BOLLING_CNN_PATH} ══")
-        clf = load_bolling_cnn(BOLLING_CNN_PATH)
+        clf, hold_days_loaded = load_bolling_cnn(BOLLING_CNN_PATH)
 
         print("\n══ 建立測試集 ══")
-        X_test, y_test, df_te = build_bolling_dataset(stocks, EVAL_ST, lookback=LOOKBACK, hold_days=HOLD_DAYS_CFG)
+        X_test, y_test, df_te = build_bolling_dataset(stocks, EVAL_ST, lookback=LOOKBACK, hold_days=hold_days_loaded)
 
         proba = clf.predict_proba(X_test)
         pred = proba.argmax(axis=1)
@@ -718,13 +717,13 @@ if __name__ == "__main__":
         axes[1].set_ylabel("真實向上比例")
         axes[1].set_title("Precision by decile (OOS)")
         axes[1].legend()
-        plt.suptitle(f"BollingCNN | {HOLD_DAYS_CFG}d | BB 碰上軌後方向")
+        plt.suptitle(f"BollingCNN | {hold_days_loaded}d | BB 碰上軌後方向")
         plt.tight_layout()
         plt.show()
 
     elif MODE == "backtest":
         print(f"\n══ 載入模型 {BOLLING_CNN_PATH} ══")
-        clf = load_bolling_cnn(BOLLING_CNN_PATH)
+        clf, hold_days_loaded = load_bolling_cnn(BOLLING_CNN_PATH)
 
         print("\n══ 獨立回測 ══")
         backtest_platform.IS_USE_CACHE = True
@@ -734,7 +733,7 @@ if __name__ == "__main__":
         print(f"sig dtypes:\n{sig.dtypes}")
         print(sig.head(3).to_string())
 
-        print(f"\n{'='*60}\n【BollingCNN 向上高機率 + 持有{HOLD_DAYS_CFG}日】\n{'='*60}")
+        print(f"\n{'='*60}\n【BollingCNN 向上高機率 + 持有{hold_days_loaded}日】\n{'='*60}")
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
             top_n=5,
@@ -746,7 +745,7 @@ if __name__ == "__main__":
             use_fixed_tp=True,
             tp_stop=0.10,
             use_hold_days=True,
-            hold_days=HOLD_DAYS_CFG,
+            hold_days=hold_days_loaded,
             group_limit=99,
             min_volume=200,
             use_fixed_sl_tp=False,
