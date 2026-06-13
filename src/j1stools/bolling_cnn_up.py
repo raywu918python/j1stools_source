@@ -41,6 +41,12 @@ BB_FEATURES = [
     "bb_foreign_net",
     "bb_margin_chg",
     "bb_dt_ratio",
+    "bb_consec_days",
+    "bb_pos_mean3",
+    "bb_body_ratio",
+    "bb_upper_shadow",
+    "bb_lower_shadow",
+    "bb_gap",
 ]
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
@@ -83,6 +89,18 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     hl = (df_price["high"] - df_price["low"]).replace(0, np.nan)
     df_price["bb_hl_range"] = hl / df_price["close"].replace(0, np.nan)
     df_price["bb_close_pos"] = (df_price["close"] - df_price["low"]) / hl
+
+    # ── K 棒型態（需要 open）──
+    body_top = df_price[["open", "close"]].max(axis=1)
+    body_bot = df_price[["open", "close"]].min(axis=1)
+    df_price["bb_body_ratio"] = ((body_top - body_bot) / hl).clip(0, 1)
+    df_price["bb_upper_shadow"] = ((df_price["high"] - body_top) / hl).clip(0, 1)
+    df_price["bb_lower_shadow"] = ((body_bot - df_price["low"]) / hl).clip(0, 1)
+    df_price["bb_gap"] = (
+        df_price.groupby("stock_id", group_keys=False)
+        .apply(lambda g: (g["open"] / g["close"].shift(1) - 1), include_groups=False)
+        .clip(-0.1, 0.1)
+    )
 
     # ── ATR14 ──
     def _atr14(grp):
@@ -192,7 +210,34 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     df_price["bb_margin_chg"] = df_price["bb_margin_chg"].clip(-5, 5)
     df_price["bb_dt_ratio"] = df_price["bb_dt_ratio"].clip(0, 1)
 
-    cols = ["date", "stock_id", "atr14_pct", "bb_touch"] + BB_FEATURES
+    # ── 連續貼近上軌天數（bb_pos_in_band >= 0.85，遇中斷歸零）──
+    _near_bool = df_price["bb_pos_in_band"] >= 0.85
+
+    def _consec_count(x):
+        result = np.zeros(len(x), dtype=np.float32)
+        count = 0
+        for i, v in enumerate(x.values):
+            count = count + 1 if v else 0
+            result[i] = count
+        return pd.Series(result, index=x.index)
+
+    df_price["bb_consec_days"] = (
+        df_price.groupby("stock_id", group_keys=False)
+        .apply(lambda g: _consec_count(_near_bool.loc[g.index]), include_groups=False)
+        .clip(0, 20)  # 最多記 20 天，避免極端值
+    )
+
+    # ── 前3天 bb_pos_in_band 平均（顯式告知近期貼近程度）──
+    df_price["bb_pos_mean3"] = (
+        df_price.groupby("stock_id")["bb_pos_in_band"]
+        .transform(lambda x: x.shift(1).rolling(3, min_periods=2).mean())
+        .clip(-0.5, 2.5)
+    )
+
+    # ── 連續貼近上軌過濾旗標：連續 >= 5 天 ──
+    df_price["bb_consec5_near_upper"] = (df_price["bb_consec_days"] >= 5).astype(np.int8)
+
+    cols = ["date", "stock_id", "atr14_pct", "bb_touch", "bb_consec5_near_upper"] + BB_FEATURES
     print(f"  [BollingCNN] 特徵完成（{_time.time()-_t0:.1f}s），共 {len(df_price):,} 行")
     return df_price[cols].sort_values(["stock_id", "date"]).reset_index(drop=True)
 
@@ -206,19 +251,26 @@ def build_bolling_dataset(
     end: str = "2099-01-01",
     lookback: int = 20,
     hold_days: int = HOLD_DAYS,
-    label_target: float = LABEL_TARGET,
     min_atr_pct: float = MIN_ATR_PCT,
+    profit_target: float = 0.10,
+    stop_loss: float = -0.10,
 ) -> tuple[np.ndarray, np.ndarray, object]:
     """
     建構 Bollinger 碰上軌後方向預測資料集。
 
+    標籤由 profit_label 決定（對齊回測 TP/SL 邏輯）：
+        Y=2: 持有期內先碰 +profit_target（停利）
+        Y=1: 持有期內先碰 stop_loss（停損）
+        Y=0: 時間到出場（盤整）
+
     回傳 (X, y, df_meta)：
         X      : (n, lookback, n_features) float32
         y      : (n,) int，0=中性, 1=向下, 2=向上
-        df_meta: 對應 DataFrame（含 date, stock_id, Y, future_return）
+        df_meta: 對應 DataFrame（含 date, stock_id, Y）
     """
     import pandas as pd
     from j1stools import parquet_db
+    from j1stools.label_builder import profit_label
 
     st_buf = (pd.Timestamp(st) - pd.DateOffset(days=lookback * 3)).strftime("%Y-%m-%d")
     end_buf = (pd.Timestamp(end) + pd.DateOffset(days=hold_days * 2)).strftime("%Y-%m-%d")
@@ -227,26 +279,24 @@ def build_bolling_dataset(
     df_all = build_bb_daily_features(stocks, st_buf, end_buf)
     df_all["date"] = pd.to_datetime(df_all["date"])
 
-    # ── hold_days 後報酬（用原始 price 避免 clipped return 失真）──
-    df_px = parquet_db.query_price(stocks, st_buf, end_buf)[["date", "stock_id", "close"]]
+    # ── 合併 high/low（profit_label 需要）──
+    df_px = parquet_db.query_price(stocks, st_buf, end_buf)[["date", "stock_id", "high", "low", "close"]]
     df_px["date"] = pd.to_datetime(df_px["date"])
-    df_px = df_px.sort_values(["stock_id", "date"])
-    df_px["future_return"] = df_px.groupby("stock_id")["close"].transform(lambda x: x.shift(-hold_days) / x - 1)
-    df_all = df_all.merge(df_px[["date", "stock_id", "future_return"]], on=["date", "stock_id"], how="left")
+    df_all = df_all.merge(df_px, on=["date", "stock_id"], how="left")
 
-    # ── 標籤 ──
-    df_all["Y"] = 0
-    df_all.loc[df_all["future_return"] >= label_target, "Y"] = 2
-    df_all.loc[df_all["future_return"] <= -label_target, "Y"] = 1
+    # ── 標籤（TP/SL 路徑，對齊回測邏輯）──
+    df_all = profit_label(df_all, hold_days=hold_days, profit_target=profit_target, stop_loss=stop_loss)
+    df_all = df_all.rename(columns={"target": "Y"})
 
-    # ── 信號過濾：bb_touch=1, ATR 合格, 在信號區間, 有完整標籤 ──
+    # ── 信號過濾：bb_touch=1, ATR 合格, 在信號區間 ──
     df_signal = (
         df_all[
             (df_all["date"] >= pd.Timestamp(st))
             & (df_all["date"] < pd.Timestamp(end))
             & (df_all["bb_touch"] == 1)
+            & (df_all["bb_consec5_near_upper"] == 1)
             & (df_all["atr14_pct"].fillna(0) >= min_atr_pct)
-            & df_all["future_return"].notna()
+            & df_all["Y"].notna()
         ]
         .copy()
         .reset_index(drop=True)
@@ -255,7 +305,7 @@ def build_bolling_dataset(
     label_dist = df_signal["Y"].value_counts(normalize=True).sort_index()
     print(
         f"信號數：{len(df_signal):,}  "
-        f"中性={label_dist.get(0,0):.1%}  向下={label_dist.get(1,0):.1%}  向上={label_dist.get(2,0):.1%}"
+        f"盤整(Y=0)={label_dist.get(0,0):.1%}  停損(Y=1)={label_dist.get(1,0):.1%}  停利(Y=2)={label_dist.get(2,0):.1%}"
     )
 
     # ── 建立時序窗口（stride_tricks）──
@@ -371,18 +421,19 @@ class BollingCNNClassifier:
             counts = np.bincount(y, minlength=3).astype(np.float32)
             weights = torch.tensor(counts.sum() / (3 * counts + 1e-9), dtype=torch.float32).to(device)
             print(f"  類別權重：{weights.tolist()}")
-            criterion = nn.CrossEntropyLoss(weight=weights)
+            criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
         else:
-            criterion = nn.CrossEntropyLoss()
+            criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-        optimizer = torch.optim.Adam(self._model.parameters(), lr=self.lr, weight_decay=1e-4)
+        optimizer = torch.optim.Adam(self._model.parameters(), lr=self.lr, weight_decay=1e-3)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs, eta_min=1e-5)
 
         X_t = torch.tensor(X_n.transpose(0, 2, 1).astype(np.float32))
         y_t = torch.tensor(y, dtype=torch.long)
         loader = DataLoader(TensorDataset(X_t, y_t), batch_size=self.batch_size, shuffle=True, drop_last=True)
 
-        best_val_acc = -np.inf
+        PREC_THR = 0.48  # early stopping 監控的 up_prob 閾值
+        best_val_metric = -np.inf
         best_state = None
         no_improve = 0
 
@@ -411,14 +462,14 @@ class BollingCNNClassifier:
                     with torch.no_grad():
                         vt = torch.tensor(X_val_n.transpose(0, 2, 1).astype(np.float32)).to(device)
                         logits_v = self._model(vt)
-                        pred_v = logits_v.argmax(1).cpu().numpy()
-                    val_acc = (pred_v == y_val).mean()
-                    # 向上（Y=2）召回率
-                    up_mask = y_val == 2
-                    up_recall = (pred_v[up_mask] == 2).mean() if up_mask.sum() > 0 else 0.0
-                    msg += f"  val_acc={val_acc:.3f}  up_recall={up_recall:.3f}"
-                    if val_acc > best_val_acc:
-                        best_val_acc = val_acc
+                        up_prob_v = F.softmax(logits_v, dim=1)[:, 2].cpu().numpy()
+                    val_acc = (logits_v.argmax(1).cpu().numpy() == y_val).mean()
+                    thr_mask = up_prob_v >= PREC_THR
+                    val_prec = (y_val[thr_mask] == 2).mean() if thr_mask.sum() >= 30 else 0.0
+                    val_n = thr_mask.sum()
+                    msg += f"  val_acc={val_acc:.3f}  prec@{PREC_THR}={val_prec:.3f}(n={val_n})"
+                    if val_prec > best_val_metric:
+                        best_val_metric = val_prec
                         best_state = {k: v.cpu().clone() for k, v in self._model.state_dict().items()}
                         no_improve = 0
                         msg += " ✓"
@@ -426,12 +477,12 @@ class BollingCNNClassifier:
                         no_improve += 5
                 print(msg)
                 if X_val is not None and no_improve >= patience:
-                    print(f"  Early stopping（val_acc 連 {patience} epoch 未改善）")
+                    print(f"  Early stopping（prec@{PREC_THR} 連 {patience} epoch 未改善）")
                     break
 
         if best_state is not None:
             self._model.load_state_dict(best_state)
-            print(f"  最佳 val_acc：{best_val_acc:.4f}")
+            print(f"  最佳 prec@{PREC_THR}：{best_val_metric:.4f}")
         self._model.eval().to("cpu")
         return self
 
@@ -548,6 +599,7 @@ def make_signal_bolling_cnn(
         df_all[
             (df_all["date"] >= pd.Timestamp(st))
             & (df_all["bb_touch"] == 1)
+            & (df_all["bb_consec5_near_upper"] == 1)
             & (df_all["atr14_pct"].fillna(0) >= min_atr_pct)
         ]
         .copy()
@@ -635,7 +687,7 @@ if __name__ == "__main__":
     #
     #  backtest : 【獨立回測】載現有模型 → make_signal → backtest_platform
     #
-    MODE = "eval"  # "train" | "eval" | "backtest"
+    MODE = "backtest"  # "train" | "eval" | "backtest"
     # ──────────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -737,7 +789,7 @@ if __name__ == "__main__":
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
             top_n=5,
-            threshold=0.4,
+            threshold=0.5,
             max_positions=3,
             use_sl_trail=False,
             use_fixed_sl=True,
