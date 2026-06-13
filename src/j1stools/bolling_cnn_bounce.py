@@ -362,6 +362,18 @@ def build_bolling_dataset(
 # ── CNN 架構 ──────────────────────────────────────────────────────────────── #
 
 
+class _FocalLoss(nn.Module):
+    def __init__(self, weight=None, gamma: float = 2.0):
+        super().__init__()
+        self.weight = weight
+        self.gamma = gamma
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce = F.cross_entropy(logits, targets, weight=self.weight, reduction="none")
+        pt = torch.exp(-ce)
+        return ((1 - pt) ** self.gamma * ce).mean()
+
+
 class _BollingCNN(nn.Module):
     def __init__(self, n_features: int, n_classes: int = 3):
         super().__init__()
@@ -377,11 +389,11 @@ class _BollingCNN(nn.Module):
         self.fc2 = nn.Linear(64, n_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.gelu(self.bn1(self.conv1(x)))
+        x = F.gelu(self.bn2(self.conv2(x)))
+        x = F.gelu(self.bn3(self.conv3(x)))
         x = self.pool(x).flatten(1)
-        x = self.dropout(F.relu(self.fc1(x)))
+        x = self.dropout(F.gelu(self.fc1(x)))
         return self.fc2(x)
 
 
@@ -438,9 +450,9 @@ class BollingCNNClassifier:
             counts = np.bincount(y, minlength=3).astype(np.float32)
             weights = torch.tensor(counts.sum() / (3 * counts + 1e-9), dtype=torch.float32).to(device)
             print(f"  類別權重：{weights.tolist()}")
-            criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
+            criterion = _FocalLoss(weight=weights, gamma=2.0)
         else:
-            criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+            criterion = _FocalLoss(gamma=2.0)
 
         optimizer = torch.optim.Adam(self._model.parameters(), lr=self.lr, weight_decay=1e-3)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs, eta_min=1e-5)
@@ -709,7 +721,7 @@ if __name__ == "__main__":
         print(f"訓練集：{X_train.shape}  測試集：{X_test.shape}")
 
         print(f"\n══ 訓練 BounceCNN（{HOLD_DAYS}日方向分類）══")
-        clf = train_bolling_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, n_runs=3)
+        clf = train_bolling_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, n_runs=1)
         save_bolling_cnn(clf, BOLLING_CNN_PATH, hold_days=HOLD_DAYS)
 
     elif MODE == "eval":
