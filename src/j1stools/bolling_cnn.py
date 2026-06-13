@@ -674,6 +674,20 @@ if __name__ == "__main__":
         print(f"向上 (Y=2) 召回率：{up_recall:.3f}  （真實向上={up_mask.sum()}筆）")
         print(f"向下 (Y=1) 召回率：{dn_recall:.3f}  （真實向下={dn_mask.sum()}筆）")
 
+        # 閾值掃描：up_prob >= threshold 時的精準率與信號量
+        print(f"\n{'─'*52}")
+        print(f"{'up_prob >=':>12}  {'精準率(上)':>10}  {'信號數':>7}  {'佔比':>6}")
+        print(f"{'─'*52}")
+        for thr in [0.35, 0.38, 0.40, 0.42, 0.44, 0.46, 0.48, 0.50, 0.52, 0.55]:
+            mask = up_prob >= thr
+            n = mask.sum()
+            if n == 0:
+                continue
+            prec = (y_test[mask] == 2).mean()
+            pct = n / len(y_test)
+            print(f"{thr:>12.2f}  {prec:>10.1%}  {n:>7,}  {pct:>6.1%}")
+        print(f"{'─'*52}")
+
         # 混淆矩陣
         from sklearn.metrics import classification_report
 
@@ -681,6 +695,8 @@ if __name__ == "__main__":
         print(classification_report(y_test, pred, target_names=["中性", "向下", "向上"]))
 
         # 圖：向上機率分布（按真實標籤）
+        plt.rcParams["font.family"] = ["PingFang HK", "PingFang TC", "STHeiti", "Arial Unicode MS"]
+
         _, axes = plt.subplots(1, 2, figsize=(12, 4))
         for cls, label, color in [
             (2, "向上(Y=2)", "seagreen"),
@@ -712,7 +728,7 @@ if __name__ == "__main__":
 
         print("\n══ 獨立回測 ══")
         backtest_platform.IS_USE_CACHE = True
-        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=0.48)
+        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=0.50)
 
         print(f"sig 欄位：{sig.columns.tolist()}")
         print(f"sig dtypes:\n{sig.dtypes}")
