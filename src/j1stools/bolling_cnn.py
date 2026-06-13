@@ -739,7 +739,7 @@ if __name__ == "__main__":
             sig,
             top_n=5,
             threshold=0.4,
-            max_positions=5,
+            max_positions=3,
             use_sl_trail=False,
             use_fixed_sl=True,
             sl_stop=0.10,
