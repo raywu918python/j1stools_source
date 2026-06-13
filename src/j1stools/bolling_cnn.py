@@ -749,7 +749,12 @@ if __name__ == "__main__":
             hold_days=HOLD_DAYS_CFG,
             group_limit=99,
             min_volume=200,
+            use_fixed_sl_tp=False,
         )
+        count = 20
+        if td is not None and len(td) > 0:
+            print(f"\n最近 {count} 筆交易（共 {len(td):,} 筆）：")
+            print(td.tail(count).to_string(index=False))
         j1s_chart.plot_performance(pv, td)
 
     else:
