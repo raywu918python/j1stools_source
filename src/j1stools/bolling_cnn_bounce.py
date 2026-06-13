@@ -2,8 +2,10 @@
 BollingCNN Bounce：20日時序 → 從下軌反彈到中軌後方向預測（3分類）
 
 信號進場條件：
-  1. 過去 LOWER_LOOKBACK 天內曾碰到下軌（close <= bb_lower * (1 + TOUCH_TOL)）
+  1. 過去 LOWER_LOOKBACK(5) 天內曾碰到下軌（close <= bb_lower * (1 + TOUCH_TOL)）
   2. 當天收盤回到中軌以上（close >= bb_mid）
+  3. 當天紅K（close > open）
+  4. 當天成交量 >= 1.2x 均量（bb_volume_ratio >= 1.2）
 
 標籤（N日後報酬）：
     Y=2  向上：future_return >= +LABEL_TARGET
@@ -60,7 +62,7 @@ LABEL_TARGET = 0.03  # ±3% 判定方向
 BB_PERIOD = 20
 BB_STD = 2.0
 TOUCH_TOL = 0.01  # close <= lower * (1+0.01) 視為碰下軌
-LOWER_LOOKBACK = 10  # 過去幾天內曾碰下軌
+LOWER_LOOKBACK = 5  # 過去幾天內曾碰下軌
 MIN_ATR_PCT = 0.03
 
 
@@ -73,7 +75,7 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     新增：
       bb_lower_touch        : 當天碰下軌（1/0）
       bb_lower_touch_recent : 過去 LOWER_LOOKBACK 天內曾碰下軌（1/0）
-      bb_bounce_signal      : 進場信號 = lower_touch_recent=1 AND close >= bb_mid
+      bb_bounce_signal      : 進場信號 = lower_touch_recent=1 AND close>=bb_mid AND 紅K AND volume_ratio>=1.2
     """
     import pandas as pd
     import time as _time
@@ -227,9 +229,12 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
         .astype(np.int8)
     )
 
-    # 進場信號：前幾天碰過下軌 + 今天回到中軌以上
+    # 進場信號：前幾天碰過下軌 + 今天回到中軌以上 + 紅K + 放量
     df_price["bb_bounce_signal"] = (
-        (df_price["bb_lower_touch_recent"] == 1) & (df_price["close"] >= df_price["bb_mid"])
+        (df_price["bb_lower_touch_recent"] == 1)
+        & (df_price["close"] >= df_price["bb_mid"])
+        & (df_price["close"] > df_price["open"])
+        & (df_price["bb_volume_ratio"] >= 1.2)
     ).astype(np.int8)
 
     # 距離上次碰下軌的天數（給 CNN 時序參考）
@@ -690,7 +695,7 @@ if __name__ == "__main__":
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
     LOOKBACK = 20
-    MODE = "eval"  # "train" | "eval" | "backtest"
+    MODE = "train"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
