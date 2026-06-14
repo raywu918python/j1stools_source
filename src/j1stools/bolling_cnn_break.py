@@ -38,10 +38,10 @@ HOLD_DAYS = 10
 BB_PERIOD = 20
 BB_STD = 2.0
 MIN_ATR_PCT = 0.02
-ZONE_DAYS = 3          # 條件1&3 的觀察天數
+ZONE_DAYS = 3  # 條件1&3 的觀察天數
 ZONE_RANGE_PCT = 0.06  # 條件3：3根K max_high - min_low 上限（佔收盤比例）
 PROFIT_TARGET = 0.08  # 8% 視為突破成功
-PREC_THR = 0.6
+PREC_THR = 0.3
 THRESHOLD = 0.3
 
 # ── 原始特徵計算 ──────────────────────────────────────────────────────────── #
@@ -180,7 +180,8 @@ def build_break_dataset(
         n = len(close)
         padded = np.concatenate([close, np.full(hold_days, np.nan, dtype=np.float32)])
         stacked = np.stack([padded[h : h + n] for h in range(1, hold_days + 1)], axis=1)
-        max_future = np.nanmax(stacked, axis=1)
+        with np.errstate(all="ignore"):
+            max_future = np.nanmax(stacked, axis=1)
         fwd_ret = (max_future - close) / np.clip(close, 1e-6, None)
         result = (fwd_ret >= PROFIT_TARGET).astype(np.float32)
         result[-hold_days:] = np.nan
@@ -647,7 +648,7 @@ if __name__ == "__main__":
     EVAL_ST = "2024-01-01"
     LOOKBACK = 20
     MODEL_TYPE = "cnn"  # "cnn" | "lstm"
-    MODE = "backtest"  # "train" | "eval" | "backtest"
+    MODE = "train"  # "train" | "eval" | "backtest"
     # ─────────────────────────────────────────────────────────────────────── #
 
     MODEL_PATH = _model_path(MODEL_TYPE)
