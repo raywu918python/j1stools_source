@@ -1,14 +1,15 @@
 """
-BollingLGBMBreak：BB上軌盤整後突破預測（LGBM Regression）
+BollingLGBMBreak：BB上軌盤整後突破預測（LGBM Binary Classification）
 
 進場過濾條件（同時成立）：
     1. ZONE_DAYS 天的 close 都在 bb_mid ~ bb_upper 之間
     2. 其中最低1根K的 low 有碰到 bb_mid（下影線測中軌）
     3. ZONE_DAYS 根K的 max_high - min_low <= ZONE_RANGE_PCT
 
-標籤（連續）：
-    Y = 持有期（HOLD_DAYS）內最大收盤漲幅（fwd_max_return）
-    回測時按預測值排序，取 pred_return >= THRESHOLD 的信號進場
+標籤（profit_label 二分類）：
+    Y=1：持有期內先觸及 +PROFIT_TARGET 且未先觸及 -STOP_LOSS（真突破）
+    Y=0：觸及止損 或 持有期滿未達標（失敗）
+    回測時取 up_prob >= THRESHOLD 的信號進場
 
 特徵（信號當天，不需時序窗口）：
     bb_daily_return, bb_hl_range, bb_close_pos, bb_pos_in_band,
@@ -21,43 +22,45 @@ import pandas as pd
 
 BB_FEATURES = [
     # ── 原始 BB 特徵 ──
-    "bb_daily_return",   # 當日報酬率
-    "bb_hl_range",       # (high-low)/close
-    "bb_close_pos",      # (close-low)/(high-low)
-    "bb_pos_in_band",    # (close-lower)/width
-    "bb_width_pct",      # (upper-lower)/mid
-    "bb_atr_pct",        # ATR14/close
+    "bb_daily_return",  # 當日報酬率
+    "bb_hl_range",  # (high-low)/close
+    "bb_close_pos",  # (close-low)/(high-low)
+    "bb_pos_in_band",  # (close-lower)/width
+    "bb_width_pct",  # (upper-lower)/mid
+    "bb_atr_pct",  # ATR14/close
     # ── 新增：信號宇宙內仍有變異的特徵 ──
-    "vol_ratio",         # 今日量 / 20日均量（縮量 vs 放量盤整）
-    "ret_5d",            # 前5日漲幅（盤整前走勢強弱）
-    "ret_20d",           # 前20日漲幅（中期趨勢）
-    "bb_squeeze",        # bb_width / bb_width 20日均（帶寬收縮程度）
-    "dist_to_upper",     # (upper-close)/close（距上軌還有多遠）
+    "vol_ratio",  # 今日量 / 20日均量（縮量 vs 放量盤整）
+    "ret_5d",  # 前5日漲幅（盤整前走勢強弱）
+    "ret_20d",  # 前20日漲幅（中期趨勢）
+    "bb_squeeze",  # bb_width / bb_width 20日均（帶寬收縮程度）
+    "dist_to_upper",  # (upper-close)/close（距上軌還有多遠）
 ]
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
-HOLD_DAYS = 10          # 持有天數：進場後持有幾日（標籤窗口 & 回測出場）
-BB_PERIOD = 20          # BB 計算週期（20日移動平均）
-BB_STD = 2.0            # BB 標準差倍數（上軌 = 中軌 + 2σ）
-MIN_ATR_PCT = 0.02      # 最低 ATR 過濾：排除流動性差的股票（ATR14/close < 2% 不進場）
-ZONE_DAYS = 3           # 盤整觀察天數：條件1&3 的滾動窗口大小
-ZONE_RANGE_PCT = 0.06   # 盤整振幅上限：ZONE_DAYS 根K的 max_high-min_low / close <= 6%
-THRESHOLD = 0.05        # 回測進場門檻：pred_return >= THRESHOLD 才發出信號
+HOLD_DAYS = 10  # 持有天數：進場後持有幾日（標籤窗口 & 回測出場）
+BB_PERIOD = 20  # BB 計算週期（20日移動平均）
+BB_STD = 2.0  # BB 標準差倍數（上軌 = 中軌 + 2σ）
+MIN_ATR_PCT = 0.02  # 最低 ATR 過濾：排除流動性差的股票（ATR14/close < 2% 不進場）
+ZONE_DAYS = 3  # 盤整觀察天數：條件1&3 的滾動窗口大小
+ZONE_RANGE_PCT = 0.06  # 盤整振幅上限：ZONE_DAYS 根K的 max_high-min_low / close <= 6%
+PROFIT_TARGET = 0.08  # 止盈門檻：持有期內漲幅達 8% 視為真突破（profit_label class 2）
+STOP_LOSS = 0.05  # 止損門檻：持有期內跌幅達 5% 視為失敗（profit_label class 1）
+THRESHOLD = 0.46  # 回測進場門檻：up_prob >= THRESHOLD 才發出信號
 
 LGBM_PARAMS = {
-    "objective": "regression",   # 回歸預測未來最大漲幅
-    "metric": "rmse",            # 驗證集用 RMSE 做 early stopping
-    "num_leaves": 63,            # 樹的葉節點數（複雜度控制，63 ≈ 深度6）
-    "learning_rate": 0.03,       # 學習率（配合 n_estimators=1000）
-    "min_child_samples": 30,     # 每個葉節點最少樣本數（防過擬合）
-    "subsample": 0.8,            # 每棵樹隨機抽 80% 樣本（列採樣）
-    "subsample_freq": 1,         # 每棵樹都做 subsample
-    "colsample_bytree": 0.7,     # 每棵樹隨機抽 70% 特徵（欄採樣）
-    "reg_alpha": 0.1,            # L1 正則化
-    "reg_lambda": 1.0,           # L2 正則化
-    "n_estimators": 1000,        # 最大樹數（early stopping 會提前停）
-    "n_jobs": -1,                # 使用全部 CPU
-    "verbose": -1,               # 關閉 LightGBM 預設輸出
+    "objective": "binary",  # 二分類：預測突破成功機率
+    "metric": "auc",  # 驗證集用 AUC 做 early stopping
+    "num_leaves": 63,  # 樹的葉節點數（複雜度控制，63 ≈ 深度6）
+    "learning_rate": 0.03,  # 學習率（配合 n_estimators=1000）
+    "min_child_samples": 30,  # 每個葉節點最少樣本數（防過擬合）
+    "subsample": 0.8,  # 每棵樹隨機抽 80% 樣本（列採樣）
+    "subsample_freq": 1,  # 每棵樹都做 subsample
+    "colsample_bytree": 0.7,  # 每棵樹隨機抽 70% 特徵（欄採樣）
+    "reg_alpha": 0.1,  # L1 正則化
+    "reg_lambda": 1.0,  # L2 正則化
+    "n_estimators": 1000,  # 最大樹數（early stopping 會提前停）
+    "n_jobs": -1,  # 使用全部 CPU
+    "verbose": -1,  # 關閉 LightGBM 預設輸出
 }
 
 # ── 原始特徵計算（與 bolling_cnn_break 完全相同）─────────────────────────── #
@@ -126,17 +129,15 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     vol_ma20 = df.groupby("stock_id")["volume"].transform(lambda x: x.rolling(20, min_periods=5).mean())
     df["vol_ratio"] = (df["volume"] / vol_ma20.replace(0, np.nan)).clip(0, 10)
 
-    df["ret_5d"] = df.groupby("stock_id")["close"].transform(
-        lambda x: x.pct_change(5, fill_method=None)
-    ).clip(-0.5, 0.5)
-
-    df["ret_20d"] = df.groupby("stock_id")["close"].transform(
-        lambda x: x.pct_change(20, fill_method=None)
-    ).clip(-0.8, 0.8)
-
-    bb_width_ma20 = df.groupby("stock_id")["bb_width"].transform(
-        lambda x: x.rolling(20, min_periods=10).mean()
+    df["ret_5d"] = (
+        df.groupby("stock_id")["close"].transform(lambda x: x.pct_change(5, fill_method=None)).clip(-0.5, 0.5)
     )
+
+    df["ret_20d"] = (
+        df.groupby("stock_id")["close"].transform(lambda x: x.pct_change(20, fill_method=None)).clip(-0.8, 0.8)
+    )
+
+    bb_width_ma20 = df.groupby("stock_id")["bb_width"].transform(lambda x: x.rolling(20, min_periods=10).mean())
     df["bb_squeeze"] = (df["bb_width"] / bb_width_ma20.replace(0, np.nan)).clip(0, 3)
 
     df["dist_to_upper"] = ((df["bb_upper"] - df["close"]) / df["close"].replace(0, np.nan)).clip(-0.1, 0.2)
@@ -192,18 +193,12 @@ def build_break_dataset(
     df_all = build_bb_daily_features(stocks, st_buf, end_buf)
     df_all["date"] = pd.to_datetime(df_all["date"])
 
-    def _break_label(grp):
-        close = grp["close"].values.astype(np.float32)
-        n = len(close)
-        padded = np.concatenate([close, np.full(hold_days, np.nan, dtype=np.float32)])
-        stacked = np.stack([padded[h : h + n] for h in range(1, hold_days + 1)], axis=1)
-        with np.errstate(all="ignore"):
-            max_future = np.nanmax(stacked, axis=1)
-        fwd_ret = (max_future - close) / np.clip(close, 1e-6, None)
-        fwd_ret[-hold_days:] = np.nan
-        return pd.Series(fwd_ret.astype(np.float32), index=grp.index)
+    from j1stools.label_builder import profit_label as _profit_label
 
-    df_all["Y"] = df_all.groupby("stock_id", group_keys=False).apply(_break_label, include_groups=False)
+    df_all = _profit_label(df_all, hold_days=hold_days, profit_target=PROFIT_TARGET, stop_loss=-STOP_LOSS)
+    # Y=1：真突破（hit TP 未先 hit SL），Y=0：失敗（止損或盤整）
+    df_all["Y"] = (df_all["target"] == 2).astype(np.int8)
+    df_all = df_all.drop(columns=["target"])
 
     df_signal = (
         df_all[
@@ -211,30 +206,25 @@ def build_break_dataset(
             & (df_all["date"] < pd.Timestamp(end))
             & (df_all["bb_consolidation_signal"] == 1)
             & (df_all["atr14_pct"].fillna(0) >= min_atr_pct)
-            & df_all["Y"].notna()
         ]
         .copy()
         .reset_index(drop=True)
     )
-    df_signal["Y"] = df_signal["Y"].astype(np.float32)
 
-    y_arr = df_signal["Y"].values
-    print(
-        f"盤整信號：{len(df_signal):,}  "
-        f"Y mean={y_arr.mean():.3f}  p25={np.percentile(y_arr,25):.3f}  "
-        f"p50={np.median(y_arr):.3f}  p75={np.percentile(y_arr,75):.3f}  max={y_arr.max():.3f}"
-    )
+    n_pos = df_signal["Y"].sum()
+    pos_rate = df_signal["Y"].mean()
+    print(f"盤整信號：{len(df_signal):,}  Y=1（突破）：{n_pos:,} 筆  正例率：{pos_rate:.1%}")
 
     X = df_signal[BB_FEATURES].fillna(0).values.astype(np.float32)
-    y = df_signal["Y"].values
+    y = df_signal["Y"].values.astype(np.int8)
     return X, y, df_signal
 
 
-# ── LGBM 回歸器 ──────────────────────────────────────────────────────────── #
+# ── LGBM 分類器 ──────────────────────────────────────────────────────────── #
 
 
 class BollingBreakLGBM:
-    """BB上軌盤整後突破 LGBM 回歸器（預測未來最大漲幅）。"""
+    """BB上軌盤整後突破 LGBM 二分類器（預測突破成功機率）。"""
 
     def __init__(self, params: dict | None = None):
         self._params = {**LGBM_PARAMS, **(params or {})}
@@ -250,7 +240,12 @@ class BollingBreakLGBM:
     ) -> "BollingBreakLGBM":
         import lightgbm as lgb
 
-        self._model = lgb.LGBMRegressor(**self._params)
+        # 自動計算 scale_pos_weight 平衡正負例
+        n_neg = int((y == 0).sum())
+        n_pos = int((y == 1).sum())
+        params = {**self._params, "scale_pos_weight": n_neg / max(n_pos, 1)}
+
+        self._model = lgb.LGBMClassifier(**params)
 
         X_df = pd.DataFrame(X, columns=BB_FEATURES)
         X_val_df = pd.DataFrame(X_val, columns=BB_FEATURES) if X_val is not None else None
@@ -267,17 +262,22 @@ class BollingBreakLGBM:
         print("  特徵重要度：" + "  ".join(f"{n}={v}" for n, v in imp))
 
         if X_val_df is not None:
-            pred_v = self._model.predict(X_val_df)
-            ic = np.corrcoef(pred_v, y_val)[0, 1]
-            print(f"  val IC={ic:.4f}  pred 分布：min={pred_v.min():.3f}  p50={np.median(pred_v):.3f}  max={pred_v.max():.3f}")
+            from sklearn.metrics import roc_auc_score
+
+            up_prob_v = self._model.predict_proba(X_val_df)[:, 1]
+            auc = roc_auc_score(y_val, up_prob_v)
+            print(
+                f"  val AUC={auc:.4f}  up_prob 分布：min={up_prob_v.min():.3f}  "
+                f"p50={np.median(up_prob_v):.3f}  max={up_prob_v.max():.3f}"
+            )
 
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """回傳預測的未來最大漲幅（連續值）。"""
+        """回傳突破成功機率（up_prob）。"""
         assert self._model is not None
         X_df = pd.DataFrame(X, columns=BB_FEATURES)
-        return self._model.predict(X_df)
+        return self._model.predict_proba(X_df)[:, 1]
 
 
 # ── 訓練入口 ──────────────────────────────────────────────────────────────── #
@@ -289,11 +289,13 @@ def train_bolling_break_lgbm(
     X_val: np.ndarray | None = None,
     y_val: np.ndarray | None = None,
 ) -> BollingBreakLGBM:
-    print(f"\n── 訓練 BollingBreakLGBM (Regression) ──")
+    from sklearn.metrics import roc_auc_score
+
+    print(f"\n── 訓練 BollingBreakLGBM (Binary) ──")
     clf = BollingBreakLGBM()
     clf.fit(X_train, y_train, X_val=X_val, y_val=y_val)
-    train_ic = np.corrcoef(clf.predict(X_train), y_train)[0, 1]
-    print(f"訓練集 IC：{train_ic:.4f}（in-sample）")
+    train_auc = roc_auc_score(y_train, clf.predict(X_train))
+    print(f"訓練集 AUC：{train_auc:.4f}（in-sample）")
     return clf
 
 
@@ -350,21 +352,21 @@ def make_signal_bolling_break_lgbm(
     print(f"  盤整信號：{len(df_scan):,} 筆")
 
     if df_scan.empty:
-        return pd.DataFrame(columns=["date", "stock_id", "pred_return"])
+        return pd.DataFrame(columns=["date", "stock_id", "up_prob"])
 
     X = df_scan[BB_FEATURES].fillna(0).values.astype(np.float32)
-    pred_return = clf.predict(X)
+    up_prob = clf.predict(X)
 
     signal = df_scan[["date", "stock_id"]].copy()
-    signal["pred_return"] = pred_return
-    signal["2"] = pred_return
+    signal["up_prob"] = up_prob
+    signal["2"] = up_prob  # backtest_platform 排序用
     signal["date"] = pd.to_datetime(signal["date"])
 
     print(
-        f"  pred_return 分布：mean={pred_return.mean():.3f}  p50={np.median(pred_return):.3f}  p90={np.percentile(pred_return,90):.3f}"
+        f"  up_prob 分布：mean={up_prob.mean():.3f}  p50={np.median(up_prob):.3f}  p90={np.percentile(up_prob,90):.3f}"
     )
-    signal = signal[signal["pred_return"] >= threshold].reset_index(drop=True)
-    print(f"  信號筆數（pred_return>={threshold}）：{len(signal):,}", end="")
+    signal = signal[signal["up_prob"] >= threshold].reset_index(drop=True)
+    print(f"  信號筆數（up_prob>={threshold}）：{len(signal):,}", end="")
     if len(signal) > 0:
         print(f"  日期：{signal['date'].min().date()} ~ {signal['date'].max().date()}")
     else:
@@ -388,7 +390,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
-    MODE = "train"  # "train" | "eval" | "backtest"
+    MODE = "backtest"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
@@ -403,40 +405,50 @@ if __name__ == "__main__":
         save_bolling_break_lgbm(clf, hold_days=HOLD_DAYS)
 
     elif MODE == "eval":
+        from sklearn.metrics import roc_auc_score
+
         clf, hold_days_loaded = load_bolling_break_lgbm()
         print("\n══ 建立測試集 ══")
         X_test, y_test, df_te = build_break_dataset(stocks, EVAL_ST, hold_days=hold_days_loaded)
 
-        pred = clf.predict(X_test)
-        ic = np.corrcoef(pred, y_test)[0, 1]
-        print(f"\nOOS IC：{ic:.4f}  （n={len(y_test):,}）")
-        print(f"pred 分布：min={pred.min():.3f}  p25={np.percentile(pred,25):.3f}  "
-              f"p50={np.median(pred):.3f}  p75={np.percentile(pred,75):.3f}  max={pred.max():.3f}")
+        up_prob = clf.predict(X_test)
+        auc = roc_auc_score(y_test, up_prob)
+        base_rate = y_test.mean()
+        print(f"\nOOS AUC：{auc:.4f}  （n={len(y_test):,}，正例率={base_rate:.1%}）")
+        print(
+            f"up_prob 分布：min={up_prob.min():.3f}  p25={np.percentile(up_prob,25):.3f}  "
+            f"p50={np.median(up_prob):.3f}  p75={np.percentile(up_prob,75):.3f}  max={up_prob.max():.3f}"
+        )
 
-        # Decile 分析：按預測值分10組，看各組真實報酬均值
-        print(f"\n{'─'*52}")
-        print(f"{'pred_return decile':>20}  {'真實平均漲幅':>12}  {'筆數':>7}")
-        print(f"{'─'*52}")
-        df_eval = pd.DataFrame({"pred": pred, "Y": y_test})
-        df_eval["decile"] = pd.qcut(pred, q=10, labels=False, duplicates="drop")
+        # Decile 分析：按預測機率分10組，看各組實際突破率
+        print(f"\n{'─'*58}")
+        print(f"{'up_prob decile':>16}  {'實際突破率':>12}  {'全體基準':>10}  {'筆數':>7}")
+        print(f"{'─'*58}")
+        df_eval = pd.DataFrame({"up_prob": up_prob, "Y2": y_test})
+        df_eval["decile"] = pd.qcut(up_prob, q=10, labels=False, duplicates="drop")
         for d, grp in df_eval.groupby("decile"):
-            print(f"{d:>20}  {grp['Y'].mean():>12.3f}  {len(grp):>7,}")
-        print(f"{'─'*52}")
-        print(f"全體均值：{y_test.mean():.3f}")
+            print(f"{d:>16}  {grp['Y2'].mean():>12.1%}  {base_rate:>10.1%}  {len(grp):>7,}")
+        print(f"{'─'*58}")
+        top10 = df_eval[df_eval["decile"] == df_eval["decile"].max()]
+        print(
+            f"最高組 precision：{top10['Y2'].mean():.1%}  基準：{base_rate:.1%}  提升：{top10['Y2'].mean()/base_rate:.1f}x"
+        )
 
         plt.rcParams["font.family"] = ["Arial Unicode MS", "sans-serif"]
         _, axes = plt.subplots(1, 2, figsize=(12, 4))
-        axes[0].scatter(pred, y_test, alpha=0.1, s=5, color="steelblue")
-        axes[0].set_xlabel("pred_return")
-        axes[0].set_ylabel("actual max_return")
-        axes[0].set_title(f"預測 vs 實際（IC={ic:.4f}）")
+        axes[0].hist(up_prob[y_test == 0], bins=40, alpha=0.6, color="steelblue", label="Y=0（失敗）", density=True)
+        axes[0].hist(up_prob[y_test == 1], bins=40, alpha=0.6, color="tomato", label="Y=1（突破）", density=True)
+        axes[0].set_xlabel("up_prob")
+        axes[0].set_ylabel("density")
+        axes[0].set_title(f"up_prob 分布（AUC={auc:.4f}）")
+        axes[0].legend()
 
-        mean_by_decile = df_eval.groupby("decile")["Y"].mean()
-        axes[1].bar(mean_by_decile.index, mean_by_decile.values, color="seagreen", alpha=0.8)
-        axes[1].axhline(y_test.mean(), color="gray", linestyle="--", linewidth=0.8, label="全體均值")
-        axes[1].set_xlabel("pred_return decile (0=lowest)")
-        axes[1].set_ylabel("真實平均漲幅")
-        axes[1].set_title("Mean actual return by decile (OOS)")
+        rate_by_decile = df_eval.groupby("decile")["Y2"].mean()
+        axes[1].bar(rate_by_decile.index, rate_by_decile.values, color="seagreen", alpha=0.8)
+        axes[1].axhline(base_rate, color="gray", linestyle="--", linewidth=0.8, label=f"全體基準 {base_rate:.1%}")
+        axes[1].set_xlabel("up_prob decile (0=lowest)")
+        axes[1].set_ylabel("實際突破率")
+        axes[1].set_title("Precision by decile (OOS)")
         axes[1].legend()
         plt.suptitle(f"BollingBreakLGBM | {hold_days_loaded}d | BB上軌盤整突破")
         plt.tight_layout()
