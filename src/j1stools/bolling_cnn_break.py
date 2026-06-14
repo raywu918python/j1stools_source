@@ -38,11 +38,11 @@ HOLD_DAYS = 10
 BB_PERIOD = 20
 BB_STD = 2.0
 MIN_ATR_PCT = 0.02
-CONSOLIDATION_DAYS = 3  # 盤整觀察天數
-CONSOLIDATION_RANGE = 0.05  # 3日高低點差 <= 5%
+ZONE_DAYS = 3          # 條件1&3 的觀察天數
+ZONE_RANGE_PCT = 0.06  # 條件3：3根K max_high - min_low 上限（佔收盤比例）
 PROFIT_TARGET = 0.08  # 8% 視為突破成功
 PREC_THR = 0.6
-THRESHOLD = 0.55
+THRESHOLD = 0.3
 
 # ── 原始特徵計算 ──────────────────────────────────────────────────────────── #
 
@@ -107,14 +107,23 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     df["bb_width_pct"] = df["bb_width_pct"].clip(0, 0.5)
     df["bb_atr_pct"] = df["bb_atr_pct"].clip(0, 0.3)
 
-    # ── 盤整信號：CONSOLIDATION_DAYS 日內碰上軌 + 高低點差 <= CONSOLIDATION_RANGE ──
+    # ── 盤整信號（三條件）──
+    # 1. ZONE_DAYS 天的 close 都在 bb_mid ~ bb_upper 之間
+    # 2. 其中最低1根K的 low 有碰到（<= bb_mid）（下影線測中軌）
+    # 3. ZONE_DAYS 根K的 max_high - min_low <= ZONE_RANGE_PCT（盤整不大幅震盪）
     def _consolidation_signal(grp):
-        touch_upper = (grp["high"] >= grp["bb_upper"]).astype(int)
-        touched_in_window = touch_upper.rolling(CONSOLIDATION_DAYS, min_periods=CONSOLIDATION_DAYS).max() >= 1
-        roll_high = grp["high"].rolling(CONSOLIDATION_DAYS, min_periods=CONSOLIDATION_DAYS).max()
-        roll_low = grp["low"].rolling(CONSOLIDATION_DAYS, min_periods=CONSOLIDATION_DAYS).min()
+        in_zone = (grp["close"] >= grp["bb_mid"]) & (grp["close"] <= grp["bb_upper"])
+        all_in_zone = in_zone.rolling(ZONE_DAYS, min_periods=ZONE_DAYS).min() >= 1
+
+        touched_mid = (grp["low"] <= grp["bb_mid"]).astype(int)
+        any_touch_mid = touched_mid.rolling(ZONE_DAYS, min_periods=ZONE_DAYS).max() >= 1
+
+        roll_high = grp["high"].rolling(ZONE_DAYS, min_periods=ZONE_DAYS).max()
+        roll_low = grp["low"].rolling(ZONE_DAYS, min_periods=ZONE_DAYS).min()
         hl_range = (roll_high - roll_low) / grp["close"].replace(0, np.nan)
-        return (touched_in_window & (hl_range <= CONSOLIDATION_RANGE)).astype(np.int8)
+        range_ok = hl_range <= ZONE_RANGE_PCT
+
+        return (all_in_zone & any_touch_mid & range_ok).astype(np.int8)
 
     df["bb_consolidation_signal"] = df.groupby("stock_id", group_keys=False).apply(
         _consolidation_signal, include_groups=False
@@ -637,8 +646,8 @@ if __name__ == "__main__":
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
     LOOKBACK = 20
-    MODEL_TYPE = "lstm"  # "cnn" | "lstm"
-    MODE = "train"  # "train" | "eval" | "backtest"
+    MODEL_TYPE = "cnn"  # "cnn" | "lstm"
+    MODE = "backtest"  # "train" | "eval" | "backtest"
     # ─────────────────────────────────────────────────────────────────────── #
 
     MODEL_PATH = _model_path(MODEL_TYPE)
