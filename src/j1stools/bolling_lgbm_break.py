@@ -46,7 +46,7 @@ ZONE_RANGE_PCT = 0.06  # 盤整振幅上限：ZONE_DAYS 根K的 max_high-min_low
 CROSS_LOOKBACK = 10  # 條件1：往回幾根K內要有觸及下軌（lower touch lookback）
 PROFIT_TARGET = 0.08  # 止盈門檻：持有期內漲幅達 8% 視為真突破（profit_label class 2）
 STOP_LOSS = 0.05  # 止損門檻：持有期內跌幅達 5% 視為失敗（profit_label class 1）
-THRESHOLD = 0.40  # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 20%，p80）
+THRESHOLD = 0.3  # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 20%，p80）
 
 LGBM_PARAMS = {
     "objective": "binary",         # 二分類：預測突破成功機率
