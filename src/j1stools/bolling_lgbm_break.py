@@ -45,22 +45,22 @@ ZONE_DAYS = 3  # 盤整觀察天數：條件1&3 的滾動窗口大小
 ZONE_RANGE_PCT = 0.06  # 盤整振幅上限：ZONE_DAYS 根K的 max_high-min_low / close <= 6%
 PROFIT_TARGET = 0.08  # 止盈門檻：持有期內漲幅達 8% 視為真突破（profit_label class 2）
 STOP_LOSS = 0.05  # 止損門檻：持有期內跌幅達 5% 視為失敗（profit_label class 1）
-THRESHOLD = 0.46  # 回測進場門檻：up_prob >= THRESHOLD 才發出信號
+THRESHOLD = 0.35  # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 20%，p80）
 
 LGBM_PARAMS = {
-    "objective": "binary",  # 二分類：預測突破成功機率
-    "metric": "auc",  # 驗證集用 AUC 做 early stopping
-    "num_leaves": 63,  # 樹的葉節點數（複雜度控制，63 ≈ 深度6）
-    "learning_rate": 0.03,  # 學習率（配合 n_estimators=1000）
-    "min_child_samples": 30,  # 每個葉節點最少樣本數（防過擬合）
-    "subsample": 0.8,  # 每棵樹隨機抽 80% 樣本（列採樣）
-    "subsample_freq": 1,  # 每棵樹都做 subsample
-    "colsample_bytree": 0.7,  # 每棵樹隨機抽 70% 特徵（欄採樣）
-    "reg_alpha": 0.1,  # L1 正則化
-    "reg_lambda": 1.0,  # L2 正則化
-    "n_estimators": 1000,  # 最大樹數（early stopping 會提前停）
-    "n_jobs": -1,  # 使用全部 CPU
-    "verbose": -1,  # 關閉 LightGBM 預設輸出
+    "objective": "binary",         # 二分類：預測突破成功機率
+    "metric": "auc",               # 驗證集用 AUC 做 early stopping
+    "num_leaves": 31,              # 樹的葉節點數（63→31，降低複雜度）
+    "learning_rate": 0.01,         # 學習率（0.03→0.01，更小步伐配合 early stopping）
+    "min_child_samples": 80,       # 每葉最少樣本數（30→80，最直接防過擬合）
+    "subsample": 0.8,              # 每棵樹隨機抽 80% 樣本（列採樣）
+    "subsample_freq": 1,           # 每棵樹都做 subsample
+    "colsample_bytree": 0.6,       # 每棵樹隨機抽特徵（0.7→0.6，增加多樣性）
+    "reg_alpha": 0.1,              # L1 正則化
+    "reg_lambda": 5.0,             # L2 正則化（1.0→5.0，更強正則）
+    "n_estimators": 2000,          # 最大樹數（配合更小 LR）
+    "n_jobs": -1,                  # 使用全部 CPU
+    "verbose": -1,                 # 關閉 LightGBM 預設輸出
 }
 
 # ── 原始特徵計算（與 bolling_cnn_break 完全相同）─────────────────────────── #
