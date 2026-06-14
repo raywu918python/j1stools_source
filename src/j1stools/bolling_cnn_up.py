@@ -2,10 +2,10 @@
 BollingCNN：20日時序 → K線碰上軌後方向預測（3分類）
 
 信號進場條件：close >= BB_upper * (1 - TOUCH_TOL)（K線碰到或突破上軌）
-標籤（N日後報酬）：
-    Y=2  向上：future_return >= +LABEL_TARGET
-    Y=1  向下：future_return <= -LABEL_TARGET
-    Y=0  中性：其餘
+標籤（路徑依賴 TP/SL，對齊回測邏輯）：
+    Y=2  停利：持有期內先碰 +profit_target（預設 +10%）
+    Y=1  停損：持有期內先碰 stop_loss（預設 -10%）
+    Y=0  盤整：持有到期，兩者皆未觸發
 
 BB_FEATURES (12):
   bb_daily_return   日報酬率
@@ -51,11 +51,11 @@ BB_FEATURES = [
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
 HOLD_DAYS = 10
-LABEL_TARGET = 0.03  # ±3% 判定方向
 BB_PERIOD = 20
 BB_STD = 2.0
 TOUCH_TOL = 0.01  # close >= upper * (1-0.01) 視為碰上軌
 MIN_ATR_PCT = 0.03  # ATR 過濾（0.03 = 3%）
+PREC_THR = 0.48  # early stopping / run 選模用的 up_prob 閾值
 
 
 # ── 原始特徵計算 ──────────────────────────────────────────────────────────── #
@@ -432,7 +432,6 @@ class BollingCNNClassifier:
         y_t = torch.tensor(y, dtype=torch.long)
         loader = DataLoader(TensorDataset(X_t, y_t), batch_size=self.batch_size, shuffle=True, drop_last=True)
 
-        PREC_THR = 0.48  # early stopping 監控的 up_prob 閾值
         best_val_metric = -np.inf
         best_state = None
         no_improve = 0
@@ -483,6 +482,7 @@ class BollingCNNClassifier:
         if best_state is not None:
             self._model.load_state_dict(best_state)
             print(f"  最佳 prec@{PREC_THR}：{best_val_metric:.4f}")
+        self._best_prec = best_val_metric
         self._model.eval().to("cpu")
         return self
 
@@ -511,24 +511,21 @@ def train_bolling_cnn(
     epochs: int = 60,
     n_runs: int = 3,
 ) -> BollingCNNClassifier:
-    """訓練 n_runs 次，取 val_acc 最佳的模型。"""
-    best_acc = -np.inf
+    """訓練 n_runs 次，取 prec@PREC_THR 最佳的模型。"""
+    best_score = -np.inf
     best_clf = None
     for run in range(n_runs):
         print(f"\n── Run {run+1}/{n_runs} ──")
         clf = BollingCNNClassifier(lookback=lookback, epochs=epochs, lr=1e-3, batch_size=256)
         clf.fit(X_train, y_train, X_val=X_val, y_val=y_val)
-        if X_val is not None:
-            acc = (clf.predict(X_val) == y_val).mean()
-        else:
-            acc = 0.0
-        print(f"  Run {run+1} val_acc：{acc:.4f}")
-        if acc > best_acc:
-            best_acc = acc
+        score = clf._best_prec if X_val is not None else 0.0
+        print(f"  Run {run+1} prec@{PREC_THR}：{score:.4f}")
+        if score > best_score:
+            best_score = score
             best_clf = clf
     if best_clf is None:
         best_clf = clf
-    print(f"\n最佳 Run val_acc：{best_acc:.4f}")
+    print(f"\n最佳 Run prec@{PREC_THR}：{best_score:.4f}")
     train_acc = (best_clf.predict(X_train) == y_train).mean()
     print(f"訓練集 acc：{train_acc:.4f}（in-sample）")
     return best_clf
@@ -643,7 +640,7 @@ def make_signal_bolling_cnn(
 
     signal = df_scan.iloc[all_scan_idx].reset_index(drop=True)[["date", "stock_id"]].copy()
     signal["up_prob"] = up_prob
-    signal["2"] = up_prob
+    signal["2"] = up_prob  # backtest_platform 需要此欄位名稱作為信號強度
     signal["date"] = pd.to_datetime(signal["date"])
 
     print(
@@ -702,7 +699,7 @@ if __name__ == "__main__":
         print(f"訓練集：{X_train.shape}  測試集：{X_test.shape}")
 
         print(f"\n══ 訓練 BollingCNN（{HOLD_DAYS}日方向分類）══")
-        clf = train_bolling_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, n_runs=1)
+        clf = train_bolling_cnn(X_train, y_train, X_val=X_test, y_val=y_test, lookback=LOOKBACK, n_runs=3)
         save_bolling_cnn(clf, BOLLING_CNN_PATH, hold_days=HOLD_DAYS)
 
     elif MODE == "eval":
@@ -779,7 +776,8 @@ if __name__ == "__main__":
 
         print("\n══ 獨立回測 ══")
         backtest_platform.IS_USE_CACHE = True
-        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=0.50)
+        threshold = 0.4
+        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=threshold)
 
         print(f"sig 欄位：{sig.columns.tolist()}")
         print(f"sig dtypes:\n{sig.dtypes}")
@@ -789,7 +787,7 @@ if __name__ == "__main__":
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
             top_n=5,
-            threshold=0.5,
+            threshold=threshold,
             max_positions=3,
             use_sl_trail=False,
             use_fixed_sl=True,
