@@ -44,7 +44,7 @@ W_MID_DAYS = 5  # 第2次下軌後幾日內需突破中軌
 PROFIT_TARGET = 0.07  # 停利目標（與標籤一致）
 STOP_LOSS_PCT = 0.05  # 停損目標（絕對值，與標籤一致）
 W_REQUIRE_BULLISH = False  # 中軌突破當日是否要求陽線（close > open）
-PREC_THR = 0.5  # early stopping / run 選模用的 up_prob 閾值
+PREC_THR = 0.55  # early stopping / run 選模用的 up_prob 閾值
 
 
 # ── 原始特徵計算 ──────────────────────────────────────────────────────────── #
@@ -622,7 +622,7 @@ if __name__ == "__main__":
     #
     #  backtest : 【獨立回測】載現有模型 → make_signal → backtest_platform
     #
-    MODE = "eval"  # "train" | "eval" | "backtest"
+    MODE = "backtest"  # "train" | "eval" | "backtest"
     # ──────────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
@@ -713,8 +713,7 @@ if __name__ == "__main__":
 
         print("\n══ 獨立回測 ══")
         backtest_platform.IS_USE_CACHE = True
-        threshold = 0.4
-        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=threshold)
+        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=PREC_THR)
 
         print(f"sig 欄位：{sig.columns.tolist()}")
         print(f"sig dtypes:\n{sig.dtypes}")
@@ -724,8 +723,8 @@ if __name__ == "__main__":
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
             top_n=5,
-            threshold=threshold,
-            max_positions=3,
+            threshold=PREC_THR,
+            max_positions=2,
             use_sl_trail=False,
             use_fixed_sl=True,
             sl_stop=STOP_LOSS_PCT,
