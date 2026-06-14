@@ -2,9 +2,10 @@
 BollingLGBMBreak：BB上軌盤整後突破預測（LGBM Binary Classification）
 
 進場過濾條件（同時成立）：
-    1. ZONE_DAYS 天的 close 都在 bb_mid ~ bb_upper 之間
-    2. 其中最低1根K的 low 有碰到 bb_mid（下影線測中軌）
-    3. ZONE_DAYS 根K的 max_high - min_low <= ZONE_RANGE_PCT
+    1. ZONE_DAYS 天的 close 都在 bb_lower ~ bb_mid 之間（在中軌下方蓄力）
+    2. 其中至少1根K的 high 有碰到 bb_mid（上影線測中軌，反覆測試突破點）
+    3. ZONE_DAYS 根K的 max_high - min_low <= ZONE_RANGE_PCT（不漲太多）
+    4. 以上信號必須在 close 向上穿越 bb_mid 後的 CROSS_LOOKBACK 根K內發生
 
 標籤（profit_label 二分類）：
     Y=1：持有期內先觸及 +PROFIT_TARGET 且未先觸及 -STOP_LOSS（真突破）
@@ -43,9 +44,10 @@ BB_STD = 2.0  # BB 標準差倍數（上軌 = 中軌 + 2σ）
 MIN_ATR_PCT = 0.02  # 最低 ATR 過濾：排除流動性差的股票（ATR14/close < 2% 不進場）
 ZONE_DAYS = 3  # 盤整觀察天數：條件1&3 的滾動窗口大小
 ZONE_RANGE_PCT = 0.06  # 盤整振幅上限：ZONE_DAYS 根K的 max_high-min_low / close <= 6%
+CROSS_LOOKBACK = 5   # 條件4：盤整信號必須在 close 穿越 bb_mid 後的 N 根K內發生
 PROFIT_TARGET = 0.08  # 止盈門檻：持有期內漲幅達 8% 視為真突破（profit_label class 2）
 STOP_LOSS = 0.05  # 止損門檻：持有期內跌幅達 5% 視為失敗（profit_label class 1）
-THRESHOLD = 0.35  # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 20%，p80）
+THRESHOLD = 0.40  # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 20%，p80）
 
 LGBM_PARAMS = {
     "objective": "binary",         # 二分類：預測突破成功機率
@@ -143,14 +145,20 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     df["dist_to_upper"] = ((df["bb_upper"] - df["close"]) / df["close"].replace(0, np.nan)).clip(-0.1, 0.2)
 
     def _consolidation_signal(grp):
-        in_zone = (grp["close"] >= grp["bb_mid"]) & (grp["close"] <= grp["bb_upper"])
+        # 條件1：收盤在下軌~中軌之間（中軌下方蓄力）
+        in_zone = (grp["close"] >= grp["bb_lower"]) & (grp["close"] <= grp["bb_mid"])
         all_in_zone = in_zone.rolling(ZONE_DAYS, min_periods=ZONE_DAYS).min() >= 1
-        touched_mid = (grp["low"] <= grp["bb_mid"]).astype(int)
+        # 條件2：至少1根K的 high 碰到中軌（上影線測中軌，反覆嘗試突破）
+        touched_mid = (grp["high"] >= grp["bb_mid"]).astype(int)
         any_touch_mid = touched_mid.rolling(ZONE_DAYS, min_periods=ZONE_DAYS).max() >= 1
         roll_high = grp["high"].rolling(ZONE_DAYS, min_periods=ZONE_DAYS).max()
         roll_low = grp["low"].rolling(ZONE_DAYS, min_periods=ZONE_DAYS).min()
         hl_range = (roll_high - roll_low) / grp["close"].replace(0, np.nan)
-        return (all_in_zone & any_touch_mid & (hl_range <= ZONE_RANGE_PCT)).astype(np.int8)
+        cond_123 = all_in_zone & any_touch_mid & (hl_range <= ZONE_RANGE_PCT)
+        # 條件4：往回 CROSS_LOOKBACK 根K內有 close 向上穿越 bb_mid（前一根在中軌下）
+        cross_up = (grp["close"] > grp["bb_mid"]) & (grp["close"].shift(1) <= grp["bb_mid"])
+        recent_cross = cross_up.rolling(CROSS_LOOKBACK, min_periods=1).max() >= 1
+        return (cond_123 & recent_cross).astype(np.int8)
 
     df["bb_consolidation_signal"] = df.groupby("stock_id", group_keys=False).apply(
         _consolidation_signal, include_groups=False
@@ -390,7 +398,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
-    MODE = "backtest"  # "train" | "eval" | "backtest"
+    MODE = "train"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
