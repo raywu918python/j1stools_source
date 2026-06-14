@@ -123,8 +123,9 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
         second_touch = (lower_touch == 1) & (roll10 >= 2)
         # 3日內曾出現 second_touch
         recent_2nd = second_touch.rolling(W_MID_DAYS, min_periods=1).sum() >= 1
-        # 中軌突破（+ 可選陽線確認）
-        mid_break = grp["close"] >= grp["bb_mid"]
+        # 中軌突破：當日 close >= bb_mid 且前一日 close < bb_mid（只取第一根穿越）
+        above_mid = grp["close"] >= grp["bb_mid"]
+        mid_break = above_mid & ~above_mid.shift(1, fill_value=True)
         if W_REQUIRE_BULLISH:
             mid_break = mid_break & (grp["close"] > grp["open"])
         return (recent_2nd & mid_break).astype(np.int8)
@@ -726,6 +727,7 @@ if __name__ == "__main__":
             threshold=PREC_THR,
             max_positions=2,
             use_sl_trail=False,
+            # sl_trail=0.20,
             use_fixed_sl=True,
             sl_stop=STOP_LOSS_PCT,
             use_fixed_tp=True,
