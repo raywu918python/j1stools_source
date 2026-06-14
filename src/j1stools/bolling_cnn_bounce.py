@@ -6,10 +6,10 @@ BollingCNN Bounce：20日時序 → 下軌觸碰後反彈方向預測（3分類�
   2. 當天已離開下軌（close > bb_lower * (1 + TOUCH_TOL)）
   3. 當天未碰到上軌（close < bb_upper * (1 - TOUCH_TOL)）
 
-標籤（N日後報酬）：
-    Y=2  向上：future_return >= +LABEL_TARGET
-    Y=1  向下：future_return <= -LABEL_TARGET
-    Y=0  中性：其餘
+標籤（profit_label，TP/SL 路徑）：
+    Y=2  停利：期間先碰 +PROFIT_TARGET (+10%)
+    Y=1  停損：期間先碰 -STOP_LOSS (-7%)
+    Y=0  逾期：HOLD_DAYS 天後都沒碰
 
 BB_FEATURES (6):
   bb_pos_in_band         (close - BB_lower) / BB_width（0~1）
@@ -37,11 +37,13 @@ BB_FEATURES = [
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
 HOLD_DAYS = 10
-LABEL_TARGET = 0.03  # ±3% 判定方向
+PROFIT_TARGET = 0.1  # 停利 +10%（對齊回測 tp_stop）
+STOP_LOSS = 0.07  # 停損 -7%（對齊回測 sl_stop）
 BB_PERIOD = 20
 BB_STD = 2.0
 TOUCH_TOL = 0.01  # close <= lower * (1+0.01) 視為碰下軌
 LOWER_LOOKBACK = 10  # 過去幾天內曾碰下軌
+BOUNCE_MID_DAYS = 3  # 碰下軌後幾天內到達中軌才算有效反彈
 MIN_ATR_PCT = 0.03
 
 
@@ -146,7 +148,7 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
     # ── 下軌碰觸信號 ──
     df_price["bb_lower_touch"] = (df_price["close"] <= df_price["bb_lower"] * (1 + TOUCH_TOL)).astype(np.int8)
 
-    # 過去 LOWER_LOOKBACK 天（不含當天）內曾碰下軌
+    # 過去 LOWER_LOOKBACK 天（不含當天）內曾碰下軌（保留給 bb_days_since_lower 特徵用）
     df_price["bb_lower_touch_recent"] = (
         df_price.groupby("stock_id")["bb_lower_touch"]
         .transform(lambda x: x.shift(1).rolling(LOWER_LOOKBACK, min_periods=1).max())
@@ -154,10 +156,19 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
         .astype(np.int8)
     )
 
-    # 進場信號：曾碰下軌 + 已離開下軌 + 未碰上軌
+    # 過去1~BOUNCE_MID_DAYS天內曾碰下軌
+    _touch_past3 = (
+        df_price.groupby("stock_id")["bb_lower_touch"]
+        .transform(lambda x: x.shift(1).rolling(BOUNCE_MID_DAYS, min_periods=1).max())
+        .fillna(0)
+        .astype(np.int8)
+    )
+
+    # 進場信號：3天內曾碰下軌 + 當天已到達中軌（確認有效反彈）
     df_price["bb_bounce_signal"] = (
-        (df_price["bb_lower_touch_recent"] == 1)
-        & (df_price["close"] > df_price["bb_lower"] * (1 + TOUCH_TOL))
+        (_touch_past3 == 1)
+        & (df_price["bb_lower_touch"] == 0)
+        & (df_price["close"] >= df_price["bb_mid"])
         & (df_price["close"] < df_price["bb_upper"] * (1 - TOUCH_TOL))
     ).astype(np.int8)
 
@@ -191,19 +202,19 @@ def build_bolling_dataset(
     end: str = "2099-01-01",
     lookback: int = 20,
     hold_days: int = HOLD_DAYS,
-    label_target: float = LABEL_TARGET,
     min_atr_pct: float = MIN_ATR_PCT,
 ) -> tuple[np.ndarray, np.ndarray, object]:
     """
-    建構 Bounce 反彈後方向預測資料集。
+    建構 Bounce 反彈後方向預測資料集（profit_label）。
 
     回傳 (X, y, df_meta)：
         X      : (n, lookback, n_features) float32
-        y      : (n,) int，0=中性, 1=向下, 2=向上
-        df_meta: 對應 DataFrame（含 date, stock_id, Y, future_return）
+        y      : (n,) int，0=逾期, 1=先碰停損(-7%), 2=先碰停利(+10%)
+        df_meta: 對應 DataFrame（含 date, stock_id, Y）
     """
     import pandas as pd
     from j1stools import parquet_db
+    from j1stools.label_builder import profit_label
 
     st_buf = (pd.Timestamp(st) - pd.DateOffset(days=lookback * 3 + LOWER_LOOKBACK)).strftime("%Y-%m-%d")
     end_buf = (pd.Timestamp(end) + pd.DateOffset(days=hold_days * 2)).strftime("%Y-%m-%d")
@@ -212,17 +223,14 @@ def build_bolling_dataset(
     df_all = build_bb_daily_features(stocks, st_buf, end_buf)
     df_all["date"] = pd.to_datetime(df_all["date"])
 
-    # ── hold_days 後報酬 ──
-    df_px = parquet_db.query_price(stocks, st_buf, end_buf)[["date", "stock_id", "close"]]
+    # ── 合併 high/low（profit_label 需要）──
+    df_px = parquet_db.query_price(stocks, st_buf, end_buf)[["date", "stock_id", "high", "low", "close"]]
     df_px["date"] = pd.to_datetime(df_px["date"])
-    df_px = df_px.sort_values(["stock_id", "date"])
-    df_px["future_return"] = df_px.groupby("stock_id")["close"].transform(lambda x: x.shift(-hold_days) / x - 1)
-    df_all = df_all.merge(df_px[["date", "stock_id", "future_return"]], on=["date", "stock_id"], how="left")
+    df_all = df_all.merge(df_px, on=["date", "stock_id"], how="left")
 
-    # ── 標籤 ──
-    df_all["Y"] = 0
-    df_all.loc[df_all["future_return"] >= label_target, "Y"] = 2
-    df_all.loc[df_all["future_return"] <= -label_target, "Y"] = 1
+    # ── 標籤（TP/SL 路徑，對齊回測邏輯）──
+    df_all = profit_label(df_all, hold_days=hold_days, profit_target=PROFIT_TARGET, stop_loss=-STOP_LOSS)
+    df_all = df_all.rename(columns={"target": "Y"})
 
     # ── 信號過濾：bounce_signal=1, ATR 合格, 在信號區間, 有完整標籤 ──
     df_signal = (
@@ -231,7 +239,7 @@ def build_bolling_dataset(
             & (df_all["date"] < pd.Timestamp(end))
             & (df_all["bb_bounce_signal"] == 1)
             & (df_all["atr14_pct"].fillna(0) >= min_atr_pct)
-            & df_all["future_return"].notna()
+            & df_all["Y"].notna()
         ]
         .copy()
         .reset_index(drop=True)
@@ -705,27 +713,39 @@ if __name__ == "__main__":
 
     elif MODE == "backtest":
         clf, hold_days_loaded = load_bolling_cnn(BOLLING_CNN_PATH)
-
+        up_prob_thr = 0.60
         print("\n══ 獨立回測 ══")
-        backtest_platform.IS_USE_CACHE = True
-        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=0.48)
+        backtest_platform.IS_USE_CACHE = False
+        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=up_prob_thr)
+
+        print(f"\n── 信號診斷 ──")
+        print(f"  sig 筆數：{len(sig):,}")
+        if len(sig) > 0:
+            print(f"  日期範圍：{sig['date'].min().date()} ~ {sig['date'].max().date()}")
+            print(
+                f"  up_prob  min={sig['up_prob'].min():.3f}  max={sig['up_prob'].max():.3f}  mean={sig['up_prob'].mean():.3f}"
+            )
+            print(f"  不同股票數：{sig['stock_id'].nunique():,}")
+            print(f"  Top 5 股票信號數：\n{sig['stock_id'].value_counts().head()}")
+            print(sig.head(3).to_string(index=False))
+        else:
+            print("  ⚠ make_signal 回傳 0 筆，回測無法進行")
 
         print(f"\n{'='*60}\n【BounceCNN 反彈高機率 + 持有{hold_days_loaded}日】\n{'='*60}")
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
             top_n=5,
-            threshold=0.4,
+            threshold=up_prob_thr,
             max_positions=3,
             use_sl_trail=False,
             use_fixed_sl=True,
-            sl_stop=0.07,
+            sl_stop=STOP_LOSS,
             use_fixed_tp=True,
-            tp_stop=0.10,
+            tp_stop=PROFIT_TARGET,
             use_hold_days=True,
             hold_days=hold_days_loaded,
             group_limit=99,
             min_volume=200,
-            use_fixed_sl_tp=False,
         )
         count = 20
         if td is not None and len(td) > 0:
