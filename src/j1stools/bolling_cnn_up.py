@@ -41,11 +41,11 @@ BB_STD = 2.0
 MIN_ATR_PCT = 0.02  # ATR 過濾（0.03 = 3%）
 W_LOOKBACK = 15  # W底下軌觸碰觀察窗口（交易日）
 W_MID_DAYS = 5  # 第2次下軌後幾日內需突破中軌
-PROFIT_TARGET = 0.07  # 停利目標（與標籤一致）
+PROFIT_TARGET = 0.10  # 停利目標（與標籤一致）
 STOP_LOSS_PCT = 0.05  # 停損目標（絕對值，與標籤一致）
 W_REQUIRE_BULLISH = False  # 中軌突破當日是否要求陽線（close > open）
 PREC_THR = 0.55  # early stopping / run 選模用的 up_prob 閾值
-
+THRESHOLD = 0.6
 
 # ── 原始特徵計算 ──────────────────────────────────────────────────────────── #
 
@@ -714,7 +714,7 @@ if __name__ == "__main__":
 
         print("\n══ 獨立回測 ══")
         backtest_platform.IS_USE_CACHE = True
-        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=PREC_THR)
+        sig = make_signal_bolling_cnn(clf, stocks, st=EVAL_ST, lookback=LOOKBACK, up_prob_threshold=THRESHOLD)
 
         print(f"sig 欄位：{sig.columns.tolist()}")
         print(f"sig dtypes:\n{sig.dtypes}")
@@ -724,10 +724,10 @@ if __name__ == "__main__":
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
             top_n=5,
-            threshold=PREC_THR,
-            max_positions=2,
+            threshold=THRESHOLD,
+            max_positions=3,
             use_sl_trail=False,
-            # sl_trail=0.20,
+            sl_trail=0.20,
             use_fixed_sl=True,
             sl_stop=STOP_LOSS_PCT,
             use_fixed_tp=True,
