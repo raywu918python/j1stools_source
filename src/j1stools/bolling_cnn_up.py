@@ -44,7 +44,7 @@ W_MID_DAYS = 5  # 第2次下軌後幾日內需突破中軌
 PROFIT_TARGET = 0.10  # 停利目標（與標籤一致）
 STOP_LOSS_PCT = 0.05  # 停損目標（絕對值，與標籤一致）
 W_REQUIRE_BULLISH = False  # 中軌突破當日是否要求陽線（close > open）
-PREC_THR = 0.55  # early stopping / run 選模用的 up_prob 閾值
+PREC_THR = 0.6  # early stopping / run 選模用的 up_prob 閾值
 THRESHOLD = 0.6
 
 # ── 原始特徵計算 ──────────────────────────────────────────────────────────── #
