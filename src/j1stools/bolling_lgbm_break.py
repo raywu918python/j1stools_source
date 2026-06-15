@@ -44,9 +44,9 @@ MIN_ATR_PCT = 0.02  # 最低 ATR 過濾：排除流動性差的股票（ATR14/cl
 ZONE_DAYS = 3  # 盤整觀察天數：條件1&3 的滾動窗口大小
 ZONE_RANGE_PCT = 0.06  # 盤整振幅上限：ZONE_DAYS 根K的 max_high-min_low / close <= 6%
 CROSS_LOOKBACK = 10  # 條件1：往回幾根K內要有觸及下軌（lower touch lookback）
-PROFIT_TARGET = 0.08  # 止盈門檻：持有期內漲幅達 8% 視為真突破（profit_label class 2）
-STOP_LOSS = 0.05  # 止損門檻：持有期內跌幅達 5% 視為失敗（profit_label class 1）
-THRESHOLD = 0.283 # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 25%，p75）
+PROFIT_TARGET = 0.1  # 止盈門檻：持有期內漲幅達 8% 視為真突破（profit_label class 2）
+STOP_LOSS = 0.1  # 止損門檻：持有期內跌幅達 5% 視為失敗（profit_label class 1）
+THRESHOLD = 0.5 # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 25%，p75）
 
 LGBM_PARAMS = {
     "objective": "binary",         # 二分類：預測突破成功機率
@@ -391,7 +391,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
-    MODE = "backtest"  # "train" | "eval" | "backtest"
+    MODE = "eval"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
@@ -421,22 +421,25 @@ if __name__ == "__main__":
             f"p50={np.median(up_prob):.3f}  p75={np.percentile(up_prob,75):.3f}  max={up_prob.max():.3f}"
         )
 
-        # Decile 分析：按預測機率分10組，看各組實際突破率
-        print(f"\n{'─'*58}")
-        print(f"{'up_prob decile':>16}  {'實際突破率':>12}  {'全體基準':>10}  {'筆數':>7}")
-        print(f"{'─'*58}")
-        df_eval = pd.DataFrame({"up_prob": up_prob, "Y2": y_test})
-        df_eval["decile"] = pd.qcut(up_prob, q=10, labels=False, duplicates="drop")
-        for d, grp in df_eval.groupby("decile"):
-            print(f"{d:>16}  {grp['Y2'].mean():>12.1%}  {base_rate:>10.1%}  {len(grp):>7,}")
-        print(f"{'─'*58}")
-        top10 = df_eval[df_eval["decile"] == df_eval["decile"].max()]
-        print(
-            f"最高組 precision：{top10['Y2'].mean():.1%}  基準：{base_rate:.1%}  提升：{top10['Y2'].mean()/base_rate:.1f}x"
-        )
+        # Threshold 分析：不同 threshold 對應的信號數和精度
+        print(f"\n{'─'*54}")
+        print(f"{'THRESHOLD':>10}  {'信號數':>8}  {'精度':>8}  {'提升':>6}")
+        print(f"{'─'*54}")
+        pcts = np.arange(50, 96, 5)  # p50, p55, ..., p95
+        thr_vals = np.unique(np.round(np.percentile(up_prob, pcts), 3))
+        for thr in thr_vals:
+            mask = up_prob >= thr
+            n = int(mask.sum())
+            if n == 0:
+                continue
+            prec = y_test[mask].mean()
+            print(f"{thr:>10.3f}  {n:>8,}  {prec:>8.1%}  {prec/base_rate:>6.2f}x")
+        print(f"{'─'*54}")
 
+        # 圖：左＝分布，右＝threshold vs 精度曲線
         plt.rcParams["font.family"] = ["Arial Unicode MS", "sans-serif"]
         _, axes = plt.subplots(1, 2, figsize=(12, 4))
+
         axes[0].hist(up_prob[y_test == 0], bins=40, alpha=0.6, color="steelblue", label="Y=0（失敗）", density=True)
         axes[0].hist(up_prob[y_test == 1], bins=40, alpha=0.6, color="tomato", label="Y=1（突破）", density=True)
         axes[0].set_xlabel("up_prob")
@@ -444,13 +447,29 @@ if __name__ == "__main__":
         axes[0].set_title(f"up_prob 分布（AUC={auc:.4f}）")
         axes[0].legend()
 
-        rate_by_decile = df_eval.groupby("decile")["Y2"].mean()
-        axes[1].bar(rate_by_decile.index, rate_by_decile.values, color="seagreen", alpha=0.8)
-        axes[1].axhline(base_rate, color="gray", linestyle="--", linewidth=0.8, label=f"全體基準 {base_rate:.1%}")
-        axes[1].set_xlabel("up_prob decile (0=lowest)")
-        axes[1].set_ylabel("實際突破率")
-        axes[1].set_title("Precision by decile (OOS)")
-        axes[1].legend()
+        # 右圖：threshold sweep（從 p30 到 p97，每 1%）
+        sweep_pcts = np.arange(30, 98, 1)
+        sweep_thrs = np.percentile(up_prob, sweep_pcts)
+        sweep_prec = []
+        sweep_n = []
+        for t in sweep_thrs:
+            mask = up_prob >= t
+            n = mask.sum()
+            sweep_prec.append(y_test[mask].mean() if n >= 30 else np.nan)
+            sweep_n.append(n)
+
+        ax1 = axes[1]
+        ax2 = ax1.twinx()
+        ax1.plot(sweep_thrs, sweep_prec, color="seagreen", linewidth=2, label="精度")
+        ax1.axhline(base_rate, color="gray", linestyle="--", linewidth=0.8, label=f"基準 {base_rate:.1%}")
+        ax2.fill_between(sweep_thrs, sweep_n, alpha=0.15, color="steelblue")
+        ax2.set_ylabel("信號數", color="steelblue")
+        ax2.tick_params(axis="y", labelcolor="steelblue")
+        ax1.set_xlabel("THRESHOLD")
+        ax1.set_ylabel("精度（突破率）")
+        ax1.set_title("Precision vs THRESHOLD (OOS)")
+        ax1.legend(loc="upper left")
+
         plt.suptitle(f"BollingBreakLGBM | {hold_days_loaded}d | BB上軌盤整突破")
         plt.tight_layout()
         plt.show()
