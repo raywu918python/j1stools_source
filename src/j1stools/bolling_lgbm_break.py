@@ -6,6 +6,7 @@ BollingLGBMBreak：BB上軌盤整後突破預測（LGBM Binary Classification）
     2. 近期 ZONE_DAYS 根K內，high 碰到 bb_mid（從下軌反彈至中軌）
     3. 近 ZONE_DAYS 天收盤漲幅 <= ZONE_RANGE_PCT（碰中軌後蓄勢，不急漲）
     4. 當天 close > bb_mid（突破確認，收盤站上中軌才進場）
+    5. 當天 close > ZONE_DAYS 盤整窗口內最高收盤（進場K突破盤整區間）
 
 標籤（profit_label 二分類）：
     Y=1：持有期內先觸及 +PROFIT_TARGET 且未先觸及 -STOP_LOSS（真突破）
@@ -47,7 +48,7 @@ ZONE_RANGE_PCT = 0.06  # 盤整振幅上限：ZONE_DAYS 根K的 max_high-min_low
 CROSS_LOOKBACK = 10  # 條件1：往回幾根K內要有觸及下軌（lower touch lookback）
 PROFIT_TARGET = 0.1  # 止盈門檻：持有期內漲幅達 8% 視為真突破（profit_label class 2）
 STOP_LOSS = 0.1  # 止損門檻：持有期內跌幅達 5% 視為失敗（profit_label class 1）
-THRESHOLD = 0.5 # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 25%，p75）
+THRESHOLD = 0.4 # 回測進場門檻：up_prob >= THRESHOLD 才發出信號（約 top 25%，p75）
 
 LGBM_PARAMS = {
     "objective": "binary",         # 二分類：預測突破成功機率
@@ -154,7 +155,10 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
         small_gain = gain_3d <= ZONE_RANGE_PCT
         # 條件4：當天收盤站上中軌（突破確認）
         above_mid = grp["close"] > grp["bb_mid"]
-        return (recent_lower & any_touch_mid & small_gain & above_mid).astype(np.int8)
+        # 條件5：進場K收盤大於 ZONE_DAYS 盤整窗口內所有K的最高收盤
+        prev_zone_max = grp["close"].shift(1).rolling(ZONE_DAYS, min_periods=ZONE_DAYS).max()
+        strong_candle = grp["close"] > prev_zone_max
+        return (recent_lower & any_touch_mid & small_gain & above_mid & strong_candle).astype(np.int8)
 
     df["bb_consolidation_signal"] = df.groupby("stock_id", group_keys=False).apply(
         _consolidation_signal, include_groups=False
@@ -394,7 +398,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
-    MODE = "train"  # "train" | "eval" | "backtest"
+    MODE = "backtest"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
