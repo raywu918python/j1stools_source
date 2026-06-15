@@ -55,7 +55,7 @@ MIN_ATR_PCT   = 0.02  # 最低ATR過濾（排除低波動股）
 PROFIT_TARGET = 0.10  # 止盈門檻
 STOP_LOSS     = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
 HIGH_LEVEL    = 0.90  # 整理頂部需達前120日最高的90%以上（更靠近高點）
-THRESHOLD     = 0.7  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
+THRESHOLD     = 0.6  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
 
 LGBM_PARAMS = {
     "objective": "binary",
