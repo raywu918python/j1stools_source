@@ -307,7 +307,6 @@ def build_vcp_dataset(
             (df_all["date"] >= pd.Timestamp(st))
             & (df_all["date"] < pd.Timestamp(end))
             & (df_all["atr_pct"].fillna(0) >= min_atr_pct)
-            & (df_all["vcp_signal"] == 1)
         ]
         .copy()
         .reset_index(drop=True)
@@ -315,7 +314,7 @@ def build_vcp_dataset(
 
     n_pos    = df_signal["Y"].sum()
     pos_rate = df_signal["Y"].mean()
-    print(f"VCP突破樣本：{len(df_signal):,}  Y=1：{n_pos:,} 筆  正例率：{pos_rate:.1%}")
+    print(f"全市場樣本：{len(df_signal):,}  Y=1：{n_pos:,} 筆  正例率：{pos_rate:.1%}")
 
     X = df_signal[VCP_FEATURES].fillna(0).values.astype(np.float32)
     y = df_signal["Y"].values.astype(np.int8)
