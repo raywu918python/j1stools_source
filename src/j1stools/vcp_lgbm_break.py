@@ -21,31 +21,39 @@ import numpy as np
 import pandas as pd
 
 VCP_FEATURES = [
-    "atr_ratio",      # 短ATR / 長ATR（壓縮程度，越小越好）
-    "range_pct",      # 整理區高低點範圍（越小越好）
-    "vol_ratio",      # 突破日量 / 整理期均量（放量倍數）
-    "vol_dry_trend",  # 整理期前半段量 vs 後半段量（正=量能遞減，好信號）
-    "break_dist",     # (close - consol_high) / consol_high（突破幅度）
-    "consol_ret",     # 整理期間收益率（微升整理 vs 微跌整理）
-    "atr_pct",        # ATR14 / close（股票本身波動率）
-    "ma60_dist",      # (close - MA60) / MA60（大趨勢相對位置）
-    "ret_20d",        # 前20日報酬率（中期動能）
-    "ret_60d",        # 前60日報酬率（長期動能）
-    "up_day_ratio",   # 整理期上漲日比例（內部偏多偏空）
-    "close_pos",      # (close - low) / (high - low)（今日K線強度）
-    "high_level_pct", # 整理頂部 / 前120日最高點（盤整在高點 vs 低點）
+    # ── 價格/波動 ──
+    "atr_ratio",      # 短ATR / 長ATR（壓縮程度）
+    "range_pct",      # 整理區高低點範圍
+    "vol_ratio",      # 突破日量 / 整理期均量
+    "vol_dry_trend",  # 整理期量能遞減趨勢
+    "break_dist",     # (close - consol_high) / consol_high
+    "consol_ret",     # 整理期間收益率
+    "atr_pct",        # ATR14 / close
+    "ma60_dist",      # (close - MA60) / MA60
+    "ret_20d",        # 前20日報酬率
+    "ret_60d",        # 前60日報酬率
+    "up_day_ratio",   # 整理期上漲日比例
+    "close_pos",      # 今日K線強度
+    "high_level_pct", # 整理頂部 / 前120日最高點
+    # ── 籌碼 ──
+    "f_ib_net_pct",   # 外資淨買超 / 20日均量（正=外資買，負=外資賣）
+    "f_ib_5d",        # 5日外資累積淨買超 / 20日均量
+    "f_margin_chg",   # 融資餘額日變化%（正=散戶加碼）
+    "f_short_ratio",  # 券資比（高=空頭壓力大）
+    "f_dt_ratio",     # 當沖占成交量比例
+    "f_dt_net",       # 當沖方向（正=買當>賣當）
 ]
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
-HOLD_DAYS     = 10    # 持有天數
+HOLD_DAYS     = 20    # 持有天數
 CONSOL_DAYS   = 10    # 整理觀察窗口（10個交易日，約2週）
 ATR_SHORT     = 5     # 短期ATR週期（僅用於特徵，不作為信號條件）
 ATR_LONG      = 20    # 長期ATR週期（僅用於特徵）
 RANGE_PCT     = 0.12  # 整理區高低點差距上限（12%以內為橫盤）
-VOL_RATIO     = 1.3   # 突破日放量門檻（均量的1.3倍）
+VOL_RATIO     = 1.0   # 突破日放量門檻（均量的1.3倍）
 MIN_ATR_PCT   = 0.02  # 最低ATR過濾（排除低波動股）
-PROFIT_TARGET = 0.15  # 止盈門檻（break-even = 7/(15+7) = 31.8%）
-STOP_LOSS     = 0.07  # 止損門檻
+PROFIT_TARGET = 0.10  # 止盈門檻
+STOP_LOSS     = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
 HIGH_LEVEL    = 0.85  # 整理頂部需達前120日最高的85%以上
 THRESHOLD     = 0.55  # 回測進場門檻（up_prob p50=0.466，取 top 端）
 
@@ -168,9 +176,75 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _compute_chips(df: pd.DataFrame, stocks: list, st: str, end: str) -> pd.DataFrame:
+    """載入並計算外資/融資/當沖籌碼特徵，合併回 df（按 date+stock_id）。"""
+    from j1stools import parquet_db
+
+    # ── 外資 ──
+    df_ib = parquet_db.query_ib(stocks, st, end)
+    df_ib["date"] = pd.to_datetime(df_ib["date"])
+    df_ib["net"] = df_ib["buy"] - df_ib["sell"]
+    ib_piv = (
+        df_ib[df_ib["name"] == "Foreign_Investor"]
+        .pivot_table(index=["date", "stock_id"], values="net", aggfunc="sum")
+        .reset_index()
+        .rename(columns={"net": "_ib_net"})
+    )
+
+    # ── 融資融券 ──
+    df_mg = parquet_db.query_margin(stocks, st, end)
+    df_mg["date"] = pd.to_datetime(df_mg["date"])
+    mg_cols = ["date", "stock_id",
+               "margin_purchase_today_balance", "margin_purchase_yesterday_balance",
+               "short_sale_today_balance"]
+
+    # ── 當沖 ──
+    df_dt = parquet_db.query_day_trade(stocks, st, end)
+    df_dt["date"] = pd.to_datetime(df_dt["date"])
+    df_dt = df_dt.rename(columns={"volume": "_dt_vol", "buy_amount": "_dt_buy", "sell_amount": "_dt_sell"})
+
+    # ── 合併 ──
+    base = df[["date", "stock_id", "volume"]].copy()
+    base = base.merge(ib_piv, on=["date", "stock_id"], how="left")
+    base = base.merge(df_mg[mg_cols], on=["date", "stock_id"], how="left")
+    base = base.merge(df_dt[["date", "stock_id", "_dt_vol", "_dt_buy", "_dt_sell"]],
+                      on=["date", "stock_id"], how="left")
+
+    g = base.groupby("stock_id")
+
+    # 所有籌碼資料 shift=1（收盤後才公布，實際交易用前一天的資料）
+    for col in ["_ib_net", "margin_purchase_today_balance", "margin_purchase_yesterday_balance",
+                "short_sale_today_balance", "_dt_vol", "_dt_buy", "_dt_sell"]:
+        if col in base.columns:
+            base[col] = g[col].transform(lambda x: x.shift(1))
+
+    # 外資特徵
+    vol20 = g["volume"].transform(lambda x: x.rolling(20, min_periods=5).mean()).replace(0, np.nan)
+    base["f_ib_net_pct"] = (base["_ib_net"] / vol20).clip(-5, 5)
+    ib5 = g["_ib_net"].transform(lambda x: x.rolling(5, min_periods=3).sum())
+    base["f_ib_5d"] = (ib5 / vol20).clip(-10, 10)
+
+    # 融資融券特徵
+    mg_prev = base["margin_purchase_yesterday_balance"].replace(0, np.nan)
+    base["f_margin_chg"] = (
+        (base["margin_purchase_today_balance"] - base["margin_purchase_yesterday_balance"]) / mg_prev
+    ).clip(-0.5, 0.5)
+    base["f_short_ratio"] = (
+        base["short_sale_today_balance"] / base["margin_purchase_today_balance"].replace(0, np.nan)
+    ).clip(0, 5)
+
+    # 當沖特徵
+    base["f_dt_ratio"] = (base["_dt_vol"] / base["volume"].replace(0, np.nan)).clip(0, 1)
+    dt_total = (base["_dt_buy"] + base["_dt_sell"]).replace(0, np.nan)
+    base["f_dt_net"] = ((base["_dt_buy"] - base["_dt_sell"]) / dt_total).clip(-1, 1)
+
+    chips_cols = ["f_ib_net_pct", "f_ib_5d", "f_margin_chg", "f_short_ratio", "f_dt_ratio", "f_dt_net"]
+    return base[["date", "stock_id"] + chips_cols]
+
+
 def build_vcp_daily_features(stocks: list, st: str, end: str = "2099-01-01") -> pd.DataFrame:
     """
-    計算 VCP_FEATURES 及信號欄位。
+    計算 VCP_FEATURES（含籌碼）及信號欄位。
     回傳含 date, stock_id, close, atr_pct, vcp_signal, *VCP_FEATURES 的 DataFrame。
     """
     import time as _time
@@ -186,6 +260,13 @@ def build_vcp_daily_features(stocks: list, st: str, end: str = "2099-01-01") -> 
     feat = df.groupby("stock_id", group_keys=False).apply(_compute_vcp, include_groups=False)
     for col in feat.columns:
         df[col] = feat[col].values
+
+    # 籌碼特徵
+    chips = _compute_chips(df, stocks, st, end)
+    df = df.merge(chips, on=["date", "stock_id"], how="left")
+    chips_cols = ["f_ib_net_pct", "f_ib_5d", "f_margin_chg", "f_short_ratio", "f_dt_ratio", "f_dt_net"]
+    for col in chips_cols:
+        df[col] = df[col].fillna(0)
 
     cols = ["date", "stock_id", "high", "low", "close", "vcp_signal"] + VCP_FEATURES
     print(f"  [VcpBreak] 特徵完成（{_time.time()-_t0:.1f}s），共 {len(df):,} 行")
@@ -226,7 +307,6 @@ def build_vcp_dataset(
         df_all[
             (df_all["date"] >= pd.Timestamp(st))
             & (df_all["date"] < pd.Timestamp(end))
-            & (df_all["vcp_signal"] == 1)
             & (df_all["atr_pct"].fillna(0) >= min_atr_pct)
         ]
         .copy()
@@ -235,7 +315,7 @@ def build_vcp_dataset(
 
     n_pos    = df_signal["Y"].sum()
     pos_rate = df_signal["Y"].mean()
-    print(f"VCP 信號：{len(df_signal):,}  Y=1（突破）：{n_pos:,} 筆  正例率：{pos_rate:.1%}")
+    print(f"全市場樣本：{len(df_signal):,}  Y=1：{n_pos:,} 筆  正例率：{pos_rate:.1%}")
 
     X = df_signal[VCP_FEATURES].fillna(0).values.astype(np.float32)
     y = df_signal["Y"].values.astype(np.int8)
@@ -363,7 +443,6 @@ def make_signal_vcp_break_lgbm(
     df_scan = (
         df_all[
             (df_all["date"] >= pd.Timestamp(st))
-            & (df_all["vcp_signal"] == 1)
             & (df_all["atr_pct"].fillna(0) >= min_atr_pct)
         ]
         .copy()
@@ -411,7 +490,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST  = "2024-01-01"
-    MODE     = "train"  # "train" | "eval" | "backtest"
+    MODE     = "eval"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
