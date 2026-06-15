@@ -34,6 +34,8 @@ VCP_FEATURES = [
     "up_day_ratio",   # 整理期上漲日比例
     "close_pos",      # 今日K線強度
     "high_level_pct", # 整理頂部 / 前120日最高點
+    "ret_pre_consol",      # 盤整前30天漲幅（0~40%=真VCP，<0=無先前動能，>60%=過度延伸）
+    "days_since_big_move", # 距上次20日漲幅>20%有幾天（近=過熱，30~60天=VCP甜蜜點）
     # ── 籌碼 ──
     "f_ib_net_pct",   # 外資淨買超 / 20日均量（正=外資買，負=外資賣）
     "f_ib_5d",        # 5日外資累積淨買超 / 20日均量
@@ -54,7 +56,7 @@ MIN_ATR_PCT   = 0.02  # 最低ATR過濾（排除低波動股）
 PROFIT_TARGET = 0.10  # 止盈門檻
 STOP_LOSS     = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
 HIGH_LEVEL    = 0.90  # 整理頂部需達前120日最高的90%以上（更靠近高點）
-THRESHOLD     = 0.65  # 回測進場門檻（OOS：thr=0.632→57%，扣label偏差後目標win_rate>53%）
+THRESHOLD     = 0.7  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
 
 LGBM_PARAMS = {
     "objective": "binary",
@@ -129,6 +131,19 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
     consol_end   = close.shift(1)
     consol_ret   = ((consol_end - consol_start) / consol_start.replace(0, np.nan)).clip(-0.5, 0.5)
 
+    # 盤整前30天的先前漲幅（區分「漲過的盤整」vs「沒漲過的盤整」vs「過度延伸」）
+    pre_consol_ref = close.shift(CONSOL_DAYS + 30)
+    ret_pre_consol = ((consol_start - pre_consol_ref) / pre_consol_ref.replace(0, np.nan)).clip(-0.5, 1.5)
+
+    # 距上次「20日漲幅超過20%」有幾天（近=過熱，遠=有段時間了，適合VCP）
+    ret20 = close.pct_change(20, fill_method=None)
+    _big_move = (ret20 >= 0.20).values.astype(float)
+    _n = len(_big_move)
+    _pos = np.where(_big_move == 1, np.arange(_n, dtype=float), np.nan)
+    _last = pd.Series(_pos).ffill().values
+    _days = np.where(np.isnan(_last), 200.0, np.arange(_n, dtype=float) - _last)
+    days_since_big_move = pd.Series(_days.clip(0, 200), index=close.index).shift(1).fillna(200)
+
     # MA60 距離
     ma60     = close.rolling(60, min_periods=30).mean()
     ma60_dist = ((close - ma60) / ma60.replace(0, np.nan)).clip(-0.5, 0.5)
@@ -168,8 +183,10 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
             "ret_60d":       ret_60d,
             "up_day_ratio":  up_day_ratio,
             "vol_dry_trend": vol_dry_trend,
-            "close_pos":     close_pos,
-            "high_level_pct": high_level_pct,
+            "close_pos":           close_pos,
+            "high_level_pct":      high_level_pct,
+            "ret_pre_consol":      ret_pre_consol,
+            "days_since_big_move": days_since_big_move,
         },
         index=grp.index,
     )
@@ -443,12 +460,11 @@ def make_signal_vcp_break_lgbm(
         df_all[
             (df_all["date"] >= pd.Timestamp(st))
             & (df_all["atr_pct"].fillna(0) >= min_atr_pct)
-            & (df_all["vcp_signal"] == 1)
         ]
         .copy()
         .reset_index(drop=True)
     )
-    print(f"  VCP突破信號：{len(df_scan):,} 筆")
+    print(f"  全市場掃描：{len(df_scan):,} 筆")
 
     if df_scan.empty:
         return pd.DataFrame(columns=["date", "stock_id", "up_prob"])
@@ -490,7 +506,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST  = "2024-01-01"
-    MODE     = "eval"  # "train" | "eval" | "backtest"
+    MODE     = "backtest"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
@@ -577,12 +593,16 @@ if __name__ == "__main__":
         backtest_platform.IS_USE_CACHE = True
         sig = make_signal_vcp_break_lgbm(clf, stocks, st=EVAL_ST, threshold=THRESHOLD)
 
+        if sig.empty:
+            print(f"⚠️  無訊號（THRESHOLD={THRESHOLD}，VCP條件太嚴或threshold太高），請調整後重試")
+            import sys; sys.exit(0)
+
         print(f"\n{'='*60}\n【VcpBreakLGBM 高預測報酬 + 持有{hold_days_loaded}日】\n{'='*60}")
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
             top_n=30,
             threshold=THRESHOLD,
-            max_positions=20,
+            max_positions=3,
             use_sl_trail=False,
             use_fixed_sl=True,
             sl_stop=STOP_LOSS,
