@@ -34,7 +34,6 @@ VCP_FEATURES = [
     "up_day_ratio",   # 整理期上漲日比例
     "close_pos",      # 今日K線強度
     "high_level_pct", # 整理頂部 / 前120日最高點
-    "ret_pre_consol",      # 盤整前30天漲幅（0~40%=真VCP，<0=無先前動能，>60%=過度延伸）
     "days_since_big_move", # 距上次20日漲幅>20%有幾天（近=過熱，30~60天=VCP甜蜜點）
     # ── 籌碼 ──
     "f_ib_net_pct",   # 外資淨買超 / 20日均量（正=外資買，負=外資賣）
@@ -46,7 +45,7 @@ VCP_FEATURES = [
 ]
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
-HOLD_DAYS     = 10    # 持有天數
+HOLD_DAYS     = 20    # 持有天數
 CONSOL_DAYS   = 10    # 整理觀察窗口（10個交易日，約2週）
 ATR_SHORT     = 5     # 短期ATR週期（僅用於特徵，不作為信號條件）
 ATR_LONG      = 20    # 長期ATR週期（僅用於特徵）
@@ -131,10 +130,6 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
     consol_end   = close.shift(1)
     consol_ret   = ((consol_end - consol_start) / consol_start.replace(0, np.nan)).clip(-0.5, 0.5)
 
-    # 盤整前30天的先前漲幅（區分「漲過的盤整」vs「沒漲過的盤整」vs「過度延伸」）
-    pre_consol_ref = close.shift(CONSOL_DAYS + 30)
-    ret_pre_consol = ((consol_start - pre_consol_ref) / pre_consol_ref.replace(0, np.nan)).clip(-0.5, 1.5)
-
     # 距上次「20日漲幅超過20%」有幾天（近=過熱，遠=有段時間了，適合VCP）
     ret20 = close.pct_change(20, fill_method=None)
     _big_move = (ret20 >= 0.20).values.astype(float)
@@ -185,7 +180,6 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
             "vol_dry_trend": vol_dry_trend,
             "close_pos":           close_pos,
             "high_level_pct":      high_level_pct,
-            "ret_pre_consol":      ret_pre_consol,
             "days_since_big_move": days_since_big_move,
         },
         index=grp.index,
@@ -506,7 +500,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST  = "2024-01-01"
-    MODE     = "eval"  # "train" | "eval" | "backtest"
+    MODE     = "train"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
