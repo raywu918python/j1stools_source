@@ -5,6 +5,7 @@ BollingLGBMBreak：BB上軌盤整後突破預測（LGBM Binary Classification）
     1. 近期 CROSS_LOOKBACK 根K內，low 碰到 bb_lower（觸及下軌）
     2. 近期 ZONE_DAYS 根K內，high 碰到 bb_mid（從下軌反彈至中軌）
     3. 近 ZONE_DAYS 天收盤漲幅 <= ZONE_RANGE_PCT（碰中軌後蓄勢，不急漲）
+    4. 當天 close > bb_mid（突破確認，收盤站上中軌才進場）
 
 標籤（profit_label 二分類）：
     Y=1：持有期內先觸及 +PROFIT_TARGET 且未先觸及 -STOP_LOSS（真突破）
@@ -151,7 +152,9 @@ def build_bb_daily_features(stocks: list, st: str, end: str = "2099-01-01"):
         # 條件3：近 ZONE_DAYS 天收盤漲幅 <= ZONE_RANGE_PCT（碰中軌後蓄勢不急漲）
         gain_3d = grp["close"].pct_change(ZONE_DAYS, fill_method=None)
         small_gain = gain_3d <= ZONE_RANGE_PCT
-        return (recent_lower & any_touch_mid & small_gain).astype(np.int8)
+        # 條件4：當天收盤站上中軌（突破確認）
+        above_mid = grp["close"] > grp["bb_mid"]
+        return (recent_lower & any_touch_mid & small_gain & above_mid).astype(np.int8)
 
     df["bb_consolidation_signal"] = df.groupby("stock_id", group_keys=False).apply(
         _consolidation_signal, include_groups=False
@@ -391,7 +394,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
-    MODE = "eval"  # "train" | "eval" | "backtest"
+    MODE = "train"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
