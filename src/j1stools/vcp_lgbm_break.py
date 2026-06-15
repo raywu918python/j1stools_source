@@ -55,7 +55,7 @@ MIN_ATR_PCT   = 0.02  # 最低ATR過濾（排除低波動股）
 PROFIT_TARGET = 0.10  # 止盈門檻
 STOP_LOSS     = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
 HIGH_LEVEL    = 0.85  # 整理頂部需達前120日最高的85%以上
-THRESHOLD     = 0.55  # 回測進場門檻（up_prob p50=0.466，取 top 端）
+THRESHOLD     = 0.65  # 回測進場門檻（OOS：thr=0.632→57%，扣label偏差後目標win_rate>53%）
 
 LGBM_PARAMS = {
     "objective": "binary",
@@ -490,7 +490,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST  = "2024-01-01"
-    MODE     = "eval"  # "train" | "eval" | "backtest"
+    MODE     = "backtest"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
@@ -580,9 +580,9 @@ if __name__ == "__main__":
         print(f"\n{'='*60}\n【VcpBreakLGBM 高預測報酬 + 持有{hold_days_loaded}日】\n{'='*60}")
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
-            top_n=5,
+            top_n=10,
             threshold=THRESHOLD,
-            max_positions=3,
+            max_positions=5,
             use_sl_trail=False,
             use_fixed_sl=True,
             sl_stop=STOP_LOSS,
