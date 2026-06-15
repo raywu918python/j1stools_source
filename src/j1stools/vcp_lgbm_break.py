@@ -24,7 +24,6 @@ VCP_FEATURES = [
     # ── 價格/波動 ──
     "atr_ratio",      # 短ATR / 長ATR（壓縮程度）
     "range_pct",      # 整理區高低點範圍
-    "vol_ratio",      # 突破日量 / 整理期均量
     "vol_dry_trend",  # 整理期量能遞減趨勢
     "break_dist",     # (close - consol_high) / consol_high
     "consol_ret",     # 整理期間收益率
@@ -45,16 +44,16 @@ VCP_FEATURES = [
 ]
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
-HOLD_DAYS     = 20    # 持有天數
+HOLD_DAYS     = 10    # 持有天數
 CONSOL_DAYS   = 10    # 整理觀察窗口（10個交易日，約2週）
 ATR_SHORT     = 5     # 短期ATR週期（僅用於特徵，不作為信號條件）
 ATR_LONG      = 20    # 長期ATR週期（僅用於特徵）
-RANGE_PCT     = 0.12  # 整理區高低點差距上限（12%以內為橫盤）
-VOL_RATIO     = 1.0   # 突破日放量門檻（均量的1.3倍）
+RANGE_PCT     = 0.08  # 整理區高低點差距上限（8%以內，更嚴格橫盤）
+VOL_RATIO     = 1.5   # 突破日放量門檻（均量的1.5倍，確保放量）
 MIN_ATR_PCT   = 0.02  # 最低ATR過濾（排除低波動股）
 PROFIT_TARGET = 0.10  # 止盈門檻
 STOP_LOSS     = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
-HIGH_LEVEL    = 0.85  # 整理頂部需達前120日最高的85%以上
+HIGH_LEVEL    = 0.90  # 整理頂部需達前120日最高的90%以上（更靠近高點）
 THRESHOLD     = 0.65  # 回測進場門檻（OOS：thr=0.632→57%，扣label偏差後目標win_rate>53%）
 
 LGBM_PARAMS = {
@@ -308,6 +307,7 @@ def build_vcp_dataset(
             (df_all["date"] >= pd.Timestamp(st))
             & (df_all["date"] < pd.Timestamp(end))
             & (df_all["atr_pct"].fillna(0) >= min_atr_pct)
+            & (df_all["vcp_signal"] == 1)
         ]
         .copy()
         .reset_index(drop=True)
@@ -315,7 +315,7 @@ def build_vcp_dataset(
 
     n_pos    = df_signal["Y"].sum()
     pos_rate = df_signal["Y"].mean()
-    print(f"全市場樣本：{len(df_signal):,}  Y=1：{n_pos:,} 筆  正例率：{pos_rate:.1%}")
+    print(f"VCP突破樣本：{len(df_signal):,}  Y=1：{n_pos:,} 筆  正例率：{pos_rate:.1%}")
 
     X = df_signal[VCP_FEATURES].fillna(0).values.astype(np.float32)
     y = df_signal["Y"].values.astype(np.int8)
@@ -444,11 +444,12 @@ def make_signal_vcp_break_lgbm(
         df_all[
             (df_all["date"] >= pd.Timestamp(st))
             & (df_all["atr_pct"].fillna(0) >= min_atr_pct)
+            & (df_all["vcp_signal"] == 1)
         ]
         .copy()
         .reset_index(drop=True)
     )
-    print(f"  VCP 信號：{len(df_scan):,} 筆")
+    print(f"  VCP突破信號：{len(df_scan):,} 筆")
 
     if df_scan.empty:
         return pd.DataFrame(columns=["date", "stock_id", "up_prob"])
@@ -490,7 +491,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST  = "2024-01-01"
-    MODE     = "backtest"  # "train" | "eval" | "backtest"
+    MODE     = "eval"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
@@ -580,9 +581,9 @@ if __name__ == "__main__":
         print(f"\n{'='*60}\n【VcpBreakLGBM 高預測報酬 + 持有{hold_days_loaded}日】\n{'='*60}")
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
             sig,
-            top_n=10,
+            top_n=30,
             threshold=THRESHOLD,
-            max_positions=5,
+            max_positions=20,
             use_sl_trail=False,
             use_fixed_sl=True,
             sl_stop=STOP_LOSS,
