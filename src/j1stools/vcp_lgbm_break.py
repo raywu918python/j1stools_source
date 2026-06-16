@@ -49,7 +49,7 @@ _GMM_FEATURES = [
     "gmm_max_prob",  # 最大叢集機率（分類信心，越高越確定）
 ]
 
-USE_GMM = True  # 開啟 GMM 分群特徵（設 False 可對比 baseline）
+USE_GMM = False  # 開啟 GMM 分群特徵（設 False 可對比 baseline）
 
 VCP_FEATURES = _BASE_FEATURES + (_GMM_FEATURES if USE_GMM else [])
 
@@ -489,7 +489,7 @@ class VcpBreakXGB:
         self._model.fit(X, y, **fit_kwargs)
 
         imp = sorted(zip(VCP_FEATURES, self._model.feature_importances_), key=lambda x: -x[1])
-        print("  特徵重要度：" + "  ".join(f"{n}={v:.0f}" for n, v in imp))
+        print("  特徵重要度：" + "  ".join(f"{n}={v:.4f}" for n, v in imp))
 
         if X_val is not None:
             up_prob_v = self._model.predict_proba(X_val)[:, 1]
@@ -669,7 +669,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
-    MODE = "backtest"  # "train" | "eval" | "backtest"
+    MODE = "eval"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
@@ -710,19 +710,31 @@ if __name__ == "__main__":
             f"p50={np.median(up_prob):.3f}  p75={np.percentile(up_prob,75):.3f}  max={up_prob.max():.3f}"
         )
 
-        print(f"\n{'─'*54}")
-        print(f"{'THRESHOLD':>10}  {'信號數':>8}  {'精度':>8}  {'提升':>6}")
-        print(f"{'─'*54}")
+        df_te["up_prob"] = up_prob
+        df_te["Y"] = y_test
+
         pcts = np.arange(50, 100, 3)
         thr_vals = np.unique(np.round(np.concatenate([np.percentile(up_prob, pcts), np.arange(0.65, 0.82, 0.025)]), 3))
-        for thr in thr_vals:
-            mask = up_prob >= thr
-            n = int(mask.sum())
-            if n == 0:
-                continue
-            prec = y_test[mask].mean()
-            print(f"{thr:>10.3f}  {n:>8,}  {prec:>8.1%}  {prec/base_rate:>6.2f}x")
-        print(f"{'─'*54}")
+
+        for label, do_dedup in [("原始（含重複）", False), ("去重（每股首次進場）", True)]:
+            print(f"\n{'─'*60}")
+            print(f"  {label}")
+            print(f"{'─'*60}")
+            print(f"{'THRESHOLD':>10}  {'信號數':>8}  {'精度':>8}  {'提升':>6}")
+            print(f"{'─'*54}")
+            for thr in thr_vals:
+                df_above = df_te[df_te["up_prob"] >= thr].copy()
+                if len(df_above) == 0:
+                    continue
+                if do_dedup:
+                    df_above = df_above.sort_values(["stock_id", "date"])
+                    df_above["_gap"] = df_above.groupby("stock_id")["date"].diff().dt.days.fillna(hold_days_loaded + 1)
+                    df_above["_win"] = (df_above["_gap"] > hold_days_loaded).groupby(df_above["stock_id"]).cumsum()
+                    df_above = df_above.drop_duplicates(subset=["stock_id", "_win"])
+                n = len(df_above)
+                prec = df_above["Y"].mean()
+                print(f"{thr:>10.3f}  {n:>8,}  {prec:>8.1%}  {prec/base_rate:>6.2f}x")
+            print(f"{'─'*54}")
 
         _, axes = plt.subplots(1, 2, figsize=(12, 4))
         axes[0].hist(up_prob[y_test == 0], bins=40, alpha=0.6, color="steelblue", label="Y=0（失敗）", density=True)
@@ -805,7 +817,7 @@ if __name__ == "__main__":
             sig,
             top_n=30,
             threshold=THRESHOLD,
-            max_positions=3,
+            max_positions=5,
             use_sl_trail=False,
             use_fixed_sl=True,
             sl_stop=STOP_LOSS,
@@ -814,7 +826,7 @@ if __name__ == "__main__":
             use_hold_days=True,
             hold_days=hold_days_loaded,
             group_limit=99,
-            min_volume=200,
+            min_volume=0,
             use_fixed_sl_tp=False,
         )
         count = 20
