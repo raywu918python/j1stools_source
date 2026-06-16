@@ -42,12 +42,6 @@ VCP_FEATURES = [
     "f_short_ratio",  # 券資比（高=空頭壓力大）
     "f_dt_ratio",     # 當沖占成交量比例
     "f_dt_net",       # 當沖方向（正=買當>賣當）
-    # ── 大盤（0050）──
-    "mkt_ret_5d",     # 大盤5日報酬
-    "mkt_ret_20d",    # 大盤20日報酬（中期趨勢）
-    "mkt_ma60_dist",  # 大盤 vs MA60 距離（多/空環境）
-    "mkt_atr_ratio",  # 大盤波動收縮程度
-    "mkt_high_pct",   # 大盤 vs 120日最高（強弱位置）
 ]
 
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
@@ -61,7 +55,7 @@ MIN_ATR_PCT   = 0.02  # 最低ATR過濾（排除低波動股）
 PROFIT_TARGET = 0.10  # 止盈門檻
 STOP_LOSS     = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
 HIGH_LEVEL    = 0.90  # 整理頂部需達前120日最高的90%以上（更靠近高點）
-THRESHOLD     = 0.6  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
+THRESHOLD     = 0.5  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
 MODEL_TYPE    = "xgb"  # "lgbm" | "xgb" | "ensemble"
 
 LGBM_PARAMS = {
@@ -274,40 +268,6 @@ def _compute_chips(df: pd.DataFrame, stocks: list, st: str, end: str) -> pd.Data
     return base[["date", "stock_id"] + chips_cols]
 
 
-def _compute_market_features(st: str, end: str) -> pd.DataFrame:
-    """用 0050 當大盤代理，計算市場環境特徵（按 date join）。"""
-    from j1stools import parquet_db
-
-    df = parquet_db.query_price(["0050"], st, end)
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
-
-    c = df["close"]
-    h = df["high"]
-    l = df["low"]
-
-    tr = pd.concat([(h - l), (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
-    atr5  = tr.rolling(5,  min_periods=3).mean()
-    atr20 = tr.rolling(20, min_periods=10).mean()
-
-    ma60  = c.rolling(60, min_periods=30).mean()
-    h120  = h.rolling(120, min_periods=60).max()
-
-    mkt = pd.DataFrame({
-        "date":            df["date"],
-        "mkt_ret_5d":      c.pct_change(5,  fill_method=None).clip(-0.3, 0.3),
-        "mkt_ret_20d":     c.pct_change(20, fill_method=None).clip(-0.5, 0.5),
-        "mkt_ma60_dist":   ((c - ma60) / ma60.replace(0, np.nan)).clip(-0.3, 0.3),
-        "mkt_atr_ratio":   (atr5 / atr20.replace(0, np.nan)).clip(0, 2),
-        "mkt_high_pct":    (c / h120.replace(0, np.nan)).clip(0.5, 1.1),
-    })
-    # 所有大盤特徵 shift(1)，確保不用到當天收盤
-    for col in ["mkt_ret_5d", "mkt_ret_20d", "mkt_ma60_dist", "mkt_atr_ratio", "mkt_high_pct"]:
-        mkt[col] = mkt[col].shift(1)
-
-    return mkt.dropna(subset=["mkt_ret_20d"])
-
-
 def build_vcp_daily_features(stocks: list, st: str, end: str = "2099-01-01") -> pd.DataFrame:
     """
     計算 VCP_FEATURES（含籌碼）及信號欄位。
@@ -332,13 +292,6 @@ def build_vcp_daily_features(stocks: list, st: str, end: str = "2099-01-01") -> 
     df = df.merge(chips, on=["date", "stock_id"], how="left")
     chips_cols = ["f_ib_net_pct", "f_ib_5d", "f_margin_chg", "f_short_ratio", "f_dt_ratio", "f_dt_net"]
     for col in chips_cols:
-        df[col] = df[col].fillna(0)
-
-    # 大盤特徵（0050）
-    mkt = _compute_market_features(st, end)
-    df = df.merge(mkt, on="date", how="left")
-    mkt_cols = ["mkt_ret_5d", "mkt_ret_20d", "mkt_ma60_dist", "mkt_atr_ratio", "mkt_high_pct"]
-    for col in mkt_cols:
         df[col] = df[col].fillna(0)
 
     cols = ["date", "stock_id", "high", "low", "close", "vcp_signal"] + VCP_FEATURES
