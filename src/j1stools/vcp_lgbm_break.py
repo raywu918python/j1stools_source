@@ -20,43 +20,52 @@ VcpLGBMBreak：波動壓縮後放量突破預測（LGBM Binary Classification）
 import numpy as np
 import pandas as pd
 
-VCP_FEATURES = [
+_BASE_FEATURES = [
     # ── 價格/波動 ──
-    "atr_ratio",      # 短ATR / 長ATR（壓縮程度）
-    "range_pct",      # 整理區高低點範圍
+    "atr_ratio",  # 短ATR / 長ATR（壓縮程度）
+    "range_pct",  # 整理區高低點範圍
     "vol_dry_trend",  # 整理期量能遞減趨勢
-    "break_dist",     # (close - consol_high) / consol_high
-    "consol_ret",     # 整理期間收益率
-    "atr_pct",        # ATR14 / close
-    "ma60_dist",      # (close - MA60) / MA60
-    "ret_20d",        # 前20日報酬率
-    "ret_60d",        # 前60日報酬率
-    "up_day_ratio",   # 整理期上漲日比例
-    "close_pos",      # 今日K線強度
-    "high_level_pct", # 整理頂部 / 前120日最高點
-    "days_since_big_move", # 距上次20日漲幅>20%有幾天（近=過熱，30~60天=VCP甜蜜點）
+    "break_dist",  # (close - consol_high) / consol_high
+    "consol_ret",  # 整理期間收益率
+    "atr_pct",  # ATR14 / close
+    "ma60_dist",  # (close - MA60) / MA60
+    "ret_20d",  # 前20日報酬率
+    "ret_60d",  # 前60日報酬率
+    "up_day_ratio",  # 整理期上漲日比例
+    "close_pos",  # 今日K線強度
+    "high_level_pct",  # 整理頂部 / 前120日最高點
+    "days_since_big_move",  # 距上次20日漲幅>20%有幾天（近=過熱，30~60天=VCP甜蜜點）
     # ── 籌碼 ──
-    "f_ib_net_pct",   # 外資淨買超 / 20日均量（正=外資買，負=外資賣）
-    "f_ib_5d",        # 5日外資累積淨買超 / 20日均量
-    "f_margin_chg",   # 融資餘額日變化%（正=散戶加碼）
+    "f_ib_net_pct",  # 外資淨買超 / 20日均量（正=外資買，負=外資賣）
+    "f_ib_5d",  # 5日外資累積淨買超 / 20日均量
+    "f_margin_chg",  # 融資餘額日變化%（正=散戶加碼）
     "f_short_ratio",  # 券資比（高=空頭壓力大）
-    "f_dt_ratio",     # 當沖占成交量比例
-    "f_dt_net",       # 當沖方向（正=買當>賣當）
+    "f_dt_ratio",  # 當沖占成交量比例
+    "f_dt_net",  # 當沖方向（正=買當>賣當）
 ]
 
+_GMM_FEATURES = [
+    "gmm_cluster",  # IBMarginGMM 叢集標籤（0-9，-1=無法分類）
+    "gmm_max_prob",  # 最大叢集機率（分類信心，越高越確定）
+]
+
+USE_GMM = True  # 開啟 GMM 分群特徵（設 False 可對比 baseline）
+
+VCP_FEATURES = _BASE_FEATURES + (_GMM_FEATURES if USE_GMM else [])
+
 # ── 超參數 ────────────────────────────────────────────────────────────────── #
-HOLD_DAYS     = 20    # 持有天數
-CONSOL_DAYS   = 10    # 整理觀察窗口（10個交易日，約2週）
-ATR_SHORT     = 5     # 短期ATR週期（僅用於特徵，不作為信號條件）
-ATR_LONG      = 20    # 長期ATR週期（僅用於特徵）
-RANGE_PCT     = 0.08  # 整理區高低點差距上限（8%以內，更嚴格橫盤）
-VOL_RATIO     = 1.0   # 突破日放量門檻（均量的1.5倍，確保放量）
-MIN_ATR_PCT   = 0.02  # 最低ATR過濾（排除低波動股）
+HOLD_DAYS = 20  # 持有天數
+CONSOL_DAYS = 10  # 整理觀察窗口（10個交易日，約2週）
+ATR_SHORT = 5  # 短期ATR週期（僅用於特徵，不作為信號條件）
+ATR_LONG = 20  # 長期ATR週期（僅用於特徵）
+RANGE_PCT = 0.08  # 整理區高低點差距上限（8%以內，更嚴格橫盤）
+VOL_RATIO = 1.0  # 突破日放量門檻（均量的1.5倍，確保放量）
+MIN_ATR_PCT = 0.02  # 最低ATR過濾（排除低波動股）
 PROFIT_TARGET = 0.10  # 止盈門檻
-STOP_LOSS     = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
-HIGH_LEVEL    = 0.90  # 整理頂部需達前120日最高的90%以上（更靠近高點）
-THRESHOLD     = 0.5  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
-MODEL_TYPE    = "xgb"  # "lgbm" | "xgb" | "ensemble"
+STOP_LOSS = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
+HIGH_LEVEL = 0.90  # 整理頂部需達前120日最高的90%以上（更靠近高點）
+THRESHOLD = 0.7  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
+MODEL_TYPE = "xgb"  # "lgbm" | "xgb" | "ensemble"
 
 LGBM_PARAMS = {
     "objective": "binary",
@@ -95,9 +104,9 @@ XGB_PARAMS = {
 
 def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
     """Per-stock VCP 信號與特徵（整合在同一次 groupby apply）。"""
-    close  = grp["close"]
-    high   = grp["high"]
-    low    = grp["low"]
+    close = grp["close"]
+    high = grp["high"]
+    low = grp["low"]
     volume = grp["volume"]
     open_p = grp["open"] if "open" in grp.columns else close.shift(1)
 
@@ -106,45 +115,45 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
         [
             high - low,
             (high - close.shift(1)).abs(),
-            (low  - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
         ],
         axis=1,
     ).max(axis=1)
 
-    atr5  = tr.rolling(ATR_SHORT, min_periods=3).mean()
-    atr20 = tr.rolling(ATR_LONG,  min_periods=10).mean()
-    atr14 = tr.rolling(14,        min_periods=5).mean()
+    atr5 = tr.rolling(ATR_SHORT, min_periods=3).mean()
+    atr20 = tr.rolling(ATR_LONG, min_periods=10).mean()
+    atr14 = tr.rolling(14, min_periods=5).mean()
 
     # ── 整理期指標（shift(1)：不含今天，純看前 CONSOL_DAYS 天）──
     half = max(CONSOL_DAYS // 2, 3)
     min_p = max(CONSOL_DAYS // 2, 5)
 
     consol_high = high.shift(1).rolling(CONSOL_DAYS, min_periods=min_p).max()
-    consol_low  = low.shift(1).rolling(CONSOL_DAYS,  min_periods=min_p).min()
-    vol_ma_c    = volume.shift(1).rolling(CONSOL_DAYS, min_periods=min_p).mean()
+    consol_low = low.shift(1).rolling(CONSOL_DAYS, min_periods=min_p).min()
+    vol_ma_c = volume.shift(1).rolling(CONSOL_DAYS, min_periods=min_p).mean()
 
     # ── 整理在高點判斷（需提前算，信號條件4用到）──
-    high_120      = high.shift(1).rolling(120, min_periods=60).max()
+    high_120 = high.shift(1).rolling(120, min_periods=60).max()
     cond_high_lvl = consol_high / high_120.replace(0, np.nan) >= HIGH_LEVEL
 
     # ── 信號條件（4個：橫盤 + 突破前高 + 放量 + 在高點盤整）──
     cond_range = (consol_high - consol_low) / consol_low.replace(0, np.nan) <= RANGE_PCT
     cond_break = close > consol_high
-    cond_vol   = volume > vol_ma_c * VOL_RATIO
+    cond_vol = volume > vol_ma_c * VOL_RATIO
 
     signal = (cond_range & cond_break & cond_vol & cond_high_lvl).astype(np.int8)
 
     # ── 特徵 ──
-    atr_pct    = (atr14 / close.replace(0, np.nan)).clip(0, 0.3)
-    atr_ratio  = (atr5.shift(1) / atr20.shift(1).replace(0, np.nan)).clip(0, 2)
-    range_pct  = ((consol_high - consol_low) / consol_low.replace(0, np.nan)).clip(0, 0.5)
-    vol_ratio  = (volume / vol_ma_c.replace(0, np.nan)).clip(0, 10)
+    atr_pct = (atr14 / close.replace(0, np.nan)).clip(0, 0.3)
+    atr_ratio = (atr5.shift(1) / atr20.shift(1).replace(0, np.nan)).clip(0, 2)
+    range_pct = ((consol_high - consol_low) / consol_low.replace(0, np.nan)).clip(0, 0.5)
+    vol_ratio = (volume / vol_ma_c.replace(0, np.nan)).clip(0, 10)
     break_dist = ((close - consol_high) / consol_high.replace(0, np.nan)).clip(-0.05, 0.15)
 
     # 整理期間漲幅：整理起點 close vs 整理終點 close（shift(1)）
     consol_start = close.shift(CONSOL_DAYS)
-    consol_end   = close.shift(1)
-    consol_ret   = ((consol_end - consol_start) / consol_start.replace(0, np.nan)).clip(-0.5, 0.5)
+    consol_end = close.shift(1)
+    consol_ret = ((consol_end - consol_start) / consol_start.replace(0, np.nan)).clip(-0.5, 0.5)
 
     # 距上次「20日漲幅超過20%」有幾天（近=過熱，遠=有段時間了，適合VCP）
     ret20 = close.pct_change(20, fill_method=None)
@@ -156,7 +165,7 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
     days_since_big_move = pd.Series(_days.clip(0, 200), index=close.index).shift(1).fillna(200)
 
     # MA60 距離
-    ma60     = close.rolling(60, min_periods=30).mean()
+    ma60 = close.rolling(60, min_periods=30).mean()
     ma60_dist = ((close - ma60) / ma60.replace(0, np.nan)).clip(-0.5, 0.5)
 
     # 動能
@@ -164,17 +173,17 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
     ret_60d = close.pct_change(60, fill_method=None).clip(-1.0, 1.0)
 
     # 整理期上漲日比例（close > open）
-    up_day       = (close > open_p).astype(float)
+    up_day = (close > open_p).astype(float)
     up_day_ratio = up_day.shift(1).rolling(CONSOL_DAYS, min_periods=min_p).mean()
 
     # 量能遞減趨勢：前半段均量 vs 後半段均量（正值 = 量在縮，好信號）
-    vol_first     = volume.shift(half + 1).rolling(half, min_periods=half // 2).mean()
-    vol_second    = volume.shift(1).rolling(half, min_periods=half // 2).mean()
-    vol_sum       = (vol_first + vol_second).replace(0, np.nan)
+    vol_first = volume.shift(half + 1).rolling(half, min_periods=half // 2).mean()
+    vol_second = volume.shift(1).rolling(half, min_periods=half // 2).mean()
+    vol_sum = (vol_first + vol_second).replace(0, np.nan)
     vol_dry_trend = ((vol_first - vol_second) / vol_sum).clip(-1, 1)
 
     # 今日K線強度
-    hl        = (high - low).replace(0, np.nan)
+    hl = (high - low).replace(0, np.nan)
     close_pos = ((close - low) / hl).clip(0, 1)
 
     # 整理頂部 vs 前120日最高（接近1.0 = 在高點盤整，遠低於1.0 = 低點反彈）
@@ -182,20 +191,20 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(
         {
-            "vcp_signal":    signal,
-            "atr_pct":       atr_pct,
-            "atr_ratio":     atr_ratio,
-            "range_pct":     range_pct,
-            "vol_ratio":     vol_ratio,
-            "break_dist":    break_dist,
-            "consol_ret":    consol_ret,
-            "ma60_dist":     ma60_dist,
-            "ret_20d":       ret_20d,
-            "ret_60d":       ret_60d,
-            "up_day_ratio":  up_day_ratio,
+            "vcp_signal": signal,
+            "atr_pct": atr_pct,
+            "atr_ratio": atr_ratio,
+            "range_pct": range_pct,
+            "vol_ratio": vol_ratio,
+            "break_dist": break_dist,
+            "consol_ret": consol_ret,
+            "ma60_dist": ma60_dist,
+            "ret_20d": ret_20d,
+            "ret_60d": ret_60d,
+            "up_day_ratio": up_day_ratio,
             "vol_dry_trend": vol_dry_trend,
-            "close_pos":           close_pos,
-            "high_level_pct":      high_level_pct,
+            "close_pos": close_pos,
+            "high_level_pct": high_level_pct,
             "days_since_big_move": days_since_big_move,
         },
         index=grp.index,
@@ -220,9 +229,13 @@ def _compute_chips(df: pd.DataFrame, stocks: list, st: str, end: str) -> pd.Data
     # ── 融資融券 ──
     df_mg = parquet_db.query_margin(stocks, st, end)
     df_mg["date"] = pd.to_datetime(df_mg["date"])
-    mg_cols = ["date", "stock_id",
-               "margin_purchase_today_balance", "margin_purchase_yesterday_balance",
-               "short_sale_today_balance"]
+    mg_cols = [
+        "date",
+        "stock_id",
+        "margin_purchase_today_balance",
+        "margin_purchase_yesterday_balance",
+        "short_sale_today_balance",
+    ]
 
     # ── 當沖 ──
     df_dt = parquet_db.query_day_trade(stocks, st, end)
@@ -233,14 +246,22 @@ def _compute_chips(df: pd.DataFrame, stocks: list, st: str, end: str) -> pd.Data
     base = df[["date", "stock_id", "volume"]].copy()
     base = base.merge(ib_piv, on=["date", "stock_id"], how="left")
     base = base.merge(df_mg[mg_cols], on=["date", "stock_id"], how="left")
-    base = base.merge(df_dt[["date", "stock_id", "_dt_vol", "_dt_buy", "_dt_sell"]],
-                      on=["date", "stock_id"], how="left")
+    base = base.merge(
+        df_dt[["date", "stock_id", "_dt_vol", "_dt_buy", "_dt_sell"]], on=["date", "stock_id"], how="left"
+    )
 
     g = base.groupby("stock_id")
 
     # 所有籌碼資料 shift=1（收盤後才公布，實際交易用前一天的資料）
-    for col in ["_ib_net", "margin_purchase_today_balance", "margin_purchase_yesterday_balance",
-                "short_sale_today_balance", "_dt_vol", "_dt_buy", "_dt_sell"]:
+    for col in [
+        "_ib_net",
+        "margin_purchase_today_balance",
+        "margin_purchase_yesterday_balance",
+        "short_sale_today_balance",
+        "_dt_vol",
+        "_dt_buy",
+        "_dt_sell",
+    ]:
         if col in base.columns:
             base[col] = g[col].transform(lambda x: x.shift(1))
 
@@ -266,6 +287,29 @@ def _compute_chips(df: pd.DataFrame, stocks: list, st: str, end: str) -> pd.Data
 
     chips_cols = ["f_ib_net_pct", "f_ib_5d", "f_margin_chg", "f_short_ratio", "f_dt_ratio", "f_dt_net"]
     return base[["date", "stock_id"] + chips_cols]
+
+
+def _compute_gmm_features(stocks: list, st: str, end: str) -> pd.DataFrame:
+    """載入 IBMarginGMM，計算每股每日的叢集標籤（gmm_cluster）與最大信心機率（gmm_max_prob）。
+
+    使用 gmm_classify.load_data() 計算截面 xrank 特徵，確保跨股票排名正確。
+    籌碼資料已在 load_data 內部 shift(1)，無前視偏差。
+    """
+    from j1stools.gmm_classify import IBMarginGMM, load_data, BREAKOUT_GMM_MODEL_PATH as _GMM_PATH
+
+    clf = IBMarginGMM.load(_GMM_PATH)
+    df_feat = load_data(stocks, st, end, min_atr_pct=None, require_complete=False)
+
+    avail = [c for c in clf._fitted_features if c in df_feat.columns]
+    sub = df_feat[["date", "stock_id"] + avail].copy()
+
+    labels = clf.predict(sub)
+    proba = clf.predict_proba(sub)
+
+    result = sub[["date", "stock_id"]].copy()
+    result["gmm_cluster"] = labels.values
+    result["gmm_max_prob"] = proba.max(axis=1).values
+    return result
 
 
 def build_vcp_daily_features(stocks: list, st: str, end: str = "2099-01-01") -> pd.DataFrame:
@@ -294,6 +338,13 @@ def build_vcp_daily_features(stocks: list, st: str, end: str = "2099-01-01") -> 
     for col in chips_cols:
         df[col] = df[col].fillna(0)
 
+    # GMM 分群特徵
+    if USE_GMM:
+        gmm = _compute_gmm_features(stocks, st, end)
+        df = df.merge(gmm, on=["date", "stock_id"], how="left")
+        df["gmm_cluster"] = df["gmm_cluster"].fillna(-1).astype(int)
+        df["gmm_max_prob"] = df["gmm_max_prob"].fillna(0.0)
+
     cols = ["date", "stock_id", "high", "low", "close", "vcp_signal"] + VCP_FEATURES
     print(f"  [VcpBreak] 特徵完成（{_time.time()-_t0:.1f}s），共 {len(df):,} 行")
     return df[cols].sort_values(["stock_id", "date"]).reset_index(drop=True)
@@ -316,7 +367,7 @@ def build_vcp_dataset(
         df_meta : 含 date, stock_id, Y 的 DataFrame
     """
     buf_days = max(CONSOL_DAYS, ATR_LONG, 60) + 10
-    st_buf  = (pd.Timestamp(st) - pd.DateOffset(days=buf_days * 2)).strftime("%Y-%m-%d")
+    st_buf = (pd.Timestamp(st) - pd.DateOffset(days=buf_days * 2)).strftime("%Y-%m-%d")
     end_buf = (pd.Timestamp(end) + pd.DateOffset(days=hold_days * 2)).strftime("%Y-%m-%d")
 
     print(f"── 載入 VCP 原始特徵（{st_buf} ~ {end_buf}）──")
@@ -339,7 +390,7 @@ def build_vcp_dataset(
         .reset_index(drop=True)
     )
 
-    n_pos    = df_signal["Y"].sum()
+    n_pos = df_signal["Y"].sum()
     pos_rate = df_signal["Y"].mean()
     print(f"全市場樣本：{len(df_signal):,}  Y=1：{n_pos:,} 筆  正例率：{pos_rate:.1%}")
 
@@ -356,7 +407,7 @@ class VcpBreakLGBM:
 
     def __init__(self, params: dict | None = None):
         self._params = {**LGBM_PARAMS, **(params or {})}
-        self._model  = None
+        self._model = None
         self._best_iter: int = 0
 
     def fit(
@@ -369,18 +420,18 @@ class VcpBreakLGBM:
         import lightgbm as lgb
         from sklearn.metrics import roc_auc_score
 
-        n_neg  = int((y == 0).sum())
-        n_pos  = int((y == 1).sum())
+        n_neg = int((y == 0).sum())
+        n_pos = int((y == 1).sum())
         params = {**self._params, "scale_pos_weight": n_neg / max(n_pos, 1)}
 
         self._model = lgb.LGBMClassifier(**params)
 
-        X_df     = pd.DataFrame(X, columns=VCP_FEATURES)
+        X_df = pd.DataFrame(X, columns=VCP_FEATURES)
         X_val_df = pd.DataFrame(X_val, columns=VCP_FEATURES) if X_val is not None else None
 
         fit_kwargs = {}
         if X_val_df is not None:
-            fit_kwargs["eval_set"]  = [(X_val_df, y_val)]
+            fit_kwargs["eval_set"] = [(X_val_df, y_val)]
             fit_kwargs["callbacks"] = [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(100)]
 
         self._model.fit(X_df, y, **fit_kwargs)
@@ -391,7 +442,7 @@ class VcpBreakLGBM:
 
         if X_val_df is not None:
             up_prob_v = self._model.predict_proba(X_val_df)[:, 1]
-            auc       = roc_auc_score(y_val, up_prob_v)
+            auc = roc_auc_score(y_val, up_prob_v)
             print(
                 f"  val AUC={auc:.4f}  up_prob 分布：min={up_prob_v.min():.3f}  "
                 f"p50={np.median(up_prob_v):.3f}  max={up_prob_v.max():.3f}"
@@ -409,7 +460,7 @@ class VcpBreakXGB:
 
     def __init__(self, params: dict | None = None):
         self._params = {**XGB_PARAMS, **(params or {})}
-        self._model  = None
+        self._model = None
 
     def fit(
         self,
@@ -433,7 +484,7 @@ class VcpBreakXGB:
         fit_kwargs = {}
         if X_val is not None:
             fit_kwargs["eval_set"] = [(X_val, y_val)]
-            fit_kwargs["verbose"]  = 100
+            fit_kwargs["verbose"] = 100
 
         self._model.fit(X, y, **fit_kwargs)
 
@@ -442,7 +493,7 @@ class VcpBreakXGB:
 
         if X_val is not None:
             up_prob_v = self._model.predict_proba(X_val)[:, 1]
-            auc       = roc_auc_score(y_val, up_prob_v)
+            auc = roc_auc_score(y_val, up_prob_v)
             print(
                 f"  val AUC={auc:.4f}  up_prob 分布：min={up_prob_v.min():.3f}  "
                 f"p50={np.median(up_prob_v):.3f}  max={up_prob_v.max():.3f}"
@@ -467,7 +518,7 @@ def train_vcp_break_lgbm(
     from sklearn.metrics import roc_auc_score
 
     print("\n── 訓練 VcpBreakLGBM (Binary) ──")
-    clf       = VcpBreakLGBM()
+    clf = VcpBreakLGBM()
     clf.fit(X_train, y_train, X_val=X_val, y_val=y_val)
     train_auc = roc_auc_score(y_train, clf.predict(X_train))
     print(f"訓練集 AUC：{train_auc:.4f}（in-sample）")
@@ -483,7 +534,7 @@ def train_vcp_break_xgb(
     from sklearn.metrics import roc_auc_score
 
     print("\n── 訓練 VcpBreakXGB (Binary) ──")
-    clf       = VcpBreakXGB()
+    clf = VcpBreakXGB()
     clf.fit(X_train, y_train, X_val=X_val, y_val=y_val)
     train_auc = roc_auc_score(y_train, clf.predict(X_train))
     print(f"訓練集 AUC：{train_auc:.4f}（in-sample）")
@@ -495,9 +546,7 @@ def train_vcp_break_xgb(
 VCP_BREAK_LGBM_PATH = "db/models/vcp_break_lgbm.joblib"
 
 
-def save_vcp_break_lgbm(
-    clf: VcpBreakLGBM, path: str = VCP_BREAK_LGBM_PATH, hold_days: int = HOLD_DAYS
-) -> None:
+def save_vcp_break_lgbm(clf: VcpBreakLGBM, path: str = VCP_BREAK_LGBM_PATH, hold_days: int = HOLD_DAYS) -> None:
     import joblib, os
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -508,10 +557,10 @@ def save_vcp_break_lgbm(
 def load_vcp_break_lgbm(path: str = VCP_BREAK_LGBM_PATH) -> tuple["VcpBreakLGBM", int]:
     import joblib
 
-    state       = joblib.load(path)
-    clf         = VcpBreakLGBM()
-    clf._model  = state["model"]
-    hold_days   = state.get("hold_days", HOLD_DAYS)
+    state = joblib.load(path)
+    clf = VcpBreakLGBM()
+    clf._model = state["model"]
+    hold_days = state.get("hold_days", HOLD_DAYS)
     print(f"VcpBreakLGBM 已載入：{path}（hold_days={hold_days}）")
     return clf, hold_days
 
@@ -519,9 +568,7 @@ def load_vcp_break_lgbm(path: str = VCP_BREAK_LGBM_PATH) -> tuple["VcpBreakLGBM"
 VCP_BREAK_XGB_PATH = "db/models/vcp_break_xgb.joblib"
 
 
-def save_vcp_break_xgb(
-    clf: VcpBreakXGB, path: str = VCP_BREAK_XGB_PATH, hold_days: int = HOLD_DAYS
-) -> None:
+def save_vcp_break_xgb(clf: VcpBreakXGB, path: str = VCP_BREAK_XGB_PATH, hold_days: int = HOLD_DAYS) -> None:
     import joblib, os
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -532,10 +579,10 @@ def save_vcp_break_xgb(
 def load_vcp_break_xgb(path: str = VCP_BREAK_XGB_PATH) -> tuple["VcpBreakXGB", int]:
     import joblib
 
-    state       = joblib.load(path)
-    clf         = VcpBreakXGB()
-    clf._model  = state["model"]
-    hold_days   = state.get("hold_days", HOLD_DAYS)
+    state = joblib.load(path)
+    clf = VcpBreakXGB()
+    clf._model = state["model"]
+    hold_days = state.get("hold_days", HOLD_DAYS)
     print(f"VcpBreakXGB 已載入：{path}（hold_days={hold_days}）")
     return clf, hold_days
 
@@ -548,7 +595,7 @@ def _load_model(model_type: str):
         return load_vcp_break_xgb()
     if model_type == "ensemble":
         clf_l, hd = load_vcp_break_lgbm()
-        clf_x, _  = load_vcp_break_xgb()
+        clf_x, _ = load_vcp_break_xgb()
 
         class _Ensemble:
             def predict(self, X):
@@ -570,16 +617,13 @@ def make_signal_vcp_break_lgbm(
     threshold: float = THRESHOLD,
 ) -> pd.DataFrame:
     buf_days = max(CONSOL_DAYS, ATR_LONG, 60) + 10
-    st_buf   = (pd.Timestamp(st) - pd.DateOffset(days=buf_days * 2)).strftime("%Y-%m-%d")
+    st_buf = (pd.Timestamp(st) - pd.DateOffset(days=buf_days * 2)).strftime("%Y-%m-%d")
 
-    df_all  = build_vcp_daily_features(stocks, st_buf, end)
+    df_all = build_vcp_daily_features(stocks, st_buf, end)
     df_all["date"] = pd.to_datetime(df_all["date"])
 
     df_scan = (
-        df_all[
-            (df_all["date"] >= pd.Timestamp(st))
-            & (df_all["atr_pct"].fillna(0) >= min_atr_pct)
-        ]
+        df_all[(df_all["date"] >= pd.Timestamp(st)) & (df_all["atr_pct"].fillna(0) >= min_atr_pct)]
         .copy()
         .reset_index(drop=True)
     )
@@ -588,13 +632,13 @@ def make_signal_vcp_break_lgbm(
     if df_scan.empty:
         return pd.DataFrame(columns=["date", "stock_id", "up_prob"])
 
-    X       = df_scan[VCP_FEATURES].fillna(0).values.astype(np.float32)
+    X = df_scan[VCP_FEATURES].fillna(0).values.astype(np.float32)
     up_prob = clf.predict(X)
 
-    signal          = df_scan[["date", "stock_id"]].copy()
+    signal = df_scan[["date", "stock_id"]].copy()
     signal["up_prob"] = up_prob
-    signal["2"]       = up_prob
-    signal["date"]    = pd.to_datetime(signal["date"])
+    signal["2"] = up_prob
+    signal["date"] = pd.to_datetime(signal["date"])
 
     print(
         f"  up_prob 分布：mean={up_prob.mean():.3f}  "
@@ -624,8 +668,8 @@ if __name__ == "__main__":
     from j1stools import backtest_platform, j1s_chart, parquet_db
 
     TRAIN_ST = "2015-01-01"
-    EVAL_ST  = "2024-01-01"
-    MODE     = "backtest"  # "train" | "eval" | "backtest"
+    EVAL_ST = "2024-01-01"
+    MODE = "backtest"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 
@@ -633,7 +677,7 @@ if __name__ == "__main__":
         print("\n══ 建立訓練集 ══")
         X_train, y_train, df_tr = build_vcp_dataset(stocks, TRAIN_ST, EVAL_ST, hold_days=HOLD_DAYS)
         print("\n══ 建立測試集 ══")
-        X_test, y_test, df_te   = build_vcp_dataset(stocks, EVAL_ST, hold_days=HOLD_DAYS)
+        X_test, y_test, df_te = build_vcp_dataset(stocks, EVAL_ST, hold_days=HOLD_DAYS)
         print(f"訓練集：{X_train.shape}  測試集：{X_test.shape}")
 
         if MODEL_TYPE == "lgbm":
@@ -653,11 +697,12 @@ if __name__ == "__main__":
         plt.rcParams["font.family"] = ["Arial Unicode MS", "sans-serif"]
 
         from sklearn.metrics import roc_auc_score
+
         print("\n══ 建立測試集 ══")
         X_test, y_test, df_te = build_vcp_dataset(stocks, EVAL_ST, hold_days=hold_days_loaded)
 
-        up_prob   = clf.predict(X_test)
-        auc       = roc_auc_score(y_test, up_prob)
+        up_prob = clf.predict(X_test)
+        auc = roc_auc_score(y_test, up_prob)
         base_rate = y_test.mean()
         print(f"\nOOS AUC：{auc:.4f}  （n={len(y_test):,}，正例率={base_rate:.1%}）")
         print(
@@ -668,11 +713,11 @@ if __name__ == "__main__":
         print(f"\n{'─'*54}")
         print(f"{'THRESHOLD':>10}  {'信號數':>8}  {'精度':>8}  {'提升':>6}")
         print(f"{'─'*54}")
-        pcts     = np.arange(50, 96, 5)
-        thr_vals = np.unique(np.round(np.percentile(up_prob, pcts), 3))
+        pcts = np.arange(50, 100, 3)
+        thr_vals = np.unique(np.round(np.concatenate([np.percentile(up_prob, pcts), np.arange(0.65, 0.82, 0.025)]), 3))
         for thr in thr_vals:
             mask = up_prob >= thr
-            n    = int(mask.sum())
+            n = int(mask.sum())
             if n == 0:
                 continue
             prec = y_test[mask].mean()
@@ -681,7 +726,7 @@ if __name__ == "__main__":
 
         _, axes = plt.subplots(1, 2, figsize=(12, 4))
         axes[0].hist(up_prob[y_test == 0], bins=40, alpha=0.6, color="steelblue", label="Y=0（失敗）", density=True)
-        axes[0].hist(up_prob[y_test == 1], bins=40, alpha=0.6, color="tomato",    label="Y=1（突破）", density=True)
+        axes[0].hist(up_prob[y_test == 1], bins=40, alpha=0.6, color="tomato", label="Y=1（突破）", density=True)
         axes[0].set_xlabel("up_prob")
         axes[0].set_ylabel("density")
         axes[0].set_title(f"up_prob 分布（AUC={auc:.4f}）")
@@ -692,16 +737,21 @@ if __name__ == "__main__":
         sweep_prec, sweep_n = [], []
         for t in sweep_thrs:
             mask = up_prob >= t
-            n    = mask.sum()
+            n = mask.sum()
             sweep_prec.append(y_test[mask].mean() if n >= 30 else np.nan)
             sweep_n.append(n)
 
         ax1 = axes[1]
         ax2 = ax1.twinx()
-        ax1.plot(sweep_thrs, sweep_prec, color="seagreen",  linewidth=2, label="精度")
+        ax1.plot(sweep_thrs, sweep_prec, color="seagreen", linewidth=2, label="精度")
         ax1.axhline(base_rate, color="gray", linestyle="--", linewidth=0.8, label=f"基準 {base_rate:.1%}")
-        ax1.axhline(STOP_LOSS / (PROFIT_TARGET + STOP_LOSS), color="red", linestyle=":", linewidth=0.8,
-                    label=f"break-even {STOP_LOSS/(PROFIT_TARGET+STOP_LOSS):.1%}")
+        ax1.axhline(
+            STOP_LOSS / (PROFIT_TARGET + STOP_LOSS),
+            color="red",
+            linestyle=":",
+            linewidth=0.8,
+            label=f"break-even {STOP_LOSS/(PROFIT_TARGET+STOP_LOSS):.1%}",
+        )
         ax2.fill_between(sweep_thrs, sweep_n, alpha=0.15, color="steelblue")
         ax2.set_ylabel("信號數", color="steelblue")
         ax2.tick_params(axis="y", labelcolor="steelblue")
@@ -714,6 +764,30 @@ if __name__ == "__main__":
         plt.tight_layout()
         plt.show()
 
+        # ── Feature Importance ──────────────────────────────────── #
+        try:
+            models = []
+            if MODEL_TYPE == "ensemble":
+                clf_l, _ = load_vcp_break_lgbm()
+                clf_x, _ = load_vcp_break_xgb()
+                models = [("LGBM", clf_l._model), ("XGB", clf_x._model)]
+            elif MODEL_TYPE == "lgbm":
+                models = [("LGBM", clf._model)]
+            elif MODEL_TYPE == "xgb":
+                models = [("XGB", clf._model)]
+
+            for name, m in models:
+                imp = pd.Series(m.feature_importances_, index=VCP_FEATURES).sort_values(ascending=True)
+                fig, ax = plt.subplots(figsize=(8, max(4, len(VCP_FEATURES) * 0.32)))
+                colors = ["tomato" if f.startswith("gmm_") else "steelblue" for f in imp.index]
+                ax.barh(imp.index, imp.values, color=colors)
+                ax.set_title(f"Feature Importance [{name}]（紅色 = GMM 特徵）")
+                ax.set_xlabel("importance")
+                plt.tight_layout()
+                plt.show()
+        except Exception as e:
+            print(f"[feature importance 略過] {e}")
+
     elif MODE == "backtest":
         clf, hold_days_loaded = _load_model(MODEL_TYPE)
         print("\n══ 獨立回測 ══")
@@ -722,7 +796,9 @@ if __name__ == "__main__":
 
         if sig.empty:
             print(f"⚠️  無訊號（THRESHOLD={THRESHOLD}，VCP條件太嚴或threshold太高），請調整後重試")
-            import sys; sys.exit(0)
+            import sys
+
+            sys.exit(0)
 
         print(f"\n{'='*60}\n【VcpBreak[{MODEL_TYPE.upper()}] 高預測報酬 + 持有{hold_days_loaded}日】\n{'='*60}")
         pv, td, _, _ = backtest_platform.prepare_data_backtest(
