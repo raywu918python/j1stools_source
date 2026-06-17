@@ -119,6 +119,7 @@ def load_breakout_stocks(
     end: str = "2099-01-01",
     min_atr_pct: float = 0.02,
     volume_ratio_min: float | None = VOLUME_RATIO_MIN,  # None = 關閉放量過濾
+    min_daily_return: float | None = 0.0,  # None = 關閉上漲過濾；0.0 = 上漲即可
     require_complete: bool = False,
 ) -> pd.DataFrame:
     """
@@ -127,28 +128,26 @@ def load_breakout_stocks(
     假設：量能放大 + 價格上漲 = 有人在買且市場認可。
     搭配 GMM 分群，找出「哪種籌碼型態下的放量最可靠」。
 
-    volume_ratio_min=None：關閉放量過濾，保留所有上漲日。
+    volume_ratio_min=None：關閉放量過濾。
+    min_daily_return=None：關閉上漲過濾（保留所有日）。
     """
     df = load_data(stocks, st, end, min_atr_pct=min_atr_pct, require_complete=require_complete)
+    total = len(df)
 
+    # ── 上漲過濾 ─────────────────────────────────────────────────
+    if min_daily_return is not None:
+        before = len(df)
+        df = df[df["f_daily_return"] > min_daily_return].copy()
+        print(f"上漲過濾（daily_return>{min_daily_return:.1%}）：{before:,} → {len(df):,} 筆（{len(df)/before:.1%}），唯一股票：{df['stock_id'].nunique()} 支")
+
+    # ── 放量過濾 ─────────────────────────────────────────────────
     if volume_ratio_min is not None:
-        mask = (df["f_volume_ratio_20d"] >= volume_ratio_min) & (df["f_daily_return"] > 0)
-        result = df[mask].copy()
-        total = len(df)
-        n = len(result)
-        print(
-            f"放量上漲過濾（量>={volume_ratio_min:.1f}x均量 & 上漲）："
-            f"{total:,} → {n:,} 筆（{n/total:.1%}），唯一股票：{result['stock_id'].nunique()} 支"
-        )
-    else:
-        result = df[df["f_daily_return"] > 0].copy()
-        total = len(df)
-        n = len(result)
-        print(
-            f"上漲過濾（放量過濾已關閉）："
-            f"{total:,} → {n:,} 筆（{n/total:.1%}），唯一股票：{result['stock_id'].nunique()} 支"
-        )
-    return result
+        before = len(df)
+        df = df[df["f_volume_ratio_20d"] >= volume_ratio_min].copy()
+        print(f"放量過濾（量>={volume_ratio_min:.1f}x均量）：{before:,} → {len(df):,} 筆（{len(df)/before:.1%}），唯一股票：{df['stock_id'].nunique()} 支")
+
+    print(f"宇宙總計：{total:,} → {len(df):,} 筆（{len(df)/total:.1%}）")
+    return df
 
 
 def load_data(

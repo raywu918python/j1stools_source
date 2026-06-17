@@ -38,6 +38,24 @@ PROFIT_TARGET = 0.10
 STOP_LOSS = -0.10
 BINARY_LABEL = True  # True = 達標(1) vs 非達標(0)；False = 三分類 0/1/2
 
+RFC_ONLY_FEATURES = ["f_rsi14"]  # 直接從 close 計算，不依賴 parquet
+
+
+def _add_rsi14(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """從 close 直接算 RSI14，截面 rank 後存為 f_rsi14。"""
+
+    def _rsi(s):
+        d = s.diff()
+        gain = d.clip(lower=0).rolling(period, min_periods=period).mean()
+        loss = (-d.clip(upper=0)).rolling(period, min_periods=period).mean()
+        return 100 - 100 / (1 + gain / loss.replace(0, np.nan))
+
+    df = df.copy()
+    df["f_rsi14_raw"] = df.groupby("stock_id")["close"].transform(_rsi)
+    df["f_rsi14"] = df.groupby("date")["f_rsi14_raw"].rank(pct=True, na_option="keep")
+    df = df.drop(columns=["f_rsi14_raw"])
+    return df
+
 
 def build_dataset_breakout(
     clf_gmm: IBMarginGMM,
@@ -48,9 +66,12 @@ def build_dataset_breakout(
     hold_days: int = HOLD_DAYS,
     min_atr_pct: float = 0.02,
     volume_ratio_min: float = 2.0,
+    min_daily_return: float | None = 0.0,
 ) -> pd.DataFrame:
     """放量上漲宇宙 → GMM 叢集過濾 → profit_label 標籤。clusters=None 使用全叢集。"""
-    df = load_breakout_stocks(stocks, st, end, min_atr_pct=min_atr_pct, volume_ratio_min=volume_ratio_min)
+    df = load_breakout_stocks(
+        stocks, st, end, min_atr_pct=min_atr_pct, volume_ratio_min=volume_ratio_min, min_daily_return=min_daily_return
+    )
     df["cluster"] = clf_gmm.predict(df)
     if clusters is not None:
         gmm_proba = clf_gmm.predict_proba(df)
@@ -93,6 +114,10 @@ def make_signal_breakout(
         gmm_proba = clf_gmm.predict_proba(df)
         df["gmm_max_prob"] = gmm_proba.max(axis=1).values
         df = df[df["cluster"].isin(clusters)].copy()
+
+    # RFC 專屬特徵（訓練時有計算，預測時也要算）
+    if any(f in model._fitted_features for f in RFC_ONLY_FEATURES):
+        df = _add_rsi14(df)
 
     avail = model._fitted_features
     _CNN_COL = "cnn_score"
@@ -266,7 +291,8 @@ class EnsembleModel:
     def predict_proba(self, X):
         import warnings
 
-        proba = np.zeros((len(X), 3))
+        n_classes = 2 if BINARY_LABEL else 3
+        proba = np.zeros((len(X), n_classes))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             for m, w in zip(self.models, self.weights):
@@ -287,7 +313,11 @@ def split_features(features: list) -> tuple[list, list, list]:
       全部 → + cnn_score + margin_lgbm_score（如存在）
     """
     shared = [f for f in _SHARED_COLS if f in features]
-    rfc_feats = [f for f in features if not any(k in f for k in _CHIP_KEYWORDS) and f not in shared] + shared
+    rfc_feats = (
+        [f for f in features if not any(k in f for k in _CHIP_KEYWORDS) and f not in shared]
+        + shared
+        + RFC_ONLY_FEATURES
+    )
     xgb_feats = [
         f for f in features if any(k in f for k in ("foreign", "trust", "institutional")) and f not in shared
     ] + shared
@@ -560,14 +590,24 @@ if __name__ == "__main__":
     #                           → 最佳化 threshold / max_positions / top_n / hold_days
     #                           ⚠️  目標為 OOS 總報酬，有對測試集調參的過擬合風險
     #
-    MODE = "breakout_signal"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
+    MODE = "breakout_backtest"  # "cluster_inspect" | "breakout_compare" | "breakout_tune" | "breakout_signal" | "breakout_backtest" | "breakout_tune_backtest"
 
-    # ── 訊號組合開關（A 選 B/C/D）────────────────────────────────────────── #
+    # ════════════════════════════════════════════════════════════════════════ #
+    #  所有開關集中於此
+    # ════════════════════════════════════════════════════════════════════════ #
+
+    # ── 宇宙過濾 ──────────────────────────────────────────────────────────── #
+    MIN_DAILY_RETURN = 0  # 上漲過濾：>0.0% 才進宇宙（None = 關閉）
+    VOLUME_RATIO_THRES = VOLUME_RATIO_MIN  # 放量過濾：>= N x 20日均量（None = 關閉）
+    ATR_THRES = MIN_ATR_PCT  # ATR 門檻（0.02）
+
+    # ── 訊號組合（A 選 B/C/D）─────────────────────────────────────────────── #
     USE_GMM = False  # B 組：GMM 叢集過濾 + gmm_max_prob 特徵
-    USE_CNN = False  # C 組：cnn_score 特徵
+    USE_CNN = True  # C 組：cnn_score 特徵
     USE_MARGIN_LGBM = False  # D 組：margin_lgbm_score 特徵（需先預計算 parquet）
     USE_MKT_FILTER = False  # 大盤低於 20MA 的日期不開新倉
-    # ─────────────────────────────────────────────────────────────────────── #
+
+    # ════════════════════════════════════════════════════════════════════════ #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
     clf_breakout = IBMarginGMM.load(BREAKOUT_GMM_MODEL_PATH)
@@ -604,8 +644,9 @@ if __name__ == "__main__":
         TRAIN_ST,
         VAL_ST,
         clusters=_clusters,
-        volume_ratio_min=VOLUME_RATIO_MIN,
-        min_atr_pct=MIN_ATR_PCT,
+        volume_ratio_min=VOLUME_RATIO_THRES,
+        min_atr_pct=ATR_THRES,
+        min_daily_return=MIN_DAILY_RETURN,
     )
 
     print("\n── 建立 Breakout 驗證集 ──")
@@ -615,8 +656,9 @@ if __name__ == "__main__":
         VAL_ST,
         VAL_END,
         clusters=_clusters,
-        volume_ratio_min=VOLUME_RATIO_MIN,
-        min_atr_pct=MIN_ATR_PCT,
+        volume_ratio_min=VOLUME_RATIO_THRES,
+        min_atr_pct=ATR_THRES,
+        min_daily_return=MIN_DAILY_RETURN,
     )
 
     print("\n── 訓練 Ensemble（RFC + XGB + LGBM）──")
@@ -628,9 +670,16 @@ if __name__ == "__main__":
         stocks,
         EVAL_ST,
         clusters=_clusters,
-        volume_ratio_min=VOLUME_RATIO_MIN,
-        min_atr_pct=MIN_ATR_PCT,
+        volume_ratio_min=VOLUME_RATIO_THRES,
+        min_atr_pct=ATR_THRES,
+        min_daily_return=MIN_DAILY_RETURN,
     )
+
+    # ── RFC 專屬特徵：RSI14（直接從 close 計算，不依賴 parquet）──
+    print("\n── 計算 RFC 專屬特徵（RSI14）──")
+    df_train = _add_rsi14(df_train)
+    df_val = _add_rsi14(df_val)
+    df_test = _add_rsi14(df_test)
 
     # ── CNN stacking feature（讀預計算 parquet，避免載入 torch 造成 OpenMP 衝突）──
     import os as _os

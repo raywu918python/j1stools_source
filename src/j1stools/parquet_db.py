@@ -259,6 +259,34 @@ def query_margin(stocks: list, st="2015-01-01", end="2099-01-01"):
     return df
 
 
+def query_news(stocks: list | None = None, st="2015-01-01", end="2099-01-01", is_include_end=False):
+    dataset = ds.dataset("db/news_mops/", format="parquet")
+    st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+
+    if is_include_end:
+        condition = (ds.field("date") >= st_str) & (ds.field("date") <= end_str)
+    else:
+        condition = (ds.field("date") >= st_str) & (ds.field("date") < end_str)
+
+    if stocks is not None:
+        if len(stocks) == 0:
+            return pd.DataFrame(columns=dataset.schema.names)
+        condition = condition & (ds.field("stock_id").isin(stocks))
+
+    df = dataset.to_table(filter=condition).to_pandas()
+    if df.empty:
+        return df
+
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    if "title" in df.columns:
+        df["title"] = df["title"].fillna("").astype(str).str.split().str.join(" ")
+    df["serial_number"] = pd.to_numeric(df["serial_number"], errors="coerce").astype("Int64")
+    df.sort_values(["date", "time", "stock_id", "serial_number"], inplace=True, na_position="last")
+    df.drop_duplicates(subset=["mops_id"], keep="last", inplace=True)
+    return df
+
+
 _FEATURE_COLS_PATH = "db/feature_cols/feature_cols.parquet"
 
 

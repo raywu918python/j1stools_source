@@ -35,6 +35,7 @@ _BASE_FEATURES = [
     "close_pos",  # 今日K線強度
     "high_level_pct",  # 整理頂部 / 前120日最高點
     "days_since_big_move",  # 距上次20日漲幅>20%有幾天（近=過熱，30~60天=VCP甜蜜點）
+    "ma120_dist",  # (close - MA120) / MA120（過度延伸程度）
     # ── 籌碼 ──
     "f_ib_net_pct",  # 外資淨買超 / 20日均量（正=外資買，負=外資賣）
     "f_ib_5d",  # 5日外資累積淨買超 / 20日均量
@@ -64,7 +65,8 @@ MIN_ATR_PCT = 0.02  # 最低ATR過濾（排除低波動股）
 PROFIT_TARGET = 0.10  # 止盈門檻
 STOP_LOSS = 0.10  # 止損門檻（break-even = 10/(10+10) = 50%）
 HIGH_LEVEL = 0.90  # 整理頂部需達前120日最高的90%以上（更靠近高點）
-THRESHOLD = 0.7  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
+MAX_MA120_DIST = 0.50  # 收盤距 MA120 上方最多 50%（排除過度延伸股）
+THRESHOLD = 0.5  # 回測進場門檻（VCP基準46%，找模型能提升的區間）
 MODEL_TYPE = "xgb"  # "lgbm" | "xgb" | "ensemble"
 
 LGBM_PARAMS = {
@@ -88,7 +90,7 @@ XGB_PARAMS = {
     "eval_metric": "auc",
     "max_depth": 6,
     "learning_rate": 0.01,
-    "min_child_weight": 50,
+    "min_child_weight": 20,
     "subsample": 0.8,
     "colsample_bytree": 0.7,
     "reg_alpha": 0.05,
@@ -136,12 +138,14 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
     high_120 = high.shift(1).rolling(120, min_periods=60).max()
     cond_high_lvl = consol_high / high_120.replace(0, np.nan) >= HIGH_LEVEL
 
-    # ── 信號條件（4個：橫盤 + 突破前高 + 放量 + 在高點盤整）──
+    # ── 信號條件（5個：橫盤 + 突破前高 + 放量 + 在高點盤整 + 不過度延伸）──
     cond_range = (consol_high - consol_low) / consol_low.replace(0, np.nan) <= RANGE_PCT
     cond_break = close > consol_high
     cond_vol = volume > vol_ma_c * VOL_RATIO
+    ma120_sig = close.rolling(120, min_periods=60).mean()
+    cond_ext = (close - ma120_sig) / ma120_sig.replace(0, np.nan) <= MAX_MA120_DIST
 
-    signal = (cond_range & cond_break & cond_vol & cond_high_lvl).astype(np.int8)
+    signal = (cond_range & cond_break & cond_vol & cond_high_lvl & cond_ext).astype(np.int8)
 
     # ── 特徵 ──
     atr_pct = (atr14 / close.replace(0, np.nan)).clip(0, 0.3)
@@ -164,9 +168,11 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
     _days = np.where(np.isnan(_last), 200.0, np.arange(_n, dtype=float) - _last)
     days_since_big_move = pd.Series(_days.clip(0, 200), index=close.index).shift(1).fillna(200)
 
-    # MA60 距離
+    # MA60 / MA120 距離
     ma60 = close.rolling(60, min_periods=30).mean()
+    ma120 = close.rolling(120, min_periods=60).mean()
     ma60_dist = ((close - ma60) / ma60.replace(0, np.nan)).clip(-0.5, 0.5)
+    ma120_dist = ((close - ma120) / ma120.replace(0, np.nan)).clip(-0.5, 1.0)
 
     # 動能
     ret_20d = close.pct_change(20, fill_method=None).clip(-0.8, 0.8)
@@ -206,6 +212,7 @@ def _compute_vcp(grp: pd.DataFrame) -> pd.DataFrame:
             "close_pos": close_pos,
             "high_level_pct": high_level_pct,
             "days_since_big_move": days_since_big_move,
+            "ma120_dist": ma120_dist,
         },
         index=grp.index,
     )
@@ -623,7 +630,11 @@ def make_signal_vcp_break_lgbm(
     df_all["date"] = pd.to_datetime(df_all["date"])
 
     df_scan = (
-        df_all[(df_all["date"] >= pd.Timestamp(st)) & (df_all["atr_pct"].fillna(0) >= min_atr_pct)]
+        df_all[
+            (df_all["date"] >= pd.Timestamp(st))
+            & (df_all["atr_pct"].fillna(0) >= min_atr_pct)
+            & (df_all["vcp_signal"] == 1)
+        ]
         .copy()
         .reset_index(drop=True)
     )
@@ -669,7 +680,7 @@ if __name__ == "__main__":
 
     TRAIN_ST = "2015-01-01"
     EVAL_ST = "2024-01-01"
-    MODE = "eval"  # "train" | "eval" | "backtest"
+    MODE = "train"  # "train" | "eval" | "backtest"
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
 

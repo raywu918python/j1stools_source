@@ -839,7 +839,7 @@ if __name__ == "__main__":
     #
     #  backtest  : 【獨立回測】載現有模型 → make_signal → backtest_platform
     #
-    MODE = "eval"  # "train" | "scores" | "eval" | "backtest"
+    MODE = "train"  # "train" | "scores" | "eval" | "backtest"
     # ──────────────────────────────────────────────────────────────────────────── #
 
     stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]

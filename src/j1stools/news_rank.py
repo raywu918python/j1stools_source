@@ -6,10 +6,24 @@ import feedparser
 import pandas as pd
 from dotenv import load_dotenv
 from google import genai
+from google.genai.errors import ServerError
 
 load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+
+def _generate_with_retry(prompt, model="gemini-2.5-flash", max_retries=5, base_wait=15):
+    """Gemini 偶爾會 503（高負載），用指數退避重試，不要直接讓整支腳本炸掉。"""
+    for attempt in range(max_retries):
+        try:
+            return client.models.generate_content(model=model, contents=prompt)
+        except ServerError as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = base_wait * (2**attempt)
+            print(f"Gemini 暫時無法使用（{e}），{wait}s 後重試...（{attempt + 1}/{max_retries}）")
+            time.sleep(wait)
 
 
 def fetch_google_news(stock_id, company_name="", days=30, max_items=10):
@@ -83,14 +97,14 @@ def rank_stocks_by_news(stocks):
 {json.dumps(all_news, ensure_ascii=False)}
 """
 
-    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+    response = _generate_with_retry(prompt)
 
     text = response.text.strip()
 
     # Gemini 有時候會包 ```json，這裡清掉
     text = text.replace("```json", "").replace("```", "").strip()
 
-    return json.loads(text)
+    return json.loads(text), all_news
 
 
 _DEFAULT_INFO_PATH = "/Users/wumingrui/Library/CloudStorage/Dropbox/自學/量化交易/db/info/info.parquet"
@@ -105,20 +119,30 @@ def _load_info() -> pd.Series:
     return _info_cache
 
 
+def _format_news(items: list) -> str:
+    if not items:
+        return "（無新聞）"
+    return " | ".join(f"[{n.get('published', '')}] {n.get('title', '')}" for n in items)
+
+
 def rank_stocks(stock_ids: list[str]) -> pd.DataFrame:
     """
     Input:  stock_ids — e.g. ["2330", "3406", "6806"]
     Output: DataFrame sorted by rank
-            columns: rank, stock_id, company, score, summary, positive_factors, negative_factors
+            columns: rank, stock_id, company, score, summary, positive_factors, negative_factors, news
+            news = 該股票拿去給 Gemini 評分的原始新聞標題（"[發布時間] 標題" 以 | 分隔）
     """
     info = _load_info()
     stocks = [{"id": sid, "name": info.get(sid, "")} for sid in stock_ids]
-    result = rank_stocks_by_news(stocks)
+    result, all_news = rank_stocks_by_news(stocks)
     df = pd.DataFrame(result["ranking"]).sort_values("rank").reset_index(drop=True)
-    return df[["rank", "stock_id", "company", "score", "summary", "positive_factors", "negative_factors"]]
+    df["news"] = df["stock_id"].map(lambda sid: _format_news(all_news.get(sid, {}).get("news", [])))
+    return df[["rank", "stock_id", "company", "score", "summary", "positive_factors", "negative_factors", "news"]]
 
 
 if __name__ == "__main__":
     df = rank_stocks(["3406", "6806", "2330"])
     print(df[["rank", "stock_id", "company", "score", "summary"]])
+    for _, row in df.iterrows():
+        print(f"\n{'='*60}\n{row['stock_id']} {row['company']}　分數：{row['score']}\n新聞：{row['news']}")
     df.to_csv("stock_news_ranking.csv", index=False, encoding="utf-8-sig")
