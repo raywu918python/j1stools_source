@@ -21,8 +21,13 @@ if __name__ == "__main__":
         "db/ib",
         "db/news_mops",
         "models",
-        "db/models",
     ])
+
+    # HF 上 models/ 與 db/ 同層，本地程式碼預期 db/models/，補一個 symlink
+    db_models = "db/models"
+    if not os.path.exists(db_models):
+        os.makedirs("db", exist_ok=True)
+        os.symlink(os.path.abspath("models"), os.path.abspath(db_models))
 
     # 2. 執行 RAG pipeline（內部會 push rag/ 到 HF Space）
     from j1stools.rag import update_mops_index, query_sort_stock
