@@ -47,5 +47,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           QDRANT_TOKEN: ${{ secrets.QDRANT_TOKEN }}
           QDRANT_PATH: ${{ secrets.QDRANT_PATH }}
-          EMBED_BACKEND: gemini
+          VOYAGE_TOKEN: ${{ secrets.VOYAGE_TOKEN }}
+          EMBED_BACKEND: voyage
         run: python scripts/run_rag.py

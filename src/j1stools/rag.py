@@ -128,12 +128,14 @@ MOPS_PARQUET_DIR = "db/news_mops"
 QDRANT_COLLECTION = "mops_news"
 # Embedding backend：
 #   EMBED_BACKEND=ollama  → 本機 mxbai-embed-large（初始建立用）
-#   EMBED_BACKEND=gemini  → Gemini Cloud（雲端每日更新用，預設）
-_EMBED_BACKEND = os.getenv("EMBED_BACKEND", "gemini")
+#   EMBED_BACKEND=gemini  → Gemini Cloud
+#   EMBED_BACKEND=voyage  → Voyage AI Cloud（GHA 預設，50M tokens/月免費）
+_EMBED_BACKEND = os.getenv("EMBED_BACKEND", "voyage")
 _EMBED_MODEL_GEMINI = "gemini-embedding-2"
 _EMBED_MODEL_OLLAMA = "mxbai-embed-large"
+_EMBED_MODEL_VOYAGE = "voyage-3"
 _OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-_EMBED_DIM = 1024  # mxbai 固定 1024；Gemini 截至 1024 → 兩邊一致
+_EMBED_DIM = 1024  # mxbai/Gemini/voyage-3 皆 1024
 _UPSERT_BATCH = 50
 
 _RISK_KEYWORDS: set[str] = {
@@ -221,12 +223,40 @@ def _embed_one_ollama(text: str) -> list[float]:
     return r.json()["embedding"]
 
 
+def _embed_batch_voyage(texts: list[str]) -> list[list[float]]:
+    import voyageai
+
+    vo = voyageai.Client(api_key=os.getenv("VOYAGE_TOKEN"))
+    chunk_size = 128  # Voyage 每批最多 128 筆
+    vectors: list[list[float]] = []
+    for i in range(0, len(texts), chunk_size):
+        chunk = texts[i : i + chunk_size]
+        for attempt in range(5):
+            try:
+                result = vo.embed(chunk, model=_EMBED_MODEL_VOYAGE, output_dimension=_EMBED_DIM)
+                vectors.extend(result.embeddings)
+                if i + chunk_size < len(texts):
+                    _log("EMBED", f"  進度 {min(i + chunk_size, len(texts))}/{len(texts)}")
+                break
+            except Exception as e:
+                if attempt == 4:
+                    raise
+                wait = 30 * (2**attempt)
+                _log("EMBED", f"Voyage error，等 {wait}s（retry {attempt+1}/5）：{e}")
+                time.sleep(wait)
+    return vectors
+
+
 def _embed_batch(texts: list[str], sleep_sec: float | None = None) -> list[list[float]]:
     """
-    EMBED_BACKEND=ollama → 本機 mxbai-embed-large（初始建立，不 sleep）
-    EMBED_BACKEND=gemini → Gemini Cloud（雲端每日更新，sleep 0.05s 避免 429）
-    兩者都輸出 1024 維，可共用同一個 Qdrant collection。
+    EMBED_BACKEND=voyage → Voyage AI batch API（GHA 預設，50M tokens/月免費）
+    EMBED_BACKEND=gemini → Gemini Cloud（1000 次/天）
+    EMBED_BACKEND=ollama → 本機 mxbai-embed-large
+    三者皆輸出 1024 維，可共用同一個 Qdrant collection（勿混用）。
     """
+    if _EMBED_BACKEND == "voyage":
+        return _embed_batch_voyage(texts)
+
     if sleep_sec is None:
         sleep_sec = 0.0 if _EMBED_BACKEND == "ollama" else 0.05
     embed_fn = _embed_one_ollama if _EMBED_BACKEND == "ollama" else _embed_one_gemini

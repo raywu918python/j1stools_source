@@ -22,3 +22,4 @@ vectorbt
 shioaji
 google-genai
 qdrant-client
+voyageai
