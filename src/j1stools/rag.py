@@ -569,18 +569,20 @@ def _stage3a_qdrant(df: pd.DataFrame) -> pd.DataFrame:
     # Step 2：Qdrant 語意搜尋（掃全市場近期公告，不限 stock_id）
     _log("STAGE3A", f"Qdrant 語意搜尋，取前 {_QDRANT_RISK_TOP_K} 筆，門檻 {_QDRANT_RISK_THRESHOLD}")
     client = _qdrant()
-    hits = client.search(
+    result = client.query_points(
         collection_name=QDRANT_COLLECTION,
-        query_vector=risk_vec,
-        query_filter=Filter(must=[FieldCondition(key="date", range=Range(gte=cutoff))]),
+        query=risk_vec,
         limit=_QDRANT_RISK_TOP_K,
         with_payload=True,
     )
+    hits = result.points
 
     # Step 3：找出命中的候選股
     qdrant_exclude: set[str] = set()
     for hit in hits:
         if hit.score < _QDRANT_RISK_THRESHOLD:
+            continue
+        if hit.payload.get("date", "") < cutoff:
             continue
         sid = hit.payload.get("stock_id", "")
         title = hit.payload.get("title", "")
@@ -858,15 +860,12 @@ def _stage3b_rich(df: pd.DataFrame, company_map: dict[str, str]) -> tuple[list[d
     return top5, market_summary
 
 
-_HF_SPACE_REPO = "raywu918python/j1s-api"
-_RAG_FOLDER = "rag"
+_HF_DATASET_REPO = "raywu918python/j1s-data"
+_RAG_FOLDER = "db/rag"
 
 
 def _upload_to_hf(data: dict) -> None:
-    """
-    把 JSON 推到 HF Space（raywu918python/j1s-api）的 rag/ 資料夾。
-    app.py 可直接讀本地 rag/daily_picks_YYYY-MM-DD.json。
-    """
+    """把 JSON 推到 dataset（raywu918python/j1s-data）的 db/rag/ 資料夾。"""
     try:
         from huggingface_hub import HfApi
         date_str = data.get("date", datetime.now(_TW).strftime("%Y-%m-%d"))
@@ -876,10 +875,10 @@ def _upload_to_hf(data: dict) -> None:
         api.upload_file(
             path_or_fileobj=content,
             path_in_repo=f"{_RAG_FOLDER}/{filename}",
-            repo_id=_HF_SPACE_REPO,
-            repo_type="space",
+            repo_id=_HF_DATASET_REPO,
+            repo_type="dataset",
         )
-        _log("HF", f"推送完成：{_HF_SPACE_REPO}/rag/{filename}")
+        _log("HF", f"推送完成：{_HF_DATASET_REPO}/{_RAG_FOLDER}/{filename}")
     except Exception as e:
         _log("HF", f"上傳失敗（不影響結果）：{e}")
 

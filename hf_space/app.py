@@ -33,8 +33,8 @@ def _verify_key(key: str = Security(_key_header)):
         raise HTTPException(status_code=403, detail="Invalid API key")
 
 
-def _rag_path(date_str: str) -> str:
-    return f"rag/daily_picks_{date_str}.json"
+def _rag_url(date_str: str) -> str:
+    return f"https://huggingface.co/datasets/{REPO_ID}/resolve/main/db/rag/daily_picks_{date_str}.json"
 
 
 def _pred_url(date_str: str, model: str) -> str:
@@ -95,28 +95,33 @@ def _load_latest_backtest(model: str):
     raise HTTPException(status_code=404, detail="No backtest found in last 7 days")
 
 
+def _read_rag(date_str: str) -> dict:
+    import json as _json, httpx
+    headers = {"Authorization": f"Bearer {_HF_TOKEN}"} if _HF_TOKEN else {}
+    r = httpx.get(_rag_url(date_str), headers=headers, follow_redirects=True, timeout=30)
+    r.raise_for_status()
+    return _json.loads(r.content)
+
+
 @app.get("/rag")
 def get_rag_picks(_=Depends(_verify_key)):
     """最新一天的 RAG 選股結果（往前找最近 7 天）。"""
-    import json as _json
     for delta in range(7):
         d = (datetime.now(_TW).date() - timedelta(days=delta)).strftime("%Y-%m-%d")
-        path = _rag_path(d)
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                return _json.load(f)
+        try:
+            return _read_rag(d)
+        except Exception:
+            continue
     raise HTTPException(status_code=404, detail="No RAG picks found in last 7 days")
 
 
 @app.get("/rag/{date_str}")
 def get_rag_picks_by_date(date_str: str, _=Depends(_verify_key)):
     """指定日期的 RAG 選股結果。"""
-    import json as _json
-    path = _rag_path(date_str)
-    if not os.path.exists(path):
+    try:
+        return _read_rag(date_str)
+    except Exception:
         raise HTTPException(status_code=404, detail=f"No RAG picks for {date_str}")
-    with open(path, encoding="utf-8") as f:
-        return _json.load(f)
 
 
 @app.get("/predictions")
