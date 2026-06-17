@@ -174,19 +174,22 @@ def _embed_one_ollama(text: str) -> list[float]:
     return r.json()["embedding"]
 
 
-def _embed_batch(texts: list[str], sleep_sec: float = 0.05) -> list[list[float]]:
+def _embed_batch(texts: list[str], sleep_sec: float | None = None) -> list[list[float]]:
     """
-    EMBED_BACKEND=ollama → 本機 mxbai-embed-large（初始建立，快）
-    EMBED_BACKEND=gemini → Gemini Cloud（雲端每日更新，預設）
+    EMBED_BACKEND=ollama → 本機 mxbai-embed-large（初始建立，不 sleep）
+    EMBED_BACKEND=gemini → Gemini Cloud（雲端每日更新，sleep 0.05s 避免 429）
     兩者都輸出 1024 維，可共用同一個 Qdrant collection。
     """
+    if sleep_sec is None:
+        sleep_sec = 0.0 if _EMBED_BACKEND == "ollama" else 0.05
     embed_fn = _embed_one_ollama if _EMBED_BACKEND == "ollama" else _embed_one_gemini
     vectors: list[list[float]] = []
     for i, text in enumerate(texts):
         vectors.append(embed_fn(text))
         if (i + 1) % 100 == 0:
             _log("EMBED", f"  進度 {i+1}/{len(texts)}")
-        time.sleep(sleep_sec)
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
     return vectors
 
 
@@ -248,7 +251,7 @@ def build_mops_index(days: int | None = None) -> None:
 
         if len(batch_rows) >= _UPSERT_BATCH:
             titles = [r["title"] for r, _ in batch_rows]
-            vectors = _embed_batch(titles, sleep_sec=0.05)
+            vectors = _embed_batch(titles, )
             points = [
                 PointStruct(
                     id=u,
@@ -270,7 +273,7 @@ def build_mops_index(days: int | None = None) -> None:
     # 最後一批
     if batch_rows:
         titles = [r["title"] for r, _ in batch_rows]
-        vectors = _embed_batch(titles, sleep_sec=0.05)
+        vectors = _embed_batch(titles, )
         points = [
             PointStruct(
                 id=u,
