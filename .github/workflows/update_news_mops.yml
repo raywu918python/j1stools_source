@@ -1,0 +1,35 @@
+name: Update News MOPS
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # 台灣 16:00，收盤後更新
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set cache key
+        run: echo "CACHE_KEY=$(TZ=Asia/Taipei date +%Y-%m-%d-%H)" >> $GITHUB_ENV && echo "CACHE_DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)" >> $GITHUB_ENV
+      - name: Cache news_mops data
+        uses: actions/cache@v4
+        with:
+          path: |
+            db/news_mops/
+            db/news_mops_flags/
+          key: news-mops-db-${{ env.CACHE_KEY }}
+          restore-keys: |
+            news-mops-db-${{ env.CACHE_DATE }}-
+            news-mops-db-
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: Run news_mops updater
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+        run: python scripts/run_news_mops_update.py

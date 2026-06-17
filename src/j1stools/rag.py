@@ -134,7 +134,7 @@ _EMBED_MODEL_GEMINI = "gemini-embedding-2"
 _EMBED_MODEL_OLLAMA = "mxbai-embed-large"
 _OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 _EMBED_DIM = 1024  # mxbai 固定 1024；Gemini 截至 1024 → 兩邊一致
-_UPSERT_BATCH = 200
+_UPSERT_BATCH = 50
 
 _RISK_KEYWORDS: set[str] = {
     "重大訊息",
@@ -166,7 +166,20 @@ _gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
 def _qdrant() -> QdrantClient:
-    return QdrantClient(url=os.environ["QDRANT_PATH"], api_key=os.environ["QDRANT_TOKEN"])
+    return QdrantClient(url=os.environ["QDRANT_PATH"], api_key=os.environ["QDRANT_TOKEN"], timeout=60)
+
+
+def _upsert_with_retry(client: QdrantClient, points: list, max_retries: int = 5) -> None:
+    for attempt in range(max_retries):
+        try:
+            client.upsert(collection_name=QDRANT_COLLECTION, points=points)
+            return
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = 10 * (2**attempt)
+            _log("UPSERT", f"timeout/error，{wait}s 後重試（{attempt+1}/{max_retries}）：{e}")
+            time.sleep(wait)
 
 
 def _log(stage: str, msg: str) -> None:
@@ -220,7 +233,7 @@ def _embed_batch(texts: list[str], sleep_sec: float | None = None) -> list[list[
     vectors: list[list[float]] = []
     for i, text in enumerate(texts):
         vectors.append(embed_fn(text))
-        if (i + 1) % 100 == 0:
+        if (i + 1) % 10 == 0:
             _log("EMBED", f"  進度 {i+1}/{len(texts)}")
         if sleep_sec > 0:
             time.sleep(sleep_sec)
@@ -299,7 +312,7 @@ def build_mops_index(days: int | None = None) -> None:
                 )
                 for (r, u), vec in zip(batch_rows, vectors)
             ]
-            client.upsert(collection_name=QDRANT_COLLECTION, points=points)
+            _upsert_with_retry(client, points)
             done += len(points)
             total_target = len(df) - len(existing)
             _log("BUILD", f"進度 {done}/{total_target}（跳過 {skipped}）批次 upsert 完成")
@@ -322,7 +335,7 @@ def build_mops_index(days: int | None = None) -> None:
             )
             for (r, u), vec in zip(batch_rows, vectors)
         ]
-        client.upsert(collection_name=QDRANT_COLLECTION, points=points)
+        _upsert_with_retry(client, points)
         done += len(points)
         _log("BUILD", f"進度 {done}/{len(df) - len(existing)}（最後一批）upsert 完成")
 
@@ -371,7 +384,7 @@ def update_mops_index(lookback_days: int = MOPS_LOOKBACK_DAYS) -> None:
     ]
 
     for i in range(0, len(points), _UPSERT_BATCH):
-        client.upsert(collection_name=QDRANT_COLLECTION, points=points[i : i + _UPSERT_BATCH])
+        _upsert_with_retry(client, points[i : i + _UPSERT_BATCH])
 
     _log("UPDATE", f"upsert 完成，{len(points)} 筆進入 Qdrant")
 
@@ -714,6 +727,253 @@ def test():
     files = glob.glob("db/news_mops/*.parquet")
     df = pd.concat([pd.read_parquet(f) for f in files])
     print(f"共 {len(df)} 筆，{df['date'].min()} ～ {df['date'].max()}")
+
+
+def _stage3a_collect_alerts(df: pd.DataFrame, use_qdrant: bool = False) -> tuple[list[dict], pd.DataFrame]:
+    """
+    Stage3a 的變體：同時回傳被排除的地雷公告清單（供 JSON 輸出）。
+    Returns (alerts, filtered_df)
+    alerts = [{"stock_id", "company_name", "title", "date"}, ...]
+    """
+    alerts: list[dict] = []
+    mops = _load_mops(df["stock_id"].tolist())
+
+    if use_qdrant:
+        filtered = _stage3a_qdrant(df)
+        excluded_ids = set(df["stock_id"]) - set(filtered["stock_id"])
+        if not mops.empty:
+            for sid in excluded_ids:
+                rows = mops[mops["stock_id"] == sid].head(3)
+                for _, r in rows.iterrows():
+                    alerts.append({
+                        "stock_id": sid,
+                        "company_name": str(r.get("company_name", "")),
+                        "title": str(r["title"]),
+                        "date": str(r["date"]),
+                    })
+        return alerts, filtered
+
+    # keyword mode
+    if mops.empty:
+        return alerts, df
+
+    exclude_ids: set[str] = set()
+    for sid, grp in mops.groupby("stock_id"):
+        for _, r in grp.iterrows():
+            title = str(r["title"])
+            if any(k in title for k in _RISK_KEYWORDS):
+                exclude_ids.add(str(sid))
+                alerts.append({
+                    "stock_id": str(sid),
+                    "company_name": str(r.get("company_name", "")),
+                    "title": title,
+                    "date": str(r["date"]),
+                })
+                break
+
+    filtered = df[~df["stock_id"].isin(exclude_ids)].reset_index(drop=True)
+    _log("STAGE3A", f"alerts {len(alerts)} 筆，候選 {len(df)} → {len(filtered)} 檔")
+    return alerts, filtered
+
+
+def _stage3b_rich(df: pd.DataFrame, company_map: dict[str, str]) -> tuple[list[dict], str]:
+    """
+    Stage3b 的 JSON 輸出版本。
+    Returns (top5_list, market_summary)
+    top5_list 每筆含 stock_id, company_name, pred_score, gemini_score, reason, highlights, mops_highlights
+    """
+    shortlist = df.head(NEWS_TOP_N).copy()
+    if shortlist.empty:
+        return [], "今日無符合條件的候選股"
+
+    mops = _load_mops(shortlist["stock_id"].tolist())
+    stock_titles = _to_stock_titles(mops) if not mops.empty else {}
+
+    prompt = f"""你是台股公告分析助理。
+以下是各股票近期在 MOPS（公開資訊觀測站）的真實公告標題。
+請根據這些公告評估每支股票的投資價值，並給出整體市場觀察。
+
+評分規則：
+1. 只根據提供的公告判斷，不使用自身記憶
+2. 財務困難/法律糾紛/減資/下市相關公告大幅扣分
+3. 法說會/股利/業績成長相關公告加分
+4. 無公告的股票給 70 分（資訊不足，中性）
+5. 只輸出 JSON，不加 markdown
+
+輸出格式：
+{{
+  "market_summary": "一句話說明今日整體市場狀況與亮點",
+  "results": [
+    {{
+      "stock_id": "xxxx",
+      "score": 85,
+      "reason": "一句話說明評分依據",
+      "highlights": ["亮點或注意事項1", "亮點或注意事項2"]
+    }}
+  ]
+}}
+
+各股公告資料（來源：MOPS 近 {MOPS_LOOKBACK_DAYS} 天）：
+{json.dumps(stock_titles, ensure_ascii=False)}
+"""
+
+    _log("STAGE3B", f"Generation：gemini-2.5-flash，{len(stock_titles)} 股公告...")
+    response = _generate_with_retry(prompt)
+    text = response.text.strip().replace("```json", "").replace("```", "").strip()
+    parsed = json.loads(text)
+    market_summary = parsed.get("market_summary", "")
+    df_score = pd.DataFrame(parsed["results"])
+    df_score["score"] = pd.to_numeric(df_score["score"], errors="coerce")
+
+    merged = shortlist.merge(df_score[["stock_id", "score", "reason", "highlights"]], on="stock_id", how="left")
+    merged = merged.dropna(subset=["score"]).sort_values("score", ascending=False).head(TOP_N).reset_index(drop=True)
+
+    top5 = []
+    for i, row in merged.iterrows():
+        sid = row["stock_id"]
+        top5.append({
+            "rank": i + 1,
+            "stock_id": sid,
+            "company_name": company_map.get(sid, ""),
+            "pred_score": round(float(row["pred_score"]), 4),
+            "gemini_score": int(row["score"]),
+            "reason": str(row.get("reason", "")),
+            "highlights": row.get("highlights") or [],
+            "mops_highlights": stock_titles.get(sid, [])[:5],
+        })
+        _log("STAGE3B", f"  #{i+1} {sid}  score={row['score']}  {row.get('reason','')}")
+
+    return top5, market_summary
+
+
+_RAG_OUTPUT_DIR = "db/rag_output"
+
+
+def _upload_to_hf(data: dict) -> None:
+    """
+    存 JSON 到本地 db/rag_output/，再用 hf_sync.push() 推到 HF dataset。
+    HF_REPO_ID 預設 raywu918python/j1s-data（與 hf_sync 共用）。
+    """
+    try:
+        from j1stools import hf_sync
+        os.makedirs(_RAG_OUTPUT_DIR, exist_ok=True)
+        date_str = data.get("date", datetime.now(_TW).strftime("%Y-%m-%d"))
+        local_path = os.path.join(_RAG_OUTPUT_DIR, f"daily_picks_{date_str}.json")
+        with open(local_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        _log("HF", f"存至本地：{local_path}")
+        hf_sync.push([_RAG_OUTPUT_DIR])
+        _log("HF", f"推送完成：{hf_sync._REPO_ID}/{_RAG_OUTPUT_DIR}/daily_picks_{date_str}.json")
+    except Exception as e:
+        _log("HF", f"上傳失敗（不影響結果）：{e}")
+
+
+def query_sort_stock(
+    stocks: list[str] | None = None,
+    st: str | None = None,
+    end: str = "2099-01-01",
+    use_qdrant: bool = False,
+    push_hf: bool = True,
+) -> dict:
+    """
+    每日選股主入口，回傳結構化 JSON dict，可直接給前端使用。
+
+    回傳格式：
+      date            : 今日日期
+      updated_at      : 更新時間（台灣時間 ISO）
+      candidates      : Stage1+2 初選 30 支（含 pred_score, gmm_cluster）
+      top5            : Gemini 精選 5 支（含 gemini_score, reason, highlights, mops_highlights）
+      market_summary  : Gemini 對今日市場的一句總結
+      mops_alerts     : Stage3a 找到的地雷公告（被排除的）
+
+    參數：
+      use_qdrant : Stage3a 使用 Qdrant 語意搜尋（需已建索引）
+      push_hf    : 是否推送到 HF dataset（預設 True）
+                   存至 db/rag_output/daily_picks_YYYY-MM-DD.json → hf_sync.push()
+    """
+    now = datetime.now(_TW)
+
+    if stocks is None:
+        stocks = [s for s in parquet_db.activate_stocks() if not s.startswith("00")]
+    if st is None:
+        st = (now - timedelta(days=10)).strftime("%Y-%m-%d")
+
+    _log("QSS", f"=== query_sort_stock 開始，股票池 {len(stocks)} 檔 ===")
+
+    empty_result = {
+        "date": now.strftime("%Y-%m-%d"),
+        "updated_at": now.isoformat(timespec="seconds"),
+        "candidates": [],
+        "top5": [],
+        "market_summary": "今日市場狀態不佳，無候選股",
+        "mops_alerts": [],
+    }
+
+    # Stage 1
+    candidates = _stage1(stocks, st, end)
+    if candidates.empty:
+        return empty_result
+
+    # Stage 2
+    candidates = _stage2(candidates, st, end)
+    if candidates.empty:
+        empty_result["market_summary"] = "GMM 過濾後無候選股"
+        return empty_result
+
+    # 取得公司名稱（從 MOPS parquet）
+    mops_all = _load_mops(candidates["stock_id"].tolist())
+    company_map: dict[str, str] = {}
+    if not mops_all.empty:
+        company_map = (
+            mops_all.drop_duplicates("stock_id")
+            .set_index("stock_id")["company_name"]
+            .to_dict()
+        )
+
+    # Stage 3a：排除地雷，同時收集 alerts
+    alerts, filtered = _stage3a_collect_alerts(candidates, use_qdrant=use_qdrant)
+
+    # candidates JSON（最多30支，含 GMM cluster）
+    candidates_list = []
+    for i, row in candidates.head(30).iterrows():
+        sid = row["stock_id"]
+        candidates_list.append({
+            "rank": i + 1,
+            "stock_id": sid,
+            "company_name": company_map.get(sid, ""),
+            "pred_score": round(float(row["pred_score"]), 4),
+            "gmm_cluster": (
+                int(row["gmm_cluster"])
+                if "gmm_cluster" in row and pd.notna(row.get("gmm_cluster"))
+                else None
+            ),
+        })
+
+    # Stage 3b：Gemini 精選 5 支
+    if filtered.empty:
+        top5, market_summary = [], "Stage3a 排除後無剩餘候選股"
+    else:
+        top5, market_summary = _stage3b_rich(filtered, company_map)
+
+    result = {
+        "date": now.strftime("%Y-%m-%d"),
+        "updated_at": now.isoformat(timespec="seconds"),
+        "candidates": candidates_list,
+        "top5": top5,
+        "market_summary": market_summary,
+        "mops_alerts": alerts,
+    }
+
+    _log("QSS", f"完成：candidates={len(candidates_list)}，top5={len(top5)}，alerts={len(alerts)}")
+
+    if push_hf:
+        _upload_to_hf(result)
+
+    return result
+
+
+def query_any_string(any_string: str) -> pd.DataFrame:
+    pass
 
 
 if __name__ == "__main__":
