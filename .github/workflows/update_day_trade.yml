@@ -1,0 +1,36 @@
+name: Update Day Trade
+
+on:
+  schedule:
+    - cron: '0 8 * * 1-5'  # 台灣 16:00，收盤後更新（週一~週五）
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set cache key
+        run: echo "CACHE_KEY=$(TZ=Asia/Taipei date +%Y-%m-%d-%H)" >> $GITHUB_ENV && echo "CACHE_DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)" >> $GITHUB_ENV
+      - name: Cache day_trade data
+        uses: actions/cache@v4
+        with:
+          path: |
+            db/day_trade/
+            db/day_trade_flags/
+          key: day-trade-db-${{ env.CACHE_KEY }}
+          restore-keys: |
+            day-trade-db-${{ env.CACHE_DATE }}-
+            day-trade-db-
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: Run day_trade updater
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+          TZ: Asia/Taipei
+        run: python scripts/run_day_trade_update.py
