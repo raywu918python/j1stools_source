@@ -21,3 +21,4 @@ plotly
 vectorbt
 shioaji
 google-genai
+qdrant-client
