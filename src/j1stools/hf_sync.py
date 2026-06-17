@@ -13,13 +13,21 @@ def pull(folders: list, local_dir="."):
             print(f"[hf_sync] cache hit, skip pull: {folder}")
             continue
         for attempt in range(5):
-            snapshot_download(
-                repo_id=_REPO_ID,
-                repo_type="dataset",
-                local_dir=local_dir,
-                allow_patterns=f"{folder}/**",
-                token=token,
-            )
+            try:
+                snapshot_download(
+                    repo_id=_REPO_ID,
+                    repo_type="dataset",
+                    local_dir=local_dir,
+                    allow_patterns=f"{folder}/**",
+                    token=token,
+                )
+            except Exception as e:
+                if attempt == 4:
+                    raise RuntimeError(f"[hf_sync] pull failed after 5 attempts: {folder}") from e
+                wait = 90 * (attempt + 1)
+                print(f"[hf_sync] download error ({e}), retry in {wait}s...")
+                time.sleep(wait)
+                continue
             expected = os.path.join(local_dir, folder)
             if os.path.isdir(expected) and any(os.scandir(expected)):
                 print(f"[hf_sync] pulled: {folder}")
