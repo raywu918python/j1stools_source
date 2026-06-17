@@ -49,6 +49,30 @@ Pipeline 流程
   QDRANT_PATH     Qdrant Cloud endpoint URL
   EMBED_BACKEND   ollama（初始建立）或 gemini（雲端每日更新，預設）
   OLLAMA_URL      Ollama 伺服器位址（預設 http://localhost:11434）
+
+最終產出
+--------
+  向量已建好之後，每天只需要：
+    1. 語意搜尋（Stage 3a MODE B）
+       embed 一次 risk query → Qdrant 掃全市場近期公告
+       → 找出語意像地雷的公告屬於哪些股票 → 排除
+
+    2. Gemini 評分（Stage 3b）
+       取回各股真實公告 → 整包送 Gemini → 回傳 0-100 分 + 理由
+
+    3. 三模型整合
+       margin_lgbm（量化打分）+ GMM（籌碼形態）+ Gemini（公告語意）
+       三層串接，最終輸出今日選股名單
+
+    4. 每日增量更新
+       update_mops_index()：當天 ~300 筆公告用 Gemini embed → upsert Qdrant
+       Gemini free tier 1500 RPD 足夠，不需再跑 Ollama
+
+  每日排程範例：
+    from j1stools.rag import update_mops_index, run
+    update_mops_index()          # 新公告 → Qdrant
+    df = run(use_qdrant=True)    # 全流程 → 今日選股
+    df.to_csv("result.csv", index=False, encoding="utf-8-sig")
 """
 
 from __future__ import annotations
