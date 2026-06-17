@@ -470,6 +470,18 @@ def _stage2(df: pd.DataFrame, st: str, end: str) -> pd.DataFrame:
     return out
 
 
+def _load_mops(stock_ids: list[str], lookback_days: int = MOPS_LOOKBACK_DAYS) -> pd.DataFrame:
+    """從本機 parquet 載入指定股票近期 MOPS 公告。"""
+    files = glob.glob(os.path.join(MOPS_PARQUET_DIR, "*.parquet"))
+    if not files:
+        return pd.DataFrame()
+    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    cutoff = (datetime.now(_TW) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    return df[
+        df["stock_id"].isin(stock_ids) & (df["date"] >= cutoff)
+    ].dropna(subset=["title"]).reset_index(drop=True)
+
+
 # ── Stage 3a：地雷排除（兩模式可切換）──────────────────────────────────────
 #
 # MODE A（預設）：關鍵字 — 快速、無 API 成本，但只能精確比對
@@ -846,24 +858,28 @@ def _stage3b_rich(df: pd.DataFrame, company_map: dict[str, str]) -> tuple[list[d
     return top5, market_summary
 
 
-_RAG_OUTPUT_DIR = "db/rag_output"
+_HF_SPACE_REPO = "raywu918python/j1s-api"
+_RAG_FOLDER = "rag"
 
 
 def _upload_to_hf(data: dict) -> None:
     """
-    存 JSON 到本地 db/rag_output/，再用 hf_sync.push() 推到 HF dataset。
-    HF_REPO_ID 預設 raywu918python/j1s-data（與 hf_sync 共用）。
+    把 JSON 推到 HF Space（raywu918python/j1s-api）的 rag/ 資料夾。
+    app.py 可直接讀本地 rag/daily_picks_YYYY-MM-DD.json。
     """
     try:
-        from j1stools import hf_sync
-        os.makedirs(_RAG_OUTPUT_DIR, exist_ok=True)
+        from huggingface_hub import HfApi
         date_str = data.get("date", datetime.now(_TW).strftime("%Y-%m-%d"))
-        local_path = os.path.join(_RAG_OUTPUT_DIR, f"daily_picks_{date_str}.json")
-        with open(local_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        _log("HF", f"存至本地：{local_path}")
-        hf_sync.push([_RAG_OUTPUT_DIR])
-        _log("HF", f"推送完成：{hf_sync._REPO_ID}/{_RAG_OUTPUT_DIR}/daily_picks_{date_str}.json")
+        filename = f"daily_picks_{date_str}.json"
+        content = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        api = HfApi(token=os.environ["HF_TOKEN"])
+        api.upload_file(
+            path_or_fileobj=content,
+            path_in_repo=f"{_RAG_FOLDER}/{filename}",
+            repo_id=_HF_SPACE_REPO,
+            repo_type="space",
+        )
+        _log("HF", f"推送完成：{_HF_SPACE_REPO}/rag/{filename}")
     except Exception as e:
         _log("HF", f"上傳失敗（不影響結果）：{e}")
 

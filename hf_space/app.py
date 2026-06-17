@@ -33,6 +33,10 @@ def _verify_key(key: str = Security(_key_header)):
         raise HTTPException(status_code=403, detail="Invalid API key")
 
 
+def _rag_path(date_str: str) -> str:
+    return f"rag/daily_picks_{date_str}.json"
+
+
 def _pred_url(date_str: str, model: str) -> str:
     return f"https://huggingface.co/datasets/{REPO_ID}/resolve/main" f"/db/predictions/{model}/pred_{date_str}.parquet"
 
@@ -89,6 +93,30 @@ def _load_latest_backtest(model: str):
         except Exception:
             continue
     raise HTTPException(status_code=404, detail="No backtest found in last 7 days")
+
+
+@app.get("/rag")
+def get_rag_picks(_=Depends(_verify_key)):
+    """最新一天的 RAG 選股結果（往前找最近 7 天）。"""
+    import json as _json
+    for delta in range(7):
+        d = (datetime.now(_TW).date() - timedelta(days=delta)).strftime("%Y-%m-%d")
+        path = _rag_path(d)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return _json.load(f)
+    raise HTTPException(status_code=404, detail="No RAG picks found in last 7 days")
+
+
+@app.get("/rag/{date_str}")
+def get_rag_picks_by_date(date_str: str, _=Depends(_verify_key)):
+    """指定日期的 RAG 選股結果。"""
+    import json as _json
+    path = _rag_path(date_str)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"No RAG picks for {date_str}")
+    with open(path, encoding="utf-8") as f:
+        return _json.load(f)
 
 
 @app.get("/predictions")
@@ -155,6 +183,14 @@ def _trigger_workflow(workflow_file: str) -> bool:
         timeout=10,
     )
     return r.status_code == 204
+
+
+@app.get("/trigger/run-rag")
+def trigger_run_rag(token: str = Query(default="")):
+    if token != _API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid key")
+    ok = _trigger_workflow("run_rag.yml")
+    return {"ok": ok}
 
 
 @app.get("/trigger/update-price")

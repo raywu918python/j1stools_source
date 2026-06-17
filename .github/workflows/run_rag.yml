@@ -1,0 +1,51 @@
+name: Run RAG
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set cache key
+        run: |
+          echo "CACHE_DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)" >> $GITHUB_ENV
+          echo "CACHE_KEY=$(TZ=Asia/Taipei date +%Y-%m-%d-%H)" >> $GITHUB_ENV
+      - name: Restore data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            db/price/
+            db/active_stocks/
+            db/feature_cols/
+            db/margin/
+            db/ib/
+            db/info/
+            db/news_mops/
+            models/
+            db/models/
+          key: rag-data-${{ env.CACHE_KEY }}
+          restore-keys: |
+            rag-data-${{ env.CACHE_DATE }}-
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install TA-Lib
+        run: |
+          wget -q http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib && ./configure --prefix=/usr && make && sudo make install && cd ..
+          pip install TA-Lib
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: Run RAG
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          QDRANT_TOKEN: ${{ secrets.QDRANT_TOKEN }}
+          QDRANT_PATH: ${{ secrets.QDRANT_PATH }}
+          EMBED_BACKEND: gemini
+        run: python scripts/run_rag.py
