@@ -73,6 +73,16 @@ Pipeline 流程
     update_mops_index()          # 新公告 → Qdrant
     df = run(use_qdrant=True)    # 全流程 → 今日選股
     df.to_csv("result.csv", index=False, encoding="utf-8-sig")
+
+存入：
+id      : 00103035-fa6e-59b1-8ffb-76865b035bc4   ← mops_id 產生的固定 UUID
+payload : {
+    "stock_id":     "3332",
+    "date":         "2015-01-29",
+    "title":        "本公司董事會通過擬經由第三地區投資事業增加赴大陸地區投資事宜公告",
+    "company_name": "幸康"
+}
+vector  : [-0.005, 0.035, 0.011, ...]   ← 1024 維，用「幸康 + title」embed 的
 """
 
 from __future__ import annotations
@@ -274,8 +284,8 @@ def build_mops_index(days: int | None = None) -> None:
         batch_rows.append((row, uid))
 
         if len(batch_rows) >= _UPSERT_BATCH:
-            titles = [r["title"] for r, _ in batch_rows]
-            vectors = _embed_batch(titles, )
+            titles = [f"{r.get('company_name', '')} {r['title']}".strip() for r, _ in batch_rows]
+            vectors = _embed_batch(titles)
             points = [
                 PointStruct(
                     id=u,
@@ -289,6 +299,7 @@ def build_mops_index(days: int | None = None) -> None:
                 )
                 for (r, u), vec in zip(batch_rows, vectors)
             ]
+            client.upsert(collection_name=QDRANT_COLLECTION, points=points)
             done += len(points)
             total_target = len(df) - len(existing)
             _log("BUILD", f"進度 {done}/{total_target}（跳過 {skipped}）批次 upsert 完成")
@@ -296,8 +307,8 @@ def build_mops_index(days: int | None = None) -> None:
 
     # 最後一批
     if batch_rows:
-        titles = [r["title"] for r, _ in batch_rows]
-        vectors = _embed_batch(titles, )
+        titles = [f"{r.get('company_name', '')} {r['title']}".strip() for r, _ in batch_rows]
+        vectors = _embed_batch(titles)
         points = [
             PointStruct(
                 id=u,
@@ -344,7 +355,7 @@ def update_mops_index(lookback_days: int = MOPS_LOOKBACK_DAYS) -> None:
     client = _qdrant()
     _ensure_collection(client)
 
-    vectors = _embed_batch(df["title"].tolist())
+    vectors = _embed_batch((df["company_name"].fillna("") + " " + df["title"]).str.strip().tolist())
     points = [
         PointStruct(
             id=_mops_id_to_uuid(row["mops_id"]),
@@ -458,7 +469,18 @@ def _stage2(df: pd.DataFrame, st: str, end: str) -> pd.DataFrame:
 #
 # 切換方式：_stage3a(df, use_qdrant=True)
 
-_RISK_QUERY = "財務困難 破產 掏空 下市 強制執行 票據退票 重整 內控缺失"
+_RISK_QUERY = (
+    # 財務危機
+    "財務困難 破產 重整 清算 下市 減資 私募 延遲申報 財報重編 "
+    # 法律/治理
+    "掏空 背信 偽造 內控缺失 更換會計師 重大異常 "
+    # 債務/執行
+    "票據退票 違約 強制執行 假扣押 假處分 "
+    # 營運意外
+    "工廠火災 爆炸 工安事故 生產停工 廠房損毀 環保違規 停業 解散 "
+    # 法律訴訟
+    "重大訴訟 遭檢調 搜索 起訴 裁罰"
+)
 _QDRANT_RISK_THRESHOLD = 0.75
 _QDRANT_RISK_TOP_K = 50  # 從全市場近期公告取前 50 筆最像地雷的
 
@@ -512,7 +534,12 @@ def _stage3a_qdrant(df: pd.DataFrame) -> pd.DataFrame:
 
     # Step 1：embed risk query（1 次 API 呼叫）
     _log("STAGE3A", f"embed risk query：「{_RISK_QUERY}」")
-    risk_vec = _embed_batch([_RISK_QUERY])[0]
+    # mxbai 支援 instruction prefix，加上後語意搜尋更準；Gemini 不需要
+    if _EMBED_BACKEND == "ollama":
+        query_text = f"Represent this sentence for searching relevant passages: {_RISK_QUERY}"
+    else:
+        query_text = _RISK_QUERY
+    risk_vec = _embed_batch([query_text])[0]
 
     # Step 2：Qdrant 語意搜尋（掃全市場近期公告，不限 stock_id）
     _log("STAGE3A", f"Qdrant 語意搜尋，取前 {_QDRANT_RISK_TOP_K} 筆，門檻 {_QDRANT_RISK_THRESHOLD}")
