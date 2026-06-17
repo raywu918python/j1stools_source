@@ -22,6 +22,7 @@ jobs:
             db/feature_cols/
             db/margin/
             db/ib/
+            db/day_trade/
             db/info/
             db/news_mops/
             models/

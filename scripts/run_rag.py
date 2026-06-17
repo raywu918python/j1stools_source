@@ -19,6 +19,7 @@ if __name__ == "__main__":
         "db/info",
         "db/margin",
         "db/ib",
+        "db/day_trade",
         "db/news_mops",
         "models",
     ])
