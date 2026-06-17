@@ -368,10 +368,21 @@ def update_mops_index(lookback_days: int = MOPS_LOOKBACK_DAYS) -> None:
     client = _qdrant()
     _ensure_collection(client)
 
+    all_uuids = [_mops_id_to_uuid(mid) for mid in df["mops_id"]]
+    existing = _fetch_existing_ids(client, all_uuids)
+    mask = [uid not in existing for uid in all_uuids]
+    df = df[mask].reset_index(drop=True)
+    uuids = [uid for uid, m in zip(all_uuids, mask) if m]
+    _log("UPDATE", f"已存在 {len(existing)} 筆，跳過；待 embed {len(df)} 筆")
+
+    if df.empty:
+        _log("UPDATE", "無新公告，結束")
+        return
+
     vectors = _embed_batch((df["company_name"].fillna("") + " " + df["title"]).str.strip().tolist())
     points = [
         PointStruct(
-            id=_mops_id_to_uuid(row["mops_id"]),
+            id=uid,
             vector=vec,
             payload={
                 "stock_id": str(row["stock_id"]),
@@ -380,7 +391,7 @@ def update_mops_index(lookback_days: int = MOPS_LOOKBACK_DAYS) -> None:
                 "company_name": str(row.get("company_name", "")),
             },
         )
-        for (_, row), vec in zip(df.iterrows(), vectors)
+        for (_, row), vec, uid in zip(df.iterrows(), vectors, uuids)
     ]
 
     for i in range(0, len(points), _UPSERT_BATCH):
