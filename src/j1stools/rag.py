@@ -106,9 +106,6 @@ from qdrant_client.models import (
     Filter,
     MatchValue,
     PointStruct,
-    ScalarQuantization,
-    ScalarQuantizationConfig,
-    ScalarType,
     VectorParams,
 )
 
@@ -282,14 +279,17 @@ def _fetch_existing_ids(client: QdrantClient, ids: list[str]) -> set[str]:
     return existing
 
 
-def build_mops_index(days: int | None = None) -> None:
+def build_mops_index(days: int | None = None, backend: str = "voyage") -> None:
     """
     把 db/news_mops/*.parquet 的公告 embed 後存進 Qdrant。
-    - days=None → 全部歷史（802,135 筆，用 Ollama 跑約 4-5 小時）
+    - days=None → 全部歷史
     - days=30   → 近 30 天（~9,000 筆）
+    - backend   → "voyage"（預設）/ "gemini" / "ollama"
     支援中斷續跑：已在 Qdrant 的 UUID 自動跳過，不重複 embed。
     每 {_UPSERT_BATCH} 筆 embed 完就立即 upsert，中斷最多損失一批進度。
     """
+    global _EMBED_BACKEND
+    _EMBED_BACKEND = backend
     _log("BUILD", f"=== build_mops_index 開始（近 {days if days else '全部'} 天）===")
     _log("BUILD", f"Embedding backend: {_EMBED_BACKEND}")
 
@@ -471,14 +471,8 @@ def _ensure_collection(client: QdrantClient) -> None:
         client.create_collection(
             QDRANT_COLLECTION,
             vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
-            quantization_config=ScalarQuantization(
-                scalar=ScalarQuantizationConfig(
-                    type=ScalarType.INT8,
-                    always_ram=True,  # 量化向量常駐記憶體，加速查詢
-                )
-            ),
         )
-        _log("BUILD", f"建立 collection '{QDRANT_COLLECTION}'（dim={dim}，int8 量化，2.46GB→0.62GB）")
+        _log("BUILD", f"建立 collection '{QDRANT_COLLECTION}'（dim={dim}，float32）")
 
 
 # ── Stage 1 ───────────────────────────────────────────────────────────────────
@@ -1134,7 +1128,7 @@ if __name__ == "__main__":
     # )
     # print(df)
 
-    # build_mops_index(days=365 * 5)
+    build_mops_index(days=365 * 3)
 
     # df = run()
     # if df.empty:
