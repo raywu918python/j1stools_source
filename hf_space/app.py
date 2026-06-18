@@ -365,15 +365,21 @@ def switch_model(provider: str = Query(..., description="gemini 或 qwen")):
     return {"provider": provider, "message": f"已切換到 {provider}"}
 
 
-@app.post("/trigger/roundtable")
-async def trigger_roundtable(background_tasks: BackgroundTasks, token: str = Query(default="")):
-    """觸發每日自動圓桌會議。接 GitHub Action 每日收盤後呼叫：
-      curl -X POST "https://your-space.hf.space/trigger/roundtable?token=YOUR_API_KEY"
-    """
+async def _do_trigger_roundtable(background_tasks: BackgroundTasks, token: str):
     if token != _API_KEY:
         raise HTTPException(status_code=403, detail="Invalid key")
     background_tasks.add_task(run_autonomous_roundtable)
     return {"ok": True, "message": "AI 圓桌會議已在背景啟動"}
+
+
+@app.post("/trigger/roundtable")
+async def trigger_roundtable_post(background_tasks: BackgroundTasks, token: str = Query(default="")):
+    return await _do_trigger_roundtable(background_tasks, token)
+
+
+@app.get("/trigger/roundtable")
+async def trigger_roundtable_get(background_tasks: BackgroundTasks, token: str = Query(default="")):
+    return await _do_trigger_roundtable(background_tasks, token)
 
 
 @app.get("/health")
