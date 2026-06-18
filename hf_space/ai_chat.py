@@ -76,7 +76,7 @@ _EMBED_DIM = 1024
 #
 # HF Space Secrets 設定：LLM_PROVIDER=groq  即可切換
 
-_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini")
+_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq")
 _current_provider: str = _LLM_PROVIDER  # 可透過 API 動態切換，重啟後還原預設值
 
 
@@ -605,29 +605,28 @@ async def run_autonomous_roundtable() -> list[dict]:
         or "無雷達資料"
     )
 
-    t1, t2 = await asyncio.gather(
-        run_roundtable_for_topic(
-            topic_id="rfc_macd_ib",
-            title=f"RFC MACD IB 持倉分析（{rfc['date']}）",
-            question=(
-                f"請針對 RFC MACD IB 模型持倉股票進行分析：\n"
-                f"持倉清單：{rfc_stocks}\n"
-                f"請從籌碼面與新聞面分別提出看法。"
-            ),
-            date_str=date_str,
-            source="auto",
+    t1 = await run_roundtable_for_topic(
+        topic_id="rfc_macd_ib",
+        title=f"RFC MACD IB 持倉分析（{rfc['date']}）",
+        question=(
+            f"請針對 RFC MACD IB 模型持倉股票進行分析：\n"
+            f"持倉清單：{rfc_stocks}\n"
+            f"請從籌碼面與新聞面分別提出看法。"
         ),
-        run_roundtable_for_topic(
-            topic_id="radar_top3",
-            title=f"AI 雷達 Top3 分析（{radar['date']}）",
-            question=(
-                f"請針對 AI 雷達選出的前 3 支股票進行分析：\n"
-                f"股票清單：{radar_stocks}\n"
-                f"請從籌碼面與新聞面分別提出看法。"
-            ),
-            date_str=date_str,
-            source="auto",
+        date_str=date_str,
+        source="auto",
+    )
+
+    t2 = await run_roundtable_for_topic(
+        topic_id="radar_top3",
+        title=f"AI 雷達 Top3 分析（{radar['date']}）",
+        question=(
+            f"請針對 AI 雷達選出的前 3 支股票進行分析：\n"
+            f"股票清單：{radar_stocks}\n"
+            f"請從籌碼面與新聞面分別提出看法。"
         ),
+        date_str=date_str,
+        source="auto",
     )
     print(f"[ai_chat] 自動圓桌完成 {date_str}")
 
