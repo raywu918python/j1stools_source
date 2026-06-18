@@ -433,7 +433,7 @@ _AGENTS: dict[str, dict] = {
 # ─── Specialist Agent Nodes ───────────────────────────────────────────────────
 #
 # LangGraph 概念：create_react_agent 建立一個完整的 ReAct 子圖
-#   state_modifier = agent 的 persona（system prompt）
+#   prompt = agent 的 persona（system prompt）
 #   內部循環：LLM 思考 → 決定呼叫工具 → 執行工具 → LLM 讀結果 → 繼續或結束
 #
 # _make_agent_node 是工廠函式：讀 _AGENTS 設定，產生對應的 LangGraph 節點函式。
@@ -448,7 +448,7 @@ def _make_agent_node(agent_key: str):
         subgraph = create_react_agent(
             _llm(),
             tools=cfg["tools"],
-            state_modifier=cfg["persona"],  # ← 角色在這裡注入
+            prompt=cfg["persona"],  # ← 角色在這裡注入
         )
         result = subgraph.invoke({"messages": [HumanMessage(state["question"])]})
         analysis = result["messages"][-1].content
