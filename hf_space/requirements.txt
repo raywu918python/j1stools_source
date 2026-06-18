@@ -4,9 +4,8 @@ pandas
 pyarrow
 httpx
 numpy
-google-genai
 huggingface_hub
 langgraph
-langchain-google-genai
-langchain-huggingface
 langchain-groq
+langchain-openai
+langchain-huggingface

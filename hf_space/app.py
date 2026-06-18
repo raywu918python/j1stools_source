@@ -349,7 +349,9 @@ async def create_topic(body: NewTopicBody, background_tasks: BackgroundTasks):
     }
 
 
-_AVAILABLE_PROVIDERS = ["gemini", "groq", "qwen"]
+# openrouter / qwen 留在 ai_chat.py 給內部測試用（工具呼叫不穩定，見 ai_chat.py 註解），
+# 不對前端開放，避免有人切換後讓所有使用者的圓桌都跟著壞掉。
+_AVAILABLE_PROVIDERS = ["groq"]
 
 
 @app.get("/chat/models")
@@ -365,7 +367,7 @@ def get_current_model():
 
 
 @app.post("/chat/model")
-def switch_model(provider: str = Query(..., description="gemini / groq / qwen")):
+def switch_model(provider: str = Query(..., description="groq")):
     """切換 LLM。前端直接呼叫，不需 token。重啟後還原預設值。"""
     try:
         set_provider(provider)

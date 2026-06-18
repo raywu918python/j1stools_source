@@ -41,40 +41,51 @@ import asyncio
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, TypedDict
 import operator
 
 import httpx
+from langchain_core.callbacks import BaseCallbackHandler          # fallback 失敗記錄用
 from langchain_core.messages import HumanMessage, SystemMessage  # 輕量，留在頂層
 from langchain_core.tools import tool                            # @tool 裝飾器需要
-from pydantic import BaseModel
 
 # ⚠️ 重量級套件全部 lazy import（第一次呼叫時才載入，不影響啟動速度）：
-#   langchain_google_genai → 在 _llm() 內
-#   langchain_huggingface  → 在 _llm() 內
+#   langchain_groq / langchain_openai → 在 _llm() 內
 #   langgraph              → 在 _get_roundtable() 內
 #   create_react_agent     → 在 _make_agent_node() 內
 
 _TW = timezone(timedelta(hours=8))
-_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
 _GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+_OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 _QDRANT_TOKEN = os.environ.get("QDRANT_TOKEN", "")
 _QDRANT_PATH = os.environ.get("QDRANT_PATH", "")
 _VOYAGE_TOKEN = os.environ.get("VOYAGE_TOKEN", "")
 REPO_ID = "raywu918python/j1s-data"
-_CHAT_MODEL = "gemini-2.5-flash"
 _EMBED_MODEL_VOYAGE = "voyage-3"
 _EMBED_DIM = 1024
 
 
 # ─── LLM 工廠 ─────────────────────────────────────────────────────────────────
 # LLM_PROVIDER 環境變數控制使用哪個模型：
-#   gemini（預設）→ Gemini 2.5 Flash，免費 1500 RPD，structured output 最穩
-#   groq          → Llama 3.3 70B on Groq，免費額度，structured output 正常支援
-#   qwen          → Qwen3-8B on HF Serverless，免費無 RPD 硬限，但不支援 with_structured_output
+#   groq（預設）   → 多個 Groq 模型自動 fallback，每個模型額度獨立，主模型額度用完自動換下一個
+#   openrouter     → 免費模型（OpenAI 相容 API），工具呼叫不穩定（測試多個模型都有問題），實驗用
+#   qwen           → Qwen3-8B on HF Serverless，實驗用、不建議上線：
+#                      - 工具呼叫(bind_tools)實際走計費的 Inference Providers 額度，不是真正免費
+#                      - 思考模式(thinking)關掉會跟 bind_tools 衝突，開著又可能把 token 用在思考、生成空白回應
 #
-# HF Space Secrets 設定：LLM_PROVIDER=groq  即可切換
+# Gemini 不放在這裡 — 額度留給 RAG 用，避免互搶。
+#
+# HF Space Secrets 設定：LLM_PROVIDER=groq（預設值，通常不需要特別設定）
+
+# Groq 上各自獨立速率限制的模型，依序當主力/備援（全部測試過 structured output + 工具呼叫）
+_GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "llama-3.1-8b-instant",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+]
 
 _LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq")
 _current_provider: str = _LLM_PROVIDER  # 可透過 API 動態切換，重啟後還原預設值
@@ -86,13 +97,17 @@ def get_provider() -> str:
 
 def set_provider(provider: str) -> None:
     global _current_provider
-    if provider not in ("gemini", "groq", "qwen"):
-        raise ValueError(f"不支援的 provider: {provider}，可選 gemini / groq / qwen")
+    if provider not in ("groq", "openrouter", "qwen"):
+        raise ValueError(f"不支援的 provider: {provider}，可選 groq / openrouter / qwen")
     _current_provider = provider
 
 
 def _llm():
     if _current_provider == "qwen":
+        # HF Serverless Inference（task="text-generation"）— 真正免費無額度上限。
+        # 注意：這條路徑不支援 with_structured_output()（會 raise NotImplementedError），
+        # 所以 supervisor_node 改用純文字判斷，不要在這裡呼叫 with_structured_output。
+        # bind_tools()（chip_analyst/news_analyst 用）測試正常，可以用。
         from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 
         endpoint = HuggingFaceEndpoint(
@@ -100,22 +115,36 @@ def _llm():
             huggingfacehub_api_token=_HF_TOKEN,
             task="text-generation",
             max_new_tokens=2048,
-            # Qwen3 有 thinking 模式，關掉讓 tool calling 輸出更乾淨
-            model_kwargs={"chat_template_kwargs": {"enable_thinking": False}},
         )
         return ChatHuggingFace(llm=endpoint)
 
-    if _current_provider == "groq":
-        from langchain_groq import ChatGroq
+    if _current_provider == "openrouter":
+        from langchain_openai import ChatOpenAI
 
-        return ChatGroq(model="llama-3.3-70b-versatile", api_key=_GROQ_API_KEY)
+        return ChatOpenAI(
+            model="nvidia/nemotron-nano-9b-v2:free",
+            api_key=_OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+        )
 
-    # 預設：Gemini 2.5 Flash
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    return ChatGoogleGenerativeAI(
-        model=_CHAT_MODEL,
-        google_api_key=_GEMINI_API_KEY,
-    )
+    # 預設：Groq，多模型 fallback — 每個模型在 Groq 有各自獨立的速率限制額度，
+    # 主模型額度用完時 with_fallbacks() 自動換下一個，前端完全感覺不到切換。
+    from langchain_groq import ChatGroq
+
+    primary, *fallbacks = [
+        ChatGroq(model=m, api_key=_GROQ_API_KEY, callbacks=[_FallbackLogger(m)]) for m in _GROQ_MODELS
+    ]
+    return primary.with_fallbacks(fallbacks)
+
+
+class _FallbackLogger(BaseCallbackHandler):
+    """模型呼叫失敗時印出來，方便在 HF Space Logs 看到 fallback 有沒有觸發。"""
+
+    def __init__(self, model_name: str):
+        self.model_name = model_name
+
+    def on_llm_error(self, error: BaseException, **kwargs) -> None:
+        print(f"[ai_chat] Groq 模型 {self.model_name} 失敗，切換下一個: {type(error).__name__}: {error}")
 
 
 # ─── Topic Storage (HF Dataset) ──────────────────────────────────────────────
@@ -472,13 +501,12 @@ news_analyst_node = _make_agent_node("news_analyst")
 #   → 確保輸出一定是合法的路由選項，不會出現解析錯誤
 
 
-class _RouterDecision(BaseModel):
-    next: Literal["chip_analyst", "news_analyst", "FINISH"]
-    reason: str  # 讓 LLM 說明決定理由（提高思考品質）
-
-
 def supervisor_node(state: RoundtableState) -> dict:
-    """主持人：根據已完成的分析，決定下一步路由。"""
+    """主持人：根據已完成的分析，決定下一步路由。
+
+    用純文字判斷而非 with_structured_output() — 後者在某些 provider
+    （如 HF Serverless 的 Qwen）不支援，純文字判斷任何 provider 都能用。
+    """
     done = []
     if state.get("chip_result"):
         done.append(f"籌碼分析完成：{state['chip_result'][:150]}…")
@@ -499,14 +527,20 @@ def supervisor_node(state: RoundtableState) -> dict:
 {done_str}
 
 決策規則：
-- 尚未進行籌碼分析 → chip_analyst
-- 籌碼完成但尚未進行新聞分析 → news_analyst
-- 兩者都完成 → FINISH（進入整合結論）"""
+- 尚未進行籌碼分析 → 回答 chip_analyst
+- 籌碼完成但尚未進行新聞分析 → 回答 news_analyst
+- 兩者都完成 → 回答 FINISH
 
-    decision = _llm().with_structured_output(_RouterDecision).invoke(
-        [SystemMessage(system), HumanMessage("請決定下一步。")]
-    )
-    return {"next": decision.next}
+只回答一個詞：chip_analyst、news_analyst 或 FINISH，不要有其他文字。"""
+
+    text = _llm().invoke([SystemMessage(system), HumanMessage("請決定下一步。")]).content.strip()
+    if "chip_analyst" in text:
+        next_step = "chip_analyst"
+    elif "news_analyst" in text:
+        next_step = "news_analyst"
+    else:
+        next_step = "FINISH"
+    return {"next": next_step}
 
 
 # ─── Synthesizer Node ─────────────────────────────────────────────────────────
