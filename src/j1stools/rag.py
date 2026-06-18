@@ -92,7 +92,7 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -106,7 +106,6 @@ from qdrant_client.models import (
     Filter,
     MatchValue,
     PointStruct,
-    Range,
     ScalarQuantization,
     ScalarQuantizationConfig,
     ScalarType,
@@ -518,9 +517,7 @@ def _load_mops(stock_ids: list[str], lookback_days: int = MOPS_LOOKBACK_DAYS) ->
         return pd.DataFrame()
     df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
     cutoff = (datetime.now(_TW) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    return df[
-        df["stock_id"].isin(stock_ids) & (df["date"] >= cutoff)
-    ].dropna(subset=["title"]).reset_index(drop=True)
+    return df[df["stock_id"].isin(stock_ids) & (df["date"] >= cutoff)].dropna(subset=["title"]).reset_index(drop=True)
 
 
 # ── Stage 3a：地雷排除（兩模式可切換）──────────────────────────────────────
@@ -800,12 +797,14 @@ def _stage3a_collect_alerts(df: pd.DataFrame, use_qdrant: bool = False) -> tuple
             for sid in excluded_ids:
                 rows = mops[mops["stock_id"] == sid].head(3)
                 for _, r in rows.iterrows():
-                    alerts.append({
-                        "stock_id": sid,
-                        "company_name": str(r.get("company_name", "")),
-                        "title": str(r["title"]),
-                        "date": str(r["date"]),
-                    })
+                    alerts.append(
+                        {
+                            "stock_id": sid,
+                            "company_name": str(r.get("company_name", "")),
+                            "title": str(r["title"]),
+                            "date": str(r["date"]),
+                        }
+                    )
         return alerts, filtered
 
     # keyword mode
@@ -818,12 +817,14 @@ def _stage3a_collect_alerts(df: pd.DataFrame, use_qdrant: bool = False) -> tuple
             title = str(r["title"])
             if any(k in title for k in _RISK_KEYWORDS):
                 exclude_ids.add(str(sid))
-                alerts.append({
-                    "stock_id": str(sid),
-                    "company_name": str(r.get("company_name", "")),
-                    "title": title,
-                    "date": str(r["date"]),
-                })
+                alerts.append(
+                    {
+                        "stock_id": str(sid),
+                        "company_name": str(r.get("company_name", "")),
+                        "title": title,
+                        "date": str(r["date"]),
+                    }
+                )
                 break
 
     filtered = df[~df["stock_id"].isin(exclude_ids)].reset_index(drop=True)
@@ -886,16 +887,18 @@ def _stage3b_rich(df: pd.DataFrame, company_map: dict[str, str]) -> tuple[list[d
     top5 = []
     for i, row in merged.iterrows():
         sid = row["stock_id"]
-        top5.append({
-            "rank": i + 1,
-            "stock_id": sid,
-            "company_name": company_map.get(sid, ""),
-            "pred_score": round(float(row["pred_score"]), 4),
-            "gemini_score": int(row["score"]),
-            "reason": str(row.get("reason", "")),
-            "highlights": row.get("highlights") or [],
-            "mops_highlights": stock_titles.get(sid, [])[:5],
-        })
+        top5.append(
+            {
+                "rank": i + 1,
+                "stock_id": sid,
+                "company_name": company_map.get(sid, ""),
+                "pred_score": round(float(row["pred_score"]), 4),
+                "gemini_score": int(row["score"]),
+                "reason": str(row.get("reason", "")),
+                "highlights": row.get("highlights") or [],
+                "mops_highlights": stock_titles.get(sid, [])[:5],
+            }
+        )
         _log("STAGE3B", f"  #{i+1} {sid}  score={row['score']}  {row.get('reason','')}")
 
     return top5, market_summary
@@ -909,6 +912,7 @@ def _upload_to_hf(data: dict) -> None:
     """把 JSON 推到 dataset（raywu918python/j1s-data）的 db/rag/ 資料夾。"""
     try:
         from huggingface_hub import HfApi
+
         date_str = data.get("date", datetime.now(_TW).strftime("%Y-%m-%d"))
         filename = f"daily_picks_{date_str}.json"
         content = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
@@ -980,11 +984,7 @@ def query_sort_stock(
     mops_all = _load_mops(candidates["stock_id"].tolist())
     company_map: dict[str, str] = {}
     if not mops_all.empty:
-        company_map = (
-            mops_all.drop_duplicates("stock_id")
-            .set_index("stock_id")["company_name"]
-            .to_dict()
-        )
+        company_map = mops_all.drop_duplicates("stock_id").set_index("stock_id")["company_name"].to_dict()
 
     # Stage 3a：排除地雷，同時收集 alerts
     alerts, filtered = _stage3a_collect_alerts(candidates, use_qdrant=use_qdrant)
@@ -993,17 +993,17 @@ def query_sort_stock(
     candidates_list = []
     for i, row in candidates.head(30).iterrows():
         sid = row["stock_id"]
-        candidates_list.append({
-            "rank": i + 1,
-            "stock_id": sid,
-            "company_name": company_map.get(sid, ""),
-            "pred_score": round(float(row["pred_score"]), 4),
-            "gmm_cluster": (
-                int(row["gmm_cluster"])
-                if "gmm_cluster" in row and pd.notna(row.get("gmm_cluster"))
-                else None
-            ),
-        })
+        candidates_list.append(
+            {
+                "rank": i + 1,
+                "stock_id": sid,
+                "company_name": company_map.get(sid, ""),
+                "pred_score": round(float(row["pred_score"]), 4),
+                "gmm_cluster": (
+                    int(row["gmm_cluster"]) if "gmm_cluster" in row and pd.notna(row.get("gmm_cluster")) else None
+                ),
+            }
+        )
 
     # Stage 3b：Gemini 精選 5 支
     if filtered.empty:
@@ -1028,13 +1028,90 @@ def query_sort_stock(
     return result
 
 
-def query_any_string(any_string: str) -> pd.DataFrame:
-    pass
+def query_any_string(
+    query: str = "除息 除權 股利分配 配股配息 重大事件",
+    top_k: int = 30,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    stock_id: str | None = None,
+    lookback_days: int = 3,
+) -> pd.DataFrame:
+    """
+    對 Qdrant 做語意搜尋，回傳最相似的公告清單。
+
+    參數
+    ----
+    query     : 自然語言查詢，e.g. "除息 除權 股利分配 配股配息 重大事件"
+    top_k     : 回傳筆數（預設 20）
+    date_from : 日期篩選起點，e.g. "2026-01-01"
+    date_to   : 日期篩選終點，e.g. "2026-06-17"
+    stock_id  : 限定特定股票，e.g. "2330"
+
+    回傳
+    ----
+    DataFrame，欄位：score, stock_id, company_name, date, title
+    按相似度降冪排列
+    """
+    if date_from is None:
+        date_from = (datetime.now(_TW) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    _log("QUERY", f"語意搜尋：「{query}」top_k={top_k} date_from={date_from}")
+
+    # embed query（mxbai 加 instruction prefix）
+    if _EMBED_BACKEND == "ollama":
+        query_text = f"Represent this sentence for searching relevant passages: {query}"
+    else:
+        query_text = query
+    vec = _embed_batch([query_text])[0]
+
+    # 組合 filter（date 欄位無 datetime index，改用 Python post-filter）
+    conditions = []
+    if stock_id:
+        conditions.append(FieldCondition(key="stock_id", match=MatchValue(value=stock_id)))
+
+    search_filter = Filter(must=conditions) if conditions else None
+
+    client = _qdrant()
+    fetch_limit = top_k * 10 if (date_from or date_to) else top_k
+    result = client.query_points(
+        collection_name=QDRANT_COLLECTION,
+        query=vec,
+        query_filter=search_filter,
+        limit=fetch_limit,
+        with_payload=True,
+    )
+
+    rows = [
+        {
+            "score": round(hit.score, 4),
+            "stock_id": hit.payload.get("stock_id", ""),
+            "company_name": hit.payload.get("company_name", ""),
+            "date": hit.payload.get("date", ""),
+            "title": hit.payload.get("title", ""),
+        }
+        for hit in result.points
+        if (not date_from or hit.payload.get("date", "") >= date_from)
+        and (not date_to or hit.payload.get("date", "") <= date_to)
+    ]
+
+    rows = rows[:top_k]
+    df = pd.DataFrame(rows)
+    _log("QUERY", f"找到 {len(df)} 筆，最高 score={df['score'].max():.4f}" if not df.empty else "找到 0 筆")
+    return df
 
 
 if __name__ == "__main__":
     # test()
-    build_mops_index()
+
+    # df = query_any_string(
+    #     # date_from="2020-01-01",
+    #     # date_to="2020-06-17",
+    #     # lookback_days=180,
+    #     # query="重大事件",
+    #     top_k=20,
+    # )
+    # print(df.head())
+
+    # build_mops_index()
 
     # df = run()
     # if df.empty:
