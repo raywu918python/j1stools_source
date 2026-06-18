@@ -25,6 +25,7 @@ jobs:
               repo_type="space",
               folder_path="hf_space",
               path_in_repo=".",
+              ignore_patterns=["README.md"],
           )
           print("deployed")
           EOF

@@ -503,7 +503,9 @@ def supervisor_node(state: RoundtableState) -> dict:
 - 籌碼完成但尚未進行新聞分析 → news_analyst
 - 兩者都完成 → FINISH（進入整合結論）"""
 
-    decision = _llm().with_structured_output(_RouterDecision).invoke([SystemMessage(system)])
+    decision = _llm().with_structured_output(_RouterDecision).invoke(
+        [SystemMessage(system), HumanMessage("請決定下一步。")]
+    )
     return {"next": decision.next}
 
 
