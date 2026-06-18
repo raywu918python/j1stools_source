@@ -1128,7 +1128,7 @@ if __name__ == "__main__":
     # )
     # print(df)
 
-    build_mops_index(days=365 * 3)
+    # build_mops_index(days=365 * 3)
 
     # df = run()
     # if df.empty:
