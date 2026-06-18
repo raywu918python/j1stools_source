@@ -1057,7 +1057,7 @@ def query_any_string(
     date_from: str | None = None,
     date_to: str | None = None,
     stock_id: str | None = None,
-    lookback_days: int = 3,
+    lookback_days: int = 1,
 ) -> list[dict]:
     """
     對 Qdrant 做語意搜尋，回傳最相似的公告清單。
