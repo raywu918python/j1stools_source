@@ -58,6 +58,7 @@ from pydantic import BaseModel
 _TW = timezone(timedelta(hours=8))
 _GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
+_GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 _QDRANT_TOKEN = os.environ.get("QDRANT_TOKEN", "")
 _QDRANT_PATH = os.environ.get("QDRANT_PATH", "")
 _VOYAGE_TOKEN = os.environ.get("VOYAGE_TOKEN", "")
@@ -69,12 +70,13 @@ _EMBED_DIM = 1024
 
 # ─── LLM 工廠 ─────────────────────────────────────────────────────────────────
 # LLM_PROVIDER 環境變數控制使用哪個模型：
-#   gemini（預設）→ Gemini 2.5 Flash，免費 1500 RPD，tool calling 最穩
-#   qwen          → Qwen3-8B on HF Serverless，用 HF_TOKEN，免費無 RPD 硬限
+#   gemini（預設）→ Gemini 2.5 Flash，免費 1500 RPD，structured output 最穩
+#   groq          → Llama 3.3 70B on Groq，免費額度，structured output 正常支援
+#   qwen          → Qwen3-8B on HF Serverless，免費無 RPD 硬限，但不支援 with_structured_output
 #
-# HF Space Secrets 設定：LLM_PROVIDER=qwen  即可切換
+# HF Space Secrets 設定：LLM_PROVIDER=groq  即可切換
 
-_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "qwen")
+_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini")
 _current_provider: str = _LLM_PROVIDER  # 可透過 API 動態切換，重啟後還原預設值
 
 
@@ -84,8 +86,8 @@ def get_provider() -> str:
 
 def set_provider(provider: str) -> None:
     global _current_provider
-    if provider not in ("gemini", "qwen"):
-        raise ValueError(f"不支援的 provider: {provider}，可選 gemini / qwen")
+    if provider not in ("gemini", "groq", "qwen"):
+        raise ValueError(f"不支援的 provider: {provider}，可選 gemini / groq / qwen")
     _current_provider = provider
 
 
@@ -102,6 +104,11 @@ def _llm():
             model_kwargs={"chat_template_kwargs": {"enable_thinking": False}},
         )
         return ChatHuggingFace(llm=endpoint)
+
+    if _current_provider == "groq":
+        from langchain_groq import ChatGroq
+
+        return ChatGroq(model="llama-3.3-70b-versatile", api_key=_GROQ_API_KEY)
 
     # 預設：Gemini 2.5 Flash
     from langchain_google_genai import ChatGoogleGenerativeAI
