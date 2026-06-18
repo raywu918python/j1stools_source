@@ -1,6 +1,11 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pandas
 pyarrow
 httpx
 numpy
+google-genai
+huggingface_hub
+langgraph
+langchain-google-genai
+langchain-huggingface

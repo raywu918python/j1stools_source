@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -6,16 +7,28 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException, Query, Security
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
+from pydantic import BaseModel
+
+from ai_chat import (
+    get_provider,
+    list_topics,
+    load_topic,
+    run_autonomous_roundtable,
+    run_qa,
+    run_roundtable_for_topic,
+    save_topic,
+    set_provider,
+)
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -240,6 +253,127 @@ _MODELS = {
 @app.get("/models")
 def list_models():
     return {"models": list(_MODELS.keys())}
+
+
+# ─── 議題聊天室 REST API ──────────────────────────────────────────────────────
+
+
+@app.get("/topics")
+async def get_topics(date: str = Query(default="")):
+    """列出指定日期所有議題摘要（不帶 date 則回傳今日）。
+
+    回傳範例：
+    {
+      "date": "2026-06-18",
+      "topics": [
+        {"topic_id": "rfc_macd_ib", "title": "RFC MACD IB 持倉分析", "summary": "...",
+         "created_at": "2026-06-18 09:00", "source": "auto", "qa_count": 3},
+        ...
+      ]
+    }
+    """
+    import asyncio as _aio
+    date_str = date or datetime.now(_TW).strftime("%Y-%m-%d")
+    topics = await _aio.to_thread(list_topics, date_str)
+    return {"date": date_str, "topics": topics}
+
+
+@app.get("/topics/{topic_id}")
+async def get_topic(topic_id: str, date: str = Query(default="")):
+    """取得指定議題的完整資料（discussion + qa）。"""
+    import asyncio as _aio
+    date_str = date or datetime.now(_TW).strftime("%Y-%m-%d")
+    topic = await _aio.to_thread(load_topic, topic_id, date_str)
+    if topic is None:
+        raise HTTPException(status_code=404, detail=f"議題 {topic_id} 不存在")
+    return topic
+
+
+class AskBody(BaseModel):
+    nickname: str = "匿名"
+    message: str
+
+
+@app.post("/topics/{topic_id}/ask")
+async def ask_topic(topic_id: str, body: AskBody, background_tasks: BackgroundTasks, date: str = Query(default="")):
+    """對現有議題追問。LLM 答完立即回傳，HF 存檔在背景執行。
+
+    回傳：{"question": {...}, "answer": {...}}
+    """
+    text = body.message.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="message 不可為空")
+    date_str = date or datetime.now(_TW).strftime("%Y-%m-%d")
+    try:
+        qa_entry, updated_topic = await run_qa(topic_id, text, date_str, body.nickname)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    background_tasks.add_task(save_topic, updated_topic, date_str)
+    return qa_entry
+
+
+class NewTopicBody(BaseModel):
+    title: str
+    question: str
+    nickname: str = "匿名"
+
+
+@app.post("/topics")
+async def create_topic(body: NewTopicBody, background_tasks: BackgroundTasks):
+    """用戶自開新議題，觸發完整圓桌（背景執行）。
+
+    立即回傳 topic_id，前端輪詢 GET /topics/{topic_id} 查看結果。
+    """
+    title = body.title.strip()
+    question = body.question.strip()
+    if not title or not question:
+        raise HTTPException(status_code=400, detail="title 和 question 不可為空")
+
+    import uuid as _uuid
+    topic_id = f"user_{_uuid.uuid4().hex[:8]}"
+    date_str = datetime.now(_TW).strftime("%Y-%m-%d")
+
+    background_tasks.add_task(
+        run_roundtable_for_topic,
+        topic_id=topic_id,
+        title=title,
+        question=question,
+        date_str=date_str,
+        source="user",
+    )
+    return {
+        "topic_id": topic_id,
+        "title": title,
+        "status": "processing",
+        "message": "圓桌會議已啟動，請稍後用 GET /topics/{topic_id} 查看結果",
+    }
+
+
+@app.get("/chat/model")
+def get_current_model():
+    """查看目前使用的 LLM。"""
+    return {"provider": get_provider()}
+
+
+@app.post("/chat/model")
+def switch_model(provider: str = Query(..., description="gemini 或 qwen")):
+    """切換 LLM（gemini / qwen）。前端直接呼叫，不需 token。重啟後還原預設值。"""
+    try:
+        set_provider(provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"provider": provider, "message": f"已切換到 {provider}"}
+
+
+@app.post("/trigger/roundtable")
+async def trigger_roundtable(background_tasks: BackgroundTasks, token: str = Query(default="")):
+    """觸發每日自動圓桌會議。接 GitHub Action 每日收盤後呼叫：
+      curl -X POST "https://your-space.hf.space/trigger/roundtable?token=YOUR_API_KEY"
+    """
+    if token != _API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid key")
+    background_tasks.add_task(run_autonomous_roundtable)
+    return {"ok": True, "message": "AI 圓桌會議已在背景啟動"}
 
 
 @app.get("/health")
