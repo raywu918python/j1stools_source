@@ -349,6 +349,15 @@ async def create_topic(body: NewTopicBody, background_tasks: BackgroundTasks):
     }
 
 
+_AVAILABLE_PROVIDERS = ["gemini", "groq", "qwen"]
+
+
+@app.get("/chat/models")
+def list_models_available():
+    """前端顯示用：可選的 LLM 清單 + 目前使用哪個。"""
+    return {"providers": _AVAILABLE_PROVIDERS, "current": get_provider()}
+
+
 @app.get("/chat/model")
 def get_current_model():
     """查看目前使用的 LLM。"""
@@ -356,8 +365,8 @@ def get_current_model():
 
 
 @app.post("/chat/model")
-def switch_model(provider: str = Query(..., description="gemini 或 qwen")):
-    """切換 LLM（gemini / qwen）。前端直接呼叫，不需 token。重啟後還原預設值。"""
+def switch_model(provider: str = Query(..., description="gemini / groq / qwen")):
+    """切換 LLM。前端直接呼叫，不需 token。重啟後還原預設值。"""
     try:
         set_provider(provider)
     except ValueError as e:
