@@ -429,6 +429,40 @@ def update_mops_index(lookback_days: int = MOPS_LOOKBACK_DAYS) -> None:
     _log("UPDATE", f"upsert 完成，{len(points)} 筆進入 Qdrant")
 
 
+def delete_mops_before(before_date: str, batch_size: int = 500) -> None:
+    """
+    刪除 Qdrant 中 date < before_date 的所有公告。
+    e.g. delete_mops_before("2016-01-01") → 刪掉全部 2015 年資料
+
+    從 parquet 直接算 UUID，不需要 scroll 翻遍全集合，速度快很多。
+    """
+    _log("DELETE", f"=== 刪除 date < {before_date} 的公告 ===")
+
+    files = glob.glob(os.path.join(MOPS_PARQUET_DIR, "*.parquet"))
+    if not files:
+        _log("DELETE", "找不到 MOPS parquet，無法刪除")
+        return
+
+    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    df = df[df["date"] < before_date].dropna(subset=["mops_id"]).drop_duplicates(subset=["mops_id"])
+    _log("DELETE", f"parquet 中找到 {len(df)} 筆需刪除")
+
+    if df.empty:
+        _log("DELETE", "無需刪除")
+        return
+
+    ids = [_mops_id_to_uuid(mid) for mid in df["mops_id"]]
+    client = _qdrant()
+    deleted = 0
+    for i in range(0, len(ids), batch_size):
+        batch = ids[i : i + batch_size]
+        client.delete(collection_name=QDRANT_COLLECTION, points_selector=batch)
+        deleted += len(batch)
+        _log("DELETE", f"  刪除 {deleted}/{len(ids)}")
+
+    _log("DELETE", f"=== 完成，共刪除 {deleted} 筆 ===")
+
+
 def _ensure_collection(client: QdrantClient) -> None:
     existing = {c.name for c in client.get_collections().collections}
     if QDRANT_COLLECTION not in existing:
@@ -908,7 +942,7 @@ _HF_DATASET_REPO = "raywu918python/j1s-data"
 _RAG_FOLDER = "db/rag"
 
 
-def _upload_to_hf(data: dict) -> None:
+def upload_to_hf(data: dict) -> None:
     """把 JSON 推到 dataset（raywu918python/j1s-data）的 db/rag/ 資料夾。"""
     try:
         from huggingface_hub import HfApi
@@ -933,23 +967,15 @@ def query_sort_stock(
     st: str | None = None,
     end: str = "2099-01-01",
     use_qdrant: bool = False,
-    push_hf: bool = True,
 ) -> dict:
     """
     每日選股主入口，回傳結構化 JSON dict，可直接給前端使用。
 
     回傳格式：
-      date            : 今日日期
-      updated_at      : 更新時間（台灣時間 ISO）
       candidates      : Stage1+2 初選 30 支（含 pred_score, gmm_cluster）
       top5            : Gemini 精選 5 支（含 gemini_score, reason, highlights, mops_highlights）
       market_summary  : Gemini 對今日市場的一句總結
       mops_alerts     : Stage3a 找到的地雷公告（被排除的）
-
-    參數：
-      use_qdrant : Stage3a 使用 Qdrant 語意搜尋（需已建索引）
-      push_hf    : 是否推送到 HF dataset（預設 True）
-                   存至 db/rag_output/daily_picks_YYYY-MM-DD.json → hf_sync.push()
     """
     now = datetime.now(_TW)
 
@@ -1022,9 +1048,6 @@ def query_sort_stock(
 
     _log("QSS", f"完成：candidates={len(candidates_list)}，top5={len(top5)}，alerts={len(alerts)}")
 
-    if push_hf:
-        _upload_to_hf(result)
-
     return result
 
 
@@ -1035,28 +1058,29 @@ def query_any_string(
     date_to: str | None = None,
     stock_id: str | None = None,
     lookback_days: int = 3,
-) -> pd.DataFrame:
+) -> list[dict]:
     """
     對 Qdrant 做語意搜尋，回傳最相似的公告清單。
 
     參數
     ----
-    query     : 自然語言查詢，e.g. "除息 除權 股利分配 配股配息 重大事件"
-    top_k     : 回傳筆數（預設 20）
-    date_from : 日期篩選起點，e.g. "2026-01-01"
-    date_to   : 日期篩選終點，e.g. "2026-06-17"
-    stock_id  : 限定特定股票，e.g. "2330"
+    query       : 自然語言查詢，e.g. "除息 除權 股利分配 配股配息 重大事件"
+    top_k       : 回傳筆數（預設 30）
+    date_from   : 日期篩選起點，e.g. "2026-01-01"
+    date_to     : 日期篩選終點，e.g. "2026-06-17"
+    stock_id    : 限定特定股票，e.g. "2330"
+    lookback_days: date_from 未指定時，往回幾天（預設 3）
 
     回傳
     ----
-    DataFrame，欄位：score, stock_id, company_name, date, title
+    list[dict]，每筆格式與 query_sort_stock mops_alerts 相同：
+      {"stock_id", "company_name", "date", "title"}
     按相似度降冪排列
     """
     if date_from is None:
         date_from = (datetime.now(_TW) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     _log("QUERY", f"語意搜尋：「{query}」top_k={top_k} date_from={date_from}")
 
-    # embed query（mxbai 加 instruction prefix）
     if _EMBED_BACKEND == "ollama":
         query_text = f"Represent this sentence for searching relevant passages: {query}"
     else:
@@ -1082,7 +1106,6 @@ def query_any_string(
 
     rows = [
         {
-            "score": round(hit.score, 4),
             "stock_id": hit.payload.get("stock_id", ""),
             "company_name": hit.payload.get("company_name", ""),
             "date": hit.payload.get("date", ""),
@@ -1094,24 +1117,24 @@ def query_any_string(
     ]
 
     rows = rows[:top_k]
-    df = pd.DataFrame(rows)
-    _log("QUERY", f"找到 {len(df)} 筆，最高 score={df['score'].max():.4f}" if not df.empty else "找到 0 筆")
-    return df
+    _log("QUERY", f"找到 {len(rows)} 筆")
+    return rows
 
 
 if __name__ == "__main__":
+    pass
     # test()
-
+    # delete_mops_before("2018-01-01")
     # df = query_any_string(
-    #     # date_from="2020-01-01",
-    #     # date_to="2020-06-17",
+    #     date_from="2020-01-01",
+    #     date_to="2020-06-17",
     #     # lookback_days=180,
     #     # query="重大事件",
-    #     top_k=20,
+    #     top_k=30,
     # )
-    # print(df.head())
+    # print(df)
 
-    # build_mops_index()
+    # build_mops_index(days=365 * 5)
 
     # df = run()
     # if df.empty:
