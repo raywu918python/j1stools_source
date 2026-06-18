@@ -128,6 +128,7 @@ def _hf_url(path: str) -> str:
 
 def _save_to_hf(path: str, data, commit_msg: str) -> None:
     if not _HF_TOKEN:
+        print(f"[ai_chat] 跳過存檔 {path}：未設定 HF_TOKEN")
         return
     content = json.dumps(data, ensure_ascii=False, indent=2).encode()
     try:
@@ -139,8 +140,9 @@ def _save_to_hf(path: str, data, commit_msg: str) -> None:
             repo_type="dataset",
             commit_message=commit_msg,
         )
-    except Exception:
-        pass
+        print(f"[ai_chat] 已存檔 {path}")
+    except Exception as e:
+        print(f"[ai_chat] 存檔失敗 {path}: {e}")
 
 
 def load_topic(topic_id: str, date_str: str = "") -> dict | None:
@@ -584,6 +586,7 @@ async def run_autonomous_roundtable() -> list[dict]:
     由 POST /trigger/roundtable 觸發，接 GitHub Action 每日排程。
     """
     date_str = datetime.now(_TW).strftime("%Y-%m-%d")
+    print(f"[ai_chat] 自動圓桌開始 {date_str}")
     rfc = _fetch_rfc_open()
     radar = _fetch_radar_top3()
 
@@ -617,6 +620,7 @@ async def run_autonomous_roundtable() -> list[dict]:
             source="auto",
         ),
     )
+    print(f"[ai_chat] 自動圓桌完成 {date_str}")
 
     return [t1, t2]
 
@@ -650,7 +654,9 @@ async def run_roundtable_for_topic(
     if not date_str:
         date_str = datetime.now(_TW).strftime("%Y-%m-%d")
 
+    print(f"[ai_chat] 議題開始 {topic_id} ({title})")
     discussion = await run_roundtable(question, date_str)
+    print(f"[ai_chat] 議題討論完成 {topic_id}，共 {len(discussion)} 則發言")
 
     # synthesizer 的輸出就是摘要
     summary = next(
