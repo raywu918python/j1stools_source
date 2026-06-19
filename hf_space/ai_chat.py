@@ -59,6 +59,7 @@ _TW = timezone(timedelta(hours=8))
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
 _GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 _GROQ_API_KEY_2 = os.environ.get("GROQ_API_KEY_JUST1STOCK", "")  # 第二個 Groq 帳號，額度獨立
+_CEREBRAS_TOKEN = os.environ.get("CEREBRES_TOKEN", "")
 _OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 _QDRANT_TOKEN = os.environ.get("QDRANT_TOKEN", "")
 _QDRANT_PATH = os.environ.get("QDRANT_PATH", "")
@@ -88,6 +89,10 @@ _GROQ_MODELS = [
     "llama-3.1-8b-instant",
     "meta-llama/llama-4-scout-17b-16e-instruct",
 ]
+
+# Cerebras 上的模型 — 走 OpenAI 相容端點（langchain-cerebras 套件相依 langchain-core 太舊，
+# 會把 langgraph/langchain-groq 需要的 1.x 版本擠掉，所以不用那個套件）。
+_CEREBRAS_MODELS = ["gpt-oss-120b", "zai-glm-4.7"]
 
 _LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq")
 _current_provider: str = _LLM_PROVIDER  # 可透過 API 動態切換，重啟後還原預設值
@@ -129,15 +134,27 @@ def _llm():
             base_url="https://openrouter.ai/api/v1",
         )
 
-    # 預設：Groq，多模型 + 多帳號 fallback — 每個模型、每個帳號的速率限制額度都獨立，
-    # 同一模型先換帳號試，兩個帳號都不行才降級換下一個模型，前端完全感覺不到切換。
+    # 預設：Groq + Cerebras，多模型 + 多帳號 fallback — 每個模型、每個帳號的速率限制額度
+    # 都獨立，Groq 10 組（5模型×2帳號）用完才輪到 Cerebras，前端完全感覺不到切換。
     from langchain_groq import ChatGroq
+    from langchain_openai import ChatOpenAI
 
     keys = [k for k in (_GROQ_API_KEY, _GROQ_API_KEY_2) if k]
     combos = [(m, k) for m in _GROQ_MODELS for k in keys]
-    primary, *fallbacks = [
-        ChatGroq(model=m, api_key=k, callbacks=[_FallbackLogger(m)]) for m, k in combos
-    ]
+    llms = [ChatGroq(model=m, api_key=k, callbacks=[_FallbackLogger(m)]) for m, k in combos]
+
+    if _CEREBRAS_TOKEN:
+        llms += [
+            ChatOpenAI(
+                model=m,
+                api_key=_CEREBRAS_TOKEN,
+                base_url="https://api.cerebras.ai/v1",
+                callbacks=[_FallbackLogger(f"cerebras:{m}")],
+            )
+            for m in _CEREBRAS_MODELS
+        ]
+
+    primary, *fallbacks = llms
     return primary.with_fallbacks(fallbacks)
 
 
