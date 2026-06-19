@@ -1,0 +1,54 @@
+name: AI YouTuber Shorts
+
+on:
+  schedule:
+    - cron: '0 14 * * 1-5'  # 台灣時間 22:00（UTC 14:00），週一到週五，等當天議題討論完
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '指定日期 YYYY-MM-DD（留空用今天）'
+        required: false
+        default: ''
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set cache key
+        run: |
+          echo "CACHE_DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)" >> $GITHUB_ENV
+          echo "CACHE_KEY=$(TZ=Asia/Taipei date +%Y-%m-%d-%H)" >> $GITHUB_ENV
+      - name: Restore price data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            db/price/
+            db/info/
+          key: price-data-${{ env.CACHE_KEY }}
+          restore-keys: |
+            price-data-${{ env.CACHE_DATE }}-
+            rag-data-${{ env.CACHE_DATE }}-
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: 安裝中文字型（燒字幕用）
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: 還原 YouTube OAuth 憑證
+        run: |
+          mkdir -p db/youtube
+          printf '%s' "$YOUTUBE_CLIENT_SECRET_JSON" > db/youtube/client_secret.json
+          printf '%s' "$YOUTUBE_TOKEN_JSON" > db/youtube/token.json
+        env:
+          YOUTUBE_CLIENT_SECRET_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+      - name: 產生短影音並上傳
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/run_ai_youtuber.py "${{ github.event.inputs.date }}"
