@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from ai_chat import (
     get_provider,
+    list_chat_roles,
     list_topics,
     load_topic,
     run_autonomous_roundtable,
@@ -358,6 +359,12 @@ _AVAILABLE_PROVIDERS = ["groq"]
 def list_models_available():
     """前端顯示用：可選的 LLM 清單 + 目前使用哪個。"""
     return {"providers": _AVAILABLE_PROVIDERS, "current": get_provider()}
+
+
+@app.get("/chat/roles")
+def list_roles_available():
+    """前端顯示用：聊天室裡有哪些 AI 角色。"""
+    return {"roles": list_chat_roles()}
 
 
 @app.get("/chat/model")

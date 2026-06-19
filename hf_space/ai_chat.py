@@ -58,6 +58,7 @@ from pydantic import BaseModel
 _TW = timezone(timedelta(hours=8))
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
 _GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+_GROQ_API_KEY_2 = os.environ.get("GROQ_API_KEY_JUST1STOCK", "")  # 第二個 Groq 帳號，額度獨立
 _OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 _QDRANT_TOKEN = os.environ.get("QDRANT_TOKEN", "")
 _QDRANT_PATH = os.environ.get("QDRANT_PATH", "")
@@ -128,12 +129,14 @@ def _llm():
             base_url="https://openrouter.ai/api/v1",
         )
 
-    # 預設：Groq，多模型 fallback — 每個模型在 Groq 有各自獨立的速率限制額度，
-    # 主模型額度用完時 with_fallbacks() 自動換下一個，前端完全感覺不到切換。
+    # 預設：Groq，多模型 + 多帳號 fallback — 每個模型、每個帳號的速率限制額度都獨立，
+    # 同一模型先換帳號試，兩個帳號都不行才降級換下一個模型，前端完全感覺不到切換。
     from langchain_groq import ChatGroq
 
+    keys = [k for k in (_GROQ_API_KEY, _GROQ_API_KEY_2) if k]
+    combos = [(m, k) for m in _GROQ_MODELS for k in keys]
     primary, *fallbacks = [
-        ChatGroq(model=m, api_key=_GROQ_API_KEY, callbacks=[_FallbackLogger(m)]) for m in _GROQ_MODELS
+        ChatGroq(model=m, api_key=k, callbacks=[_FallbackLogger(m)]) for m, k in combos
     ]
     return primary.with_fallbacks(fallbacks)
 
@@ -476,6 +479,21 @@ _AGENTS: dict[str, dict] = {
 }
 
 
+# 前端顯示用：聊天室裡所有 AI 角色清單（GET /chat/roles）
+_ROLES_INFO = [
+    {"nickname": "籌碼AI", "description": "彙整外資、融券、ABCD評分等客觀籌碼數據，不做主觀解讀"},
+    {"nickname": "新聞AI", "description": "摘要公開資訊觀測站公告重點，不做行情解讀"},
+    {"nickname": "主持人AI", "description": "彙整會議揭露的客觀資訊、把關不當問題，不給投資建議"},
+    {"nickname": "散戶AI", "description": "陪用戶聊股票以外的話題，關心用戶生活"},
+    {"nickname": "AI助手", "description": "回答用戶對議題的追問，僅根據會議公開資訊回答，不給投資建議"},
+]
+
+
+def list_chat_roles() -> list[dict]:
+    """前端顯示用：聊天室裡有哪些 AI 角色。"""
+    return _ROLES_INFO
+
+
 # ─── Specialist Agent Nodes ───────────────────────────────────────────────────
 #
 # LangGraph 概念：create_react_agent 建立一個完整的 ReAct 子圖
@@ -519,16 +537,19 @@ news_analyst_node = _make_agent_node("news_analyst")
 
 
 class _RouterDecision(BaseModel):
-    next: Literal["chip_analyst", "news_analyst", "FINISH"]
+    next: Literal["chip_analyst", "news_analyst", "FINISH", "BLOCKED", "casual_chat"]
     reason: str  # 讓 LLM 說明決定理由（提高思考品質）
 
 
 def supervisor_node(state: RoundtableState) -> dict:
-    """主持人：根據已完成的分析，決定下一步路由。
+    """主持人：把關問題合規性 + 根據已完成的分析決定下一步路由。
 
     用 with_structured_output() 強制回傳合法路由值，比純文字判斷可靠
     （純文字判斷實測會有模型誤判、重複路由同一個分析師的問題）。
     注意：Qwen（HF Serverless）不支援這個方法，但它已不對外開放，無影響。
+
+    BLOCKED / casual_chat 只在「尚未開始任何分析」時才會判斷，
+    避免分析做到一半又被切去這兩個分支。
     """
     done = []
     if state.get("chip_result"):
@@ -546,14 +567,16 @@ def supervisor_node(state: RoundtableState) -> dict:
   主題 2｜{state.get('radar_context', '')}
 """
 
-    system = f"""你是投資研究圓桌會議主持人，協調各專家依序發言。
+    system = f"""你是投資研究圓桌會議主持人，協調各專家依序發言，並把關不當問題。
 {daily_context}
 用戶問題：{state['question']}
 
 目前進度：
 {done_str}
 
-決策規則：
+決策規則（依序判斷，BLOCKED 跟 casual_chat 只在「尚未開始任何分析」時可選）：
+- 尚未開始任何分析，且用戶要求具體買賣建議、預測股價漲跌、內幕消息、或其他違反法規的內容 → BLOCKED
+- 尚未開始任何分析，且用戶問題明顯跟股票分析無關（閒聊、問候、生活話題、心情）→ casual_chat
 - 尚未進行籌碼分析 → chip_analyst
 - 籌碼完成但尚未進行新聞分析 → news_analyst
 - 兩者都完成 → FINISH（進入整合結論）"""
@@ -604,6 +627,39 @@ def synthesizer_node(state: RoundtableState) -> dict:
     return {"discussion": [_entry("主持人AI", response.content)]}
 
 
+# ─── Host Refuse Node ─────────────────────────────────────────────────────────
+# supervisor 判斷問題違規（要求買賣建議/股價預測/內幕消息等）時，直接拒絕，
+# 不進行籌碼/新聞分析，避免讓 chip_analyst/news_analyst 處理到不當問題。
+
+
+def host_refuse_node(_state: RoundtableState) -> dict:
+    """主持人AI：偵測到不合規問題，直接拒絕。"""
+    msg = (
+        "您的問題涉及具體買賣建議、股價預測，或其他本平台無法回應的內容。"
+        "本平台僅提供公開資訊彙整，不提供投資建議，請自行審慎評估風險。"
+    )
+    return {"discussion": [_entry("主持人AI", msg)]}
+
+
+# ─── Retail Investor Node ─────────────────────────────────────────────────────
+# supervisor 判斷問題跟股票分析無關（閒聊、問候）時，由散戶AI陪聊，
+# 同樣禁止給出投資建議。
+
+
+def retail_investor_node(state: RoundtableState) -> dict:
+    """散戶AI：陪用戶聊股票分析以外的話題，展現關心，但同樣不能給投資建議或違法內容。"""
+    system = """你是散戶AI，站在發問用戶這邊，像朋友一樣聊天、關心用戶的生活與心情。
+
+規則（絕對遵守）：
+1. 只聊跟股票分析無關的閒聊話題，展現關心、陪伴的語氣。
+2. 即使話題聊開了，也絕對不能給出任何投資建議、預測股價、或違反法規的內容。
+3. 若用戶想聊股票分析，引導用戶換個方式提出問題（例如直接問某支股票的籌碼/新聞）。
+4. 用繁體中文回答，語氣輕鬆自然。"""
+
+    response = _llm().invoke([SystemMessage(system), HumanMessage(state["question"])])
+    return {"discussion": [_entry("散戶AI", response.content)]}
+
+
 # ─── 建立 LangGraph ────────────────────────────────────────────────────────────
 #
 # StateGraph(State) → 建立以 State 為基礎的有向圖
@@ -632,6 +688,8 @@ def _get_roundtable():
         g.add_node("chip_analyst", chip_analyst_node)
         g.add_node("news_analyst", news_analyst_node)
         g.add_node("synthesizer", synthesizer_node)
+        g.add_node("host_refuse", host_refuse_node)
+        g.add_node("retail_chat", retail_investor_node)
         g.set_entry_point("context_loader")
         g.add_edge("context_loader", "supervisor")
         g.add_conditional_edges(
@@ -641,11 +699,15 @@ def _get_roundtable():
                 "chip_analyst": "chip_analyst",
                 "news_analyst": "news_analyst",
                 "FINISH": "synthesizer",
+                "BLOCKED": "host_refuse",
+                "casual_chat": "retail_chat",
             },
         )
         g.add_edge("chip_analyst", "supervisor")
         g.add_edge("news_analyst", "supervisor")
         g.add_edge("synthesizer", END)
+        g.add_edge("host_refuse", END)
+        g.add_edge("retail_chat", END)
         _roundtable = g.compile()
     return _roundtable
 #
