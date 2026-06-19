@@ -483,9 +483,8 @@ _AGENTS: dict[str, dict] = {
 _ROLES_INFO = [
     {"nickname": "籌碼AI", "description": "彙整外資、融券、ABCD評分等客觀籌碼數據，不做主觀解讀"},
     {"nickname": "新聞AI", "description": "摘要公開資訊觀測站公告重點，不做行情解讀"},
-    {"nickname": "主持人AI", "description": "彙整會議揭露的客觀資訊、把關不當問題，不給投資建議"},
+    {"nickname": "主持人AI", "description": "彙整會議揭露的客觀資訊、回答議題追問、把關不當問題，不給投資建議"},
     {"nickname": "散戶AI", "description": "陪用戶聊股票以外的話題，關心用戶生活"},
-    {"nickname": "AI助手", "description": "回答用戶對議題的追問，僅根據會議公開資訊回答，不給投資建議"},
 ]
 
 
@@ -850,7 +849,7 @@ async def run_qa(
         ctx_parts.append("近期問答：\n" + "\n".join(lines))
 
     system = (
-        f"你是會議記錄問答助手，協助用戶查閱圓桌會議揭露的客觀資訊。\n"
+        f"你是主持人AI，協助用戶查閱圓桌會議揭露的客觀資訊。\n"
         f"議題：{topic.get('title', '')}\n\n"
         + "\n\n".join(ctx_parts)
         + "\n\n規則（絕對遵守）：\n"
@@ -868,7 +867,7 @@ async def run_qa(
 
     qa_entry = {
         "question": {"type": "user", "nickname": nickname, "message": user_message, "timestamp": ts, "date": date_out},
-        "answer": {"type": "ai", "nickname": "AI助手", "message": response.content, "timestamp": ts, "date": date_out},
+        "answer": {"type": "ai", "nickname": "主持人AI", "message": response.content, "timestamp": ts, "date": date_out},
     }
 
     topic["qa"] = topic.get("qa", []) + [qa_entry]
