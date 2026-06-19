@@ -118,6 +118,18 @@ def _read_rag(date_str: str) -> dict:
     return _json.loads(r.content)
 
 
+def _youtube_url(date_str: str) -> str:
+    return f"https://huggingface.co/datasets/{REPO_ID}/resolve/main/db/youtube/{date_str}/index.json"
+
+
+def _read_youtube(date_str: str) -> list:
+    import json as _json, httpx
+    headers = {"Authorization": f"Bearer {_HF_TOKEN}"} if _HF_TOKEN else {}
+    r = httpx.get(_youtube_url(date_str), headers=headers, follow_redirects=True, timeout=30)
+    r.raise_for_status()
+    return _json.loads(r.content)
+
+
 @app.get("/rag")
 def get_rag_picks(_=Depends(_verify_key)):
     """最新一天的 RAG 選股結果（往前找最近 7 天）。"""
@@ -137,6 +149,27 @@ def get_rag_picks_by_date(date_str: str, _=Depends(_verify_key)):
         return _read_rag(date_str)
     except Exception:
         raise HTTPException(status_code=404, detail=f"No RAG picks for {date_str}")
+
+
+@app.get("/youtube")
+def get_youtube_videos(_=Depends(_verify_key)):
+    """最新一天的 AI 主播短影音清單（往前找最近 7 天）。"""
+    for delta in range(7):
+        d = (datetime.now(_TW).date() - timedelta(days=delta)).strftime("%Y-%m-%d")
+        try:
+            return {"date": d, "videos": _read_youtube(d)}
+        except Exception:
+            continue
+    raise HTTPException(status_code=404, detail="No youtube videos found in last 7 days")
+
+
+@app.get("/youtube/{date_str}")
+def get_youtube_videos_by_date(date_str: str, _=Depends(_verify_key)):
+    """指定日期的 AI 主播短影音清單。"""
+    try:
+        return {"date": date_str, "videos": _read_youtube(date_str)}
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"No youtube videos for {date_str}")
 
 
 @app.get("/predictions")
