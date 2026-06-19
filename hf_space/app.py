@@ -17,8 +17,9 @@ from ai_chat import (
     list_chat_roles,
     list_topics,
     load_topic,
-    run_autonomous_roundtable,
     run_qa,
+    run_radar_top3_roundtable,
+    run_rfc_macd_ib_roundtable,
     run_roundtable_for_topic,
     save_topic,
     set_provider,
@@ -383,21 +384,25 @@ def switch_model(provider: str = Query(..., description="groq")):
     return {"provider": provider, "message": f"已切換到 {provider}"}
 
 
-async def _do_trigger_roundtable(background_tasks: BackgroundTasks, token: str):
+def _check_token(token: str):
     if token != _API_KEY:
         raise HTTPException(status_code=403, detail="Invalid key")
-    background_tasks.add_task(run_autonomous_roundtable)
-    return {"ok": True, "message": "AI 圓桌會議已在背景啟動"}
 
 
-@app.post("/trigger/roundtable")
-async def trigger_roundtable_post(background_tasks: BackgroundTasks, token: str = Query(default="")):
-    return await _do_trigger_roundtable(background_tasks, token)
+@app.post("/trigger/roundtable/rfc-macd-ib")
+@app.get("/trigger/roundtable/rfc-macd-ib")
+async def trigger_rfc_macd_ib(background_tasks: BackgroundTasks, token: str = Query(default="")):
+    _check_token(token)
+    background_tasks.add_task(run_rfc_macd_ib_roundtable)
+    return {"ok": True, "message": "RFC MACD IB 議題已在背景啟動"}
 
 
-@app.get("/trigger/roundtable")
-async def trigger_roundtable_get(background_tasks: BackgroundTasks, token: str = Query(default="")):
-    return await _do_trigger_roundtable(background_tasks, token)
+@app.post("/trigger/roundtable/radar-top3")
+@app.get("/trigger/roundtable/radar-top3")
+async def trigger_radar_top3(background_tasks: BackgroundTasks, token: str = Query(default="")):
+    _check_token(token)
+    background_tasks.add_task(run_radar_top3_roundtable)
+    return {"ok": True, "message": "AI 雷達 Top3 議題已在背景啟動"}
 
 
 @app.get("/health")

@@ -718,23 +718,17 @@ def _get_roundtable():
 # ─── 對外介面 ─────────────────────────────────────────────────────────────────
 
 
-async def run_autonomous_roundtable() -> list[dict]:
-    """每日自動啟動圓桌會議 — 各議題分開存檔。
+async def run_rfc_macd_ib_roundtable() -> dict:
+    """每日自動啟動 RFC MACD IB 持倉議題（收盤後資料才齊，較晚觸發）。
 
-    由 POST /trigger/roundtable 觸發，接 GitHub Action 每日排程。
+    由 GET/POST /trigger/roundtable/rfc-macd-ib 觸發。
     """
     date_str = datetime.now(_TW).strftime("%Y-%m-%d")
-    print(f"[ai_chat] 自動圓桌開始 {date_str}")
+    print(f"[ai_chat] RFC MACD IB 議題開始 {date_str}")
     rfc = _fetch_rfc_open()
-    radar = _fetch_radar_top3()
-
     rfc_stocks = "、".join(rfc["stocks"][:5]) or "無持倉資料"
-    radar_stocks = (
-        "、".join(f"{s.get('stock_id','')} {s.get('company_name','')}" for s in radar["stocks"])
-        or "無雷達資料"
-    )
 
-    t1 = await run_roundtable_for_topic(
+    topic = await run_roundtable_for_topic(
         topic_id="rfc_macd_ib",
         title=f"RFC MACD IB 持倉分析（{rfc['date']}）",
         question=(
@@ -745,8 +739,24 @@ async def run_autonomous_roundtable() -> list[dict]:
         date_str=date_str,
         source="auto",
     )
+    print(f"[ai_chat] RFC MACD IB 議題完成 {date_str}")
+    return topic
 
-    t2 = await run_roundtable_for_topic(
+
+async def run_radar_top3_roundtable() -> dict:
+    """每日自動啟動 AI 雷達 Top3 議題（盤前資料即齊，較早觸發）。
+
+    由 GET/POST /trigger/roundtable/radar-top3 觸發。
+    """
+    date_str = datetime.now(_TW).strftime("%Y-%m-%d")
+    print(f"[ai_chat] AI 雷達 Top3 議題開始 {date_str}")
+    radar = _fetch_radar_top3()
+    radar_stocks = (
+        "、".join(f"{s.get('stock_id','')} {s.get('company_name','')}" for s in radar["stocks"])
+        or "無雷達資料"
+    )
+
+    topic = await run_roundtable_for_topic(
         topic_id="radar_top3",
         title=f"AI 雷達 Top3 分析（{radar['date']}）",
         question=(
@@ -757,9 +767,8 @@ async def run_autonomous_roundtable() -> list[dict]:
         date_str=date_str,
         source="auto",
     )
-    print(f"[ai_chat] 自動圓桌完成 {date_str}")
-
-    return [t1, t2]
+    print(f"[ai_chat] AI 雷達 Top3 議題完成 {date_str}")
+    return topic
 
 
 async def run_roundtable(user_message: str, date_str: str, load_daily_context: bool = True) -> list[dict]:
