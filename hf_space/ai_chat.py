@@ -41,13 +41,14 @@ import asyncio
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, TypedDict
+from typing import Annotated, Literal, TypedDict
 import operator
 
 import httpx
 from langchain_core.callbacks import BaseCallbackHandler          # fallback 失敗記錄用
 from langchain_core.messages import HumanMessage, SystemMessage  # 輕量，留在頂層
 from langchain_core.tools import tool                            # @tool 裝飾器需要
+from pydantic import BaseModel
 
 # ⚠️ 重量級套件全部 lazy import（第一次呼叫時才載入，不影響啟動速度）：
 #   langchain_groq / langchain_openai → 在 _llm() 內
@@ -106,7 +107,7 @@ def _llm():
     if _current_provider == "qwen":
         # HF Serverless Inference（task="text-generation"）— 真正免費無額度上限。
         # 注意：這條路徑不支援 with_structured_output()（會 raise NotImplementedError），
-        # 所以 supervisor_node 改用純文字判斷，不要在這裡呼叫 with_structured_output。
+        # 所以 supervisor_node 用這個 provider 會壞掉 — 僅供內部測試，不對外開放。
         # bind_tools()（chip_analyst/news_analyst 用）測試正常，可以用。
         from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 
@@ -370,10 +371,11 @@ def get_today_topics() -> dict:
 
 class RoundtableState(TypedDict):
     question: str  # 用戶原始問題
+    load_daily_context: bool  # 是否載入今日 RFC/雷達廣播（只有每日自動圓桌需要）
     rfc_context: str  # 主題 1：RFC 持倉（context_loader 填入）
     radar_context: str  # 主題 2：AI 雷達 Top3（context_loader 填入）
-    chip_result: str  # 籌碼分析師的結論
-    news_result: str  # 新聞分析師的結論
+    chip_result: str  # 籌碼AI 揭露的客觀數據
+    news_result: str  # 新聞AI 摘要的公告重點
     discussion: Annotated[list, operator.add]  # 所有 agent 的發言（前端顯示用）
     next: str  # supervisor 決定的下一步
 
@@ -393,8 +395,15 @@ def _entry(nickname: str, message: str) -> dict:
 # 圖的第一個節點：圓桌開場前預載入今日主題，讓 supervisor 和各分析師都知道要聚焦哪些股票
 
 
-def context_loader_node(_state: RoundtableState) -> dict:
-    """預載入兩個討論主題，寫入 State 供後續所有節點使用。"""
+def context_loader_node(state: RoundtableState) -> dict:
+    """預載入兩個討論主題，寫入 State 供後續所有節點使用。
+
+    只有每日自動圓桌（load_daily_context=True）才廣播今日主題，
+    使用者自訂議題只聚焦在自己的問題，不會被無關的 RFC/雷達內容干擾。
+    """
+    if not state.get("load_daily_context"):
+        return {}
+
     rfc = _fetch_rfc_open()
     radar = _fetch_radar_top3()
 
@@ -431,29 +440,37 @@ def context_loader_node(_state: RoundtableState) -> dict:
 
 _AGENTS: dict[str, dict] = {
     "chip_analyst": {
-        "nickname": "籌碼分析師",
+        "nickname": "籌碼AI",
         "tools": [get_daily_picks],
         "persona": (
-            "你是籌碼分析師，專注外資買賣超、融券增減、ABCD量化評分分析。"
-            "用繁體中文條列式回答，重點放在數字變化與趨勢。"
+            "你是籌碼數據助手，唯一任務是把外資買賣超、融券增減、ABCD量化評分等"
+            "「已經發生的客觀數據」條列出來。\n"
+            "規則（絕對遵守）：\n"
+            "1. 只陳述數據本身，例如：今日外資買超 X 張、投信賣超 Y 張、近 5 日三大法人累計買超 Z 張。\n"
+            "2. 禁止對數據做任何解讀或推論，例如禁止說「代表主力看好」「建議跟單」「後續會上漲」。\n"
+            "3. 禁止使用「看好」「看壞」「建議」「進場」「出場」等字眼。\n"
+            "4. 用繁體中文條列式回答。"
         ),
         "result_key": "chip_result",
     },
     "news_analyst": {
-        "nickname": "新聞分析師",
+        "nickname": "新聞AI",
         "tools": [search_mops],
         "persona": (
-            "你是新聞分析師，專注公開資訊觀測站公告解讀，"
-            "找出地雷訊號（掏空、財報異常、停業）或利多消息（合約、增資）。"
-            "用繁體中文條列式回答，標出風險等級。"
+            "你是新聞摘要助手，唯一任務是把公開資訊觀測站公告的「字面重點」整理出來。\n"
+            "規則（絕對遵守）：\n"
+            "1. 只做新聞/公告內容的摘要，例如：依據 XX 公告，該公司表示...\n"
+            "2. 禁止對新聞做主觀行情解讀，例如禁止說「這絕對是大利多」「股價要噴了」「建議加碼」。\n"
+            "3. 可以引用公告原文揭露的風險字眼（如停業、重大訴訟），但不要自己加上「地雷」「利多」之類的價值判斷標籤。\n"
+            "4. 用繁體中文條列式回答，引用時註明資料來源。"
         ),
         "result_key": "news_result",
     },
     # 未來可以加：
     # "tech_analyst": {
-    #     "nickname":   "技術分析師",
+    #     "nickname":   "技術AI",
     #     "tools":      [get_price_chart],
-    #     "persona":    "你是技術分析師，專注 K 線、均線、量價關係...",
+    #     "persona":    "你是技術數據助手，只陳述K線、均線、量價等客觀數據，不做解讀...",
     #     "result_key": "tech_result",
     # },
 }
@@ -501,11 +518,17 @@ news_analyst_node = _make_agent_node("news_analyst")
 #   → 確保輸出一定是合法的路由選項，不會出現解析錯誤
 
 
+class _RouterDecision(BaseModel):
+    next: Literal["chip_analyst", "news_analyst", "FINISH"]
+    reason: str  # 讓 LLM 說明決定理由（提高思考品質）
+
+
 def supervisor_node(state: RoundtableState) -> dict:
     """主持人：根據已完成的分析，決定下一步路由。
 
-    用純文字判斷而非 with_structured_output() — 後者在某些 provider
-    （如 HF Serverless 的 Qwen）不支援，純文字判斷任何 provider 都能用。
+    用 with_structured_output() 強制回傳合法路由值，比純文字判斷可靠
+    （純文字判斷實測會有模型誤判、重複路由同一個分析師的問題）。
+    注意：Qwen（HF Serverless）不支援這個方法，但它已不對外開放，無影響。
     """
     done = []
     if state.get("chip_result"):
@@ -515,59 +538,70 @@ def supervisor_node(state: RoundtableState) -> dict:
 
     done_str = "\n".join(done) if done else "尚未開始任何分析"
 
-    system = f"""你是投資研究圓桌會議主持人，協調各專家依序發言。
-
+    daily_context = ""
+    if state.get("rfc_context") or state.get("radar_context"):
+        daily_context = f"""
 今日圓桌討論主題：
-  主題 1｜{state.get('rfc_context', '未載入')}
-  主題 2｜{state.get('radar_context', '未載入')}
+  主題 1｜{state.get('rfc_context', '')}
+  主題 2｜{state.get('radar_context', '')}
+"""
 
+    system = f"""你是投資研究圓桌會議主持人，協調各專家依序發言。
+{daily_context}
 用戶問題：{state['question']}
 
 目前進度：
 {done_str}
 
 決策規則：
-- 尚未進行籌碼分析 → 回答 chip_analyst
-- 籌碼完成但尚未進行新聞分析 → 回答 news_analyst
-- 兩者都完成 → 回答 FINISH
+- 尚未進行籌碼分析 → chip_analyst
+- 籌碼完成但尚未進行新聞分析 → news_analyst
+- 兩者都完成 → FINISH（進入整合結論）"""
 
-只回答一個詞：chip_analyst、news_analyst 或 FINISH，不要有其他文字。"""
-
-    text = _llm().invoke([SystemMessage(system), HumanMessage("請決定下一步。")]).content.strip()
-    if "chip_analyst" in text:
-        next_step = "chip_analyst"
-    elif "news_analyst" in text:
-        next_step = "news_analyst"
-    else:
-        next_step = "FINISH"
-    return {"next": next_step}
+    decision = _llm().with_structured_output(_RouterDecision).invoke(
+        [SystemMessage(system), HumanMessage("請決定下一步。")]
+    )
+    return {"next": decision.next}
 
 
 # ─── Synthesizer Node ─────────────────────────────────────────────────────────
 
 
 def synthesizer_node(state: RoundtableState) -> dict:
-    """主持人整合：匯總所有專家意見，給出最終結論。"""
-    system = """你是投資研究圓桌會議主持人。
-根據各專家意見整合最終結論，分點說明，結尾加上「資料僅供參考，不構成投資建議」。
-用繁體中文回答。"""
+    """主持人AI：總結會議揭露的客觀資訊，絕對不做綜合研判或給出方向性結論。"""
+    system = """你是會議流程總結助手，唯一任務是把籌碼AI和新聞AI揭露的「客觀事實」彙整呈現。
 
-    user = f"""今日圓桌主題：
+規則（絕對遵守）：
+1. 只做客觀事實的彙整陳述，不做「綜合研判」「給出結論」「給出方向」的動作。
+2. 禁止使用「看多」「看空」「建議買進/賣出/加碼/減碼」「值得介入」等任何投資建議用語。
+3. 禁止把籌碼面和新聞面的資訊「串連推論」成一個市場方向（例如禁止說「籌碼集中加上利多消息，後續看漲」）。
+4. 結尾固定加上：「以上僅為會議揭露之公開資訊彙整，不構成投資建議，請投資人自行審慎評估風險。」
+5. 用繁體中文回答，分點陳述。
+
+範例（安全寫法）：
+「感謝籌碼AI與新聞AI的數據整理。今日會議揭露的公開資訊如下：三大法人買賣超情況為...；
+媒體關注焦點為...。以上僅為會議揭露之公開資訊彙整，不構成投資建議，請投資人自行審慎評估風險。」"""
+
+    daily_context = ""
+    if state.get("rfc_context") or state.get("radar_context"):
+        daily_context = f"""今日圓桌主題：
 {state.get('rfc_context', '')}
 {state.get('radar_context', '')}
 
-用戶問題：{state['question']}
+"""
 
-【籌碼分析師】
+    user = f"""{daily_context}用戶問題：{state['question']}
+
+【籌碼AI】
 {state.get('chip_result') or '無資料'}
 
-【新聞分析師】
+【新聞AI】
 {state.get('news_result') or '無資料'}
 
-請整合以上分析，給出圓桌會議結論。"""
+請彙整以上揭露的客觀資訊。"""
 
     response = _llm().invoke([SystemMessage(system), HumanMessage(user)])
-    return {"discussion": [_entry("主持人（整合結論）", response.content)]}
+    return {"discussion": [_entry("主持人AI", response.content)]}
 
 
 # ─── 建立 LangGraph ────────────────────────────────────────────────────────────
@@ -667,10 +701,15 @@ async def run_autonomous_roundtable() -> list[dict]:
     return [t1, t2]
 
 
-async def run_roundtable(user_message: str, date_str: str) -> list[dict]:
-    """執行 AI 圓桌會議，回傳所有 agent 的發言。"""
+async def run_roundtable(user_message: str, date_str: str, load_daily_context: bool = True) -> list[dict]:
+    """執行 AI 圓桌會議，回傳所有 agent 的發言。
+
+    load_daily_context=True（每日自動圓桌）才會廣播 RFC/雷達今日主題；
+    使用者自訂議題應該傳 False，避免顯示跟自己問題無關的內容。
+    """
     init_state: RoundtableState = {
         "question": user_message,
+        "load_daily_context": load_daily_context,
         "rfc_context": "",
         "radar_context": "",
         "chip_result": "",
@@ -697,12 +736,12 @@ async def run_roundtable_for_topic(
         date_str = datetime.now(_TW).strftime("%Y-%m-%d")
 
     print(f"[ai_chat] 議題開始 {topic_id} ({title})")
-    discussion = await run_roundtable(question, date_str)
+    discussion = await run_roundtable(question, date_str, load_daily_context=(source == "auto"))
     print(f"[ai_chat] 議題討論完成 {topic_id}，共 {len(discussion)} 則發言")
 
     # synthesizer 的輸出就是摘要
     summary = next(
-        (m["message"] for m in reversed(discussion) if m.get("nickname") == "主持人（整合結論）"),
+        (m["message"] for m in reversed(discussion) if m.get("nickname") == "主持人AI"),
         "",
     )
 
@@ -749,10 +788,14 @@ async def run_qa(
         ctx_parts.append("近期問答：\n" + "\n".join(lines))
 
     system = (
-        f"你是股票分析助手，協助用戶深入了解投資研究圓桌會議分析。\n"
+        f"你是會議記錄問答助手，協助用戶查閱圓桌會議揭露的客觀資訊。\n"
         f"議題：{topic.get('title', '')}\n\n"
         + "\n\n".join(ctx_parts)
-        + "\n\n請根據以上背景資料用繁體中文簡潔回答。"
+        + "\n\n規則（絕對遵守）：\n"
+        "1. 只能根據以上會議揭露的客觀資訊回答，不做超出資料範圍的預測或推論。\n"
+        "2. 禁止給出任何買進/賣出/加碼/減碼等投資建議或方向性判斷。\n"
+        "3. 若用戶詢問是否該買賣，請回覆無法提供投資建議，並引導用戶自行判斷風險。\n"
+        "4. 用繁體中文簡潔回答。"
     )
 
     now = datetime.now(_TW)
