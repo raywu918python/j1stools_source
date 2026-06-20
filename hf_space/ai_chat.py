@@ -62,7 +62,9 @@ _GROQ_API_KEY_2 = os.environ.get("GROQ_API_KEY_JUST1STOCK", "")  # 第二個 Gro
 _CEREBRAS_TOKEN = os.environ.get("CEREBRES_TOKEN", "")
 _OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 _QDRANT_TOKEN = os.environ.get("QDRANT_TOKEN", "")
-_QDRANT_PATH = os.environ.get("QDRANT_PATH", "")
+# QDRANT_PATH 在不同環境格式不一致（有的含 https:// 前綴，有的只是 host），
+# 統一去掉 scheme 後自己補 https://，避免組出 https://https://... 連不到。
+_QDRANT_PATH = os.environ.get("QDRANT_PATH", "").removeprefix("https://").removeprefix("http://")
 _VOYAGE_TOKEN = os.environ.get("VOYAGE_TOKEN", "")
 REPO_ID = "raywu918python/j1s-data"
 _EMBED_MODEL_VOYAGE = "voyage-3"

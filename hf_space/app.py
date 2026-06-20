@@ -24,6 +24,7 @@ from ai_chat import (
     save_topic,
     set_provider,
 )
+from ai_support import ask_support
 
 app = FastAPI()
 
@@ -436,6 +437,30 @@ async def trigger_radar_top3(background_tasks: BackgroundTasks, token: str = Que
     _check_token(token)
     background_tasks.add_task(run_radar_top3_roundtable)
     return {"ok": True, "message": "AI 雷達 Top3 議題已在背景啟動"}
+
+
+# ─── 客服 AI（RAG 問答）─────────────────────────────────────────────────────
+
+
+class SupportAskBody(BaseModel):
+    message: str
+    history: list[dict] = []
+
+
+@app.post("/support/ask")
+async def support_ask(body: SupportAskBody):
+    """客服問答。history 為前端帶上來的對話紀錄（可選，無狀態設計，後端不存檔）。
+
+    body： {"message": "...", "history": [{"role": "user"|"assistant", "content": "..."}]}
+    回傳： {"answer": "..."}
+    """
+    import asyncio as _aio
+
+    text = body.message.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="message 不可為空")
+    answer = await _aio.to_thread(ask_support, text, body.history)
+    return {"answer": answer}
 
 
 @app.get("/health")
