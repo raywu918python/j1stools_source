@@ -280,9 +280,9 @@ def trigger_predict_all(token: str = Query(default="")):
 
 
 _MODELS = {
-    "rfc_macd_6xx": "rfc_macd.yml",
+    # "rfc_macd_6xx": "rfc_macd.yml",
     "rfc_macd_ib_6xx": "rfc_ib_macd.yml",
-    "margin_lgbm": "margin_lgbm.yml",
+    # "margin_lgbm": "margin_lgbm.yml",
 }
 
 

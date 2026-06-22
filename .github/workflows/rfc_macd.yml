@@ -1,8 +1,8 @@
 name: RFC MACD
 
 on:
-  schedule:
-    - cron: '0 9 * * 1-5'  # 台灣時間 17:00（UTC 09:00），週一到週五
+  # 暫停自動排程（原本平日台灣時間 17:00 自動跑），保留手動觸發
+  # - cron: '0 9 * * 1-5'
   workflow_dispatch:
 
 jobs:
