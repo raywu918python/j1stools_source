@@ -23,6 +23,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from ai_chat import _llm
 
+_HF_TOKEN = os.environ.get("HF_TOKEN", "")
+
 _VOYAGE_TOKEN = os.environ.get("VOYAGE_TOKEN", "")
 _QDRANT_TOKEN = os.environ.get("QDRANT_TOKEN", "")
 # QDRANT_PATH 在不同環境格式不一致（有的含 https:// 前綴，有的只是 host），
@@ -80,6 +82,29 @@ def _search_faq(vector: list[float]) -> list[dict]:
         return []
 
 
+def _llm_hf_primary():
+    """客服優先用 HF Serverless（Qwen3-8B，免費無額度上限），失敗才 fallback 到 Groq+Cerebras。
+
+    只在這支檔案這樣排序，不動 ai_chat.py 的共用 _llm() —— qwen provider 在 bind_tools()/
+    with_structured_output() 上有已知問題（見 ai_chat.py 註解），但 ask_support() 只是
+    單純的 system prompt + invoke()，沒有用到工具呼叫，不會碰到那些問題。
+
+    這樣排序的好處：客服平常的流量不會去吃 Groq 的額度，把 Groq 額度留給圓桌會議
+    （那邊沒辦法用 qwen，因為要用 bind_tools）。
+    """
+    from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+
+    qwen = ChatHuggingFace(
+        llm=HuggingFaceEndpoint(
+            repo_id="Qwen/Qwen3-8B",
+            huggingfacehub_api_token=_HF_TOKEN,
+            task="text-generation",
+            max_new_tokens=2048,
+        )
+    )
+    return qwen.with_fallbacks([_llm()])
+
+
 def ask_support(message: str, history: list[dict] | None = None) -> str:
     """客服問答主入口。
 
@@ -101,5 +126,5 @@ def ask_support(message: str, history: list[dict] | None = None) -> str:
         messages.append(cls(h.get("content", "")))
     messages.append(HumanMessage(message))
 
-    response = _llm().invoke(messages)
+    response = _llm_hf_primary().invoke(messages)
     return response.content
