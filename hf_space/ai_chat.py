@@ -2,37 +2,39 @@
 
 架構圖
 ------
-（自動 or 用戶觸發）
+context_loader（載入今日RFC/雷達背景，可選）
   │
   ▼
-supervisor（主持人）← ← ← ← ←┐
-  │                            │
-  ├─── chip_analyst（籌碼師）──┤
-  │                            │
-  ├─── news_analyst（新聞師）──┘
-  │
-  └─── synthesizer（整合）──→ END
+supervisor（主持人AI 路由判斷）← ← ← ← ←┐
+  │                                        │
+  ├─ BLOCKED      → host_refuse（拒答，違規問題直接擋掉）──→ END
+  ├─ casual_chat  → retail_chat（散戶AI，跟股票無關的閒聊）──→ END
+  ├─ chip_analyst（籌碼AI）───────────────┤
+  ├─ news_analyst（新聞AI）───────────────┘
+  └─ FINISH → synthesizer（主持人AI整合）──→ END
 
 議題驅動流程
 -----------
-1. 每日自動 → run_autonomous_roundtable()
-   → 各議題存 db/chat/{date}/topic_{id}.json
+1. 每日自動（外部排程觸發）
+   → run_radar_top3_roundtable() / run_rfc_macd_ib_roundtable()
+   → 各自跑一次圓桌，存 db/chat/{date}/topic_{id}.json
    → 更新 db/chat/{date}/index.json
 
 2. 用戶追問 → run_qa(topic_id, message)
-   → 輕量 LLM 回答（帶議題背景，不觸發完整圓桌）
+   → 輕量 LLM 回答（帶議題背景，不進 LangGraph、不觸發完整圓桌）
    → qa 欄位追加回 topic 檔
 
 3. 用戶開新議題 → run_roundtable_for_topic()
-   → 觸發完整圓桌，存新 topic 檔
+   → 觸發完整圓桌（進 LangGraph），存新 topic 檔
 
 API
 ---
-GET  /topics              → list_topics()
-GET  /topics/{id}         → load_topic()
-POST /topics/{id}/ask     → run_qa()
-POST /topics              → run_roundtable_for_topic()（背景執行）
-POST /trigger/roundtable  → run_autonomous_roundtable()（背景執行）
+GET  /topics                          → list_topics()
+GET  /topics/{id}                     → load_topic()
+POST /topics/{id}/ask                 → run_qa()
+POST /topics                          → run_roundtable_for_topic()（背景執行）
+GET/POST /trigger/roundtable/radar-top3   → run_radar_top3_roundtable()（背景執行）
+GET/POST /trigger/roundtable/rfc-macd-ib  → run_rfc_macd_ib_roundtable()（背景執行）
 """
 
 from __future__ import annotations
@@ -136,28 +138,31 @@ def _llm():
             base_url="https://openrouter.ai/api/v1",
         )
 
-    # 預設：Groq + Cerebras，多模型 + 多帳號 fallback — 每個模型、每個帳號的速率限制額度
-    # 都獨立，Groq 10 組（5模型×2帳號）用完才輪到 Cerebras，前端完全感覺不到切換。
-    from langchain_groq import ChatGroq
-    from langchain_openai import ChatOpenAI
+    if _current_provider == "groq":
+        # Groq + Cerebras，多模型 + 多帳號 fallback — 每個模型、每個帳號的速率限制額度
+        # 都獨立，Groq 10 組（5模型×2帳號）用完才輪到 Cerebras，前端完全感覺不到切換。
+        from langchain_groq import ChatGroq
+        from langchain_openai import ChatOpenAI
 
-    keys = [k for k in (_GROQ_API_KEY, _GROQ_API_KEY_2) if k]
-    combos = [(m, k) for m in _GROQ_MODELS for k in keys]
-    llms = [ChatGroq(model=m, api_key=k, callbacks=[_FallbackLogger(m)]) for m, k in combos]
+        keys = [k for k in (_GROQ_API_KEY, _GROQ_API_KEY_2) if k]
+        combos = [(m, k) for m in _GROQ_MODELS for k in keys]
+        llms = [ChatGroq(model=m, api_key=k, callbacks=[_FallbackLogger(m)]) for m, k in combos]
 
-    if _CEREBRAS_TOKEN:
-        llms += [
-            ChatOpenAI(
-                model=m,
-                api_key=_CEREBRAS_TOKEN,
-                base_url="https://api.cerebras.ai/v1",
-                callbacks=[_FallbackLogger(f"cerebras:{m}")],
-            )
-            for m in _CEREBRAS_MODELS
-        ]
+        if _CEREBRAS_TOKEN:
+            llms += [
+                ChatOpenAI(
+                    model=m,
+                    api_key=_CEREBRAS_TOKEN,
+                    base_url="https://api.cerebras.ai/v1",
+                    callbacks=[_FallbackLogger(f"cerebras:{m}")],
+                )
+                for m in _CEREBRAS_MODELS
+            ]
 
-    primary, *fallbacks = llms
-    return primary.with_fallbacks(fallbacks)
+        primary, *fallbacks = llms
+        return primary.with_fallbacks(fallbacks)
+
+    raise ValueError(f"不支援的 provider: {_current_provider}")
 
 
 class _FallbackLogger(BaseCallbackHandler):
