@@ -630,9 +630,13 @@ def plot_clusters(clf: "IBMarginGMM", df: pd.DataFrame, sample_n: int = 30_000):
     if cols:
         profile = clf.cluster_profiles[cols].rename(columns=KEY_FEAT)
         data = profile.values.astype(float)
-        im = ax_heat.imshow(
-            data, aspect="auto", cmap="RdYlGn", vmin=data[np.isfinite(data)].min(), vmax=data[np.isfinite(data)].max()
-        )
+        # 各欄尺度不一（xrank 為 0~1 排名，連買天為原始天數），故逐欄獨立 min-max
+        # 正規化決定顏色，避免單一離群尺度的欄位拉垮其餘欄位的色階對比
+        col_min = np.nanmin(data, axis=0)
+        col_max = np.nanmax(data, axis=0)
+        col_span = np.where(col_max > col_min, col_max - col_min, 1)
+        data_norm = (data - col_min) / col_span
+        im = ax_heat.imshow(data_norm, aspect="auto", cmap="RdYlGn", vmin=0, vmax=1)
         ax_heat.set_xticks(range(len(profile.columns)))
         ax_heat.set_xticklabels(profile.columns, rotation=40, ha="right", fontsize=9)
         ax_heat.set_yticks(range(len(profile)))
@@ -642,8 +646,9 @@ def plot_clusters(clf: "IBMarginGMM", df: pd.DataFrame, sample_n: int = 30_000):
                 v = data[i, j]
                 if not np.isnan(v):
                     ax_heat.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7)
-        plt.colorbar(im, ax=ax_heat, fraction=0.046)
-    ax_heat.set_title("叢集特徵 Heatmap")
+        cbar = plt.colorbar(im, ax=ax_heat, fraction=0.046)
+        cbar.set_label("列內相對高低（0=該欄最低，1=該欄最高）", fontsize=8)
+    ax_heat.set_title("叢集特徵 Heatmap（格內數字為實際 median 值）")
 
     # ── Violin plots ───────────────────────────────────────────── #
     _VIOLIN_CANDIDATES = [

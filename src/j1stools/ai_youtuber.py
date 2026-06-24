@@ -150,6 +150,34 @@ def load_today_material(date_str: str) -> list[dict]:
     return topics
 
 
+def _has_video_log(date_str: str) -> bool:
+    headers = {"Authorization": f"Bearer {_HF_TOKEN}"} if _HF_TOKEN else {}
+    try:
+        r = httpx.get(_hf_url(f"db/youtube/{date_str}/index.json"), headers=headers, follow_redirects=True, timeout=15)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def find_pending_date(lookback_days: int = 5) -> str | None:
+    """從今天往前找最近一個「有自動議題、但還沒上傳過影片」的日期。
+
+    GitHub Actions 的排程觸發常會 delay（實測 delay 到隔天台北時間凌晨），
+    如果直接用「執行當下 datetime.now() 算出來的今天」去抓題材，delay 跨過午夜
+    就會抓錯成「隔天」日期，而隔天的議題還沒產生，結果誤判成「今天沒有題材」而跳過，
+    題材其實一直都在，只是日期算錯。改成往前找最近沒處理過的日期，排程延遲也不會漏。
+    """
+    for delta in range(lookback_days):
+        d = (datetime.now(_TW) - timedelta(days=delta)).strftime("%Y-%m-%d")
+        index = list_today_topics(d)
+        if not any(t.get("source") == "auto" for t in index):
+            continue
+        if _has_video_log(d):
+            continue
+        return d
+    return None
+
+
 # ─── Stage 2：講稿 ──────────────────────────────────────────────────────────
 
 
@@ -516,7 +544,13 @@ def main(
     include_user_topics: bool = False,
     max_topics: int = 5,
 ) -> list[dict]:
-    date_str = date_str or datetime.now(_TW).strftime("%Y-%m-%d")
+    if date_str is None:
+        # 沒有明確指定日期（排程自動執行）：往前找最近沒處理過的日期，
+        # 不要死板地用「執行當下」算今天，避免排程延遲跨午夜抓錯日期、誤判沒有題材。
+        date_str = find_pending_date()
+        if date_str is None:
+            print("最近幾天都沒有新的自動議題待處理，不產生影片")
+            return []
     topics = load_today_material(date_str)
 
     # 預設只做兩個自動議題（RFC持倉/雷達Top3），不把使用者隨手問的議題自動公開上片：

@@ -2,7 +2,7 @@ name: AI YouTuber Shorts
 
 on:
   schedule:
-    - cron: '0 14 * * 1-5'  # 台灣時間 22:00（UTC 14:00），週一到週五，等當天議題討論完
+    - cron: '30 5 * * 1-5'  # 台灣時間下午 13:30（UTC 05:30），週一到週五
   workflow_dispatch:
     inputs:
       date:
