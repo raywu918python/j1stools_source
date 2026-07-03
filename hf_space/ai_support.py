@@ -4,7 +4,7 @@
 Qdrant 的 support_faq collection；這裡只做 runtime 查詢：
 
   使用者問題 → Voyage embedding → Qdrant 搜尋 support_faq → top-k 片段
-            → 組 prompt（身份/合規規則 + 片段）→ Groq（沿用 ai_chat._llm）→ 回答
+            → 組 prompt（身份/合規規則 + 片段）→ LLM（llm_provider.get_llm）→ 回答
 
 身份/合規規則寫死在 _ALWAYS_ON_RULES，每次都會送進 system prompt，不靠語意搜尋
 命中與否決定 —— 否則使用者問法剛好沒搜到 guardrail 內容時，AI 可能講出投資建議。
@@ -21,9 +21,7 @@ import os
 import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from ai_chat import _llm
-
-_HF_TOKEN = os.environ.get("HF_TOKEN", "")
+from llm_provider import get_llm
 
 _VOYAGE_TOKEN = os.environ.get("VOYAGE_TOKEN", "")
 _QDRANT_TOKEN = os.environ.get("QDRANT_TOKEN", "")
@@ -82,29 +80,6 @@ def _search_faq(vector: list[float]) -> list[dict]:
         return []
 
 
-def _llm_hf_primary():
-    """客服優先用 HF Serverless（Qwen3-8B，免費無額度上限），失敗才 fallback 到 Groq+Cerebras。
-
-    只在這支檔案這樣排序，不動 ai_chat.py 的共用 _llm() —— qwen provider 在 bind_tools()/
-    with_structured_output() 上有已知問題（見 ai_chat.py 註解），但 ask_support() 只是
-    單純的 system prompt + invoke()，沒有用到工具呼叫，不會碰到那些問題。
-
-    這樣排序的好處：客服平常的流量不會去吃 Groq 的額度，把 Groq 額度留給圓桌會議
-    （那邊沒辦法用 qwen，因為要用 bind_tools）。
-    """
-    from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
-
-    qwen = ChatHuggingFace(
-        llm=HuggingFaceEndpoint(
-            repo_id="Qwen/Qwen3-8B",
-            huggingfacehub_api_token=_HF_TOKEN,
-            task="text-generation",
-            max_new_tokens=2048,
-        )
-    )
-    return qwen.with_fallbacks([_llm()])
-
-
 def ask_support(message: str, history: list[dict] | None = None) -> str:
     """客服問答主入口。
 
@@ -126,5 +101,9 @@ def ask_support(message: str, history: list[dict] | None = None) -> str:
         messages.append(cls(h.get("content", "")))
     messages.append(HumanMessage(message))
 
-    response = _llm_hf_primary().invoke(messages)
+    # 客服優先用 Qwen3-8B（免費無額度上限），失敗才 fallback 到 Groq+Cerebras。
+    # 這裡強制開 use_qwen（不follow LLM_USE_QWEN 環境變數的預設關閉），因為 ask_support()
+    # 只是單純的 system prompt + invoke()，沒有用到工具呼叫/結構化輸出，不會碰到 Qwen 的已知問題
+    # （見 llm_provider.py）。qwen_first=True 讓客服流量不吃 Groq 額度，留給圓桌會議用。
+    response = get_llm(use_qwen=True, qwen_first=True).invoke(messages)
     return response.content

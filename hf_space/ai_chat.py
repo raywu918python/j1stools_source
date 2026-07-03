@@ -47,22 +47,19 @@ from typing import Annotated, Literal, TypedDict
 import operator
 
 import httpx
-from langchain_core.callbacks import BaseCallbackHandler          # fallback 失敗記錄用
 from langchain_core.messages import HumanMessage, SystemMessage  # 輕量，留在頂層
 from langchain_core.tools import tool                            # @tool 裝飾器需要
 from pydantic import BaseModel
 
+from llm_provider import get_llm, get_provider, set_provider  # LLM 帳號/模型切換，見 llm_provider.py
+
 # ⚠️ 重量級套件全部 lazy import（第一次呼叫時才載入，不影響啟動速度）：
-#   langchain_groq / langchain_openai → 在 _llm() 內
+#   langchain_groq / langchain_openai → 在 llm_provider.get_llm() 內
 #   langgraph              → 在 _get_roundtable() 內
 #   create_react_agent     → 在 _make_agent_node() 內
 
 _TW = timezone(timedelta(hours=8))
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
-_GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-_GROQ_API_KEY_2 = os.environ.get("GROQ_API_KEY_JUST1STOCK", "")  # 第二個 Groq 帳號，額度獨立
-_CEREBRAS_TOKEN = os.environ.get("CEREBRES_TOKEN", "")
-_OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 _QDRANT_TOKEN = os.environ.get("QDRANT_TOKEN", "")
 # QDRANT_PATH 在不同環境格式不一致（有的含 https:// 前綴，有的只是 host），
 # 統一去掉 scheme 後自己補 https://，避免組出 https://https://... 連不到。
@@ -72,107 +69,7 @@ REPO_ID = "raywu918python/j1s-data"
 _EMBED_MODEL_VOYAGE = "voyage-3"
 _EMBED_DIM = 1024
 
-
-# ─── LLM 工廠 ─────────────────────────────────────────────────────────────────
-# LLM_PROVIDER 環境變數控制使用哪個模型：
-#   groq（預設）   → 多個 Groq 模型自動 fallback，每個模型額度獨立，主模型額度用完自動換下一個
-#   openrouter     → 免費模型（OpenAI 相容 API），工具呼叫不穩定（測試多個模型都有問題），實驗用
-#   qwen           → Qwen3-8B on HF Serverless，實驗用、不建議上線：
-#                      - 工具呼叫(bind_tools)實際走計費的 Inference Providers 額度，不是真正免費
-#                      - 思考模式(thinking)關掉會跟 bind_tools 衝突，開著又可能把 token 用在思考、生成空白回應
-#
 # Gemini 不放在這裡 — 額度留給 RAG 用，避免互搶。
-#
-# HF Space Secrets 設定：LLM_PROVIDER=groq（預設值，通常不需要特別設定）
-
-# Groq 上各自獨立速率限制的模型，依序當主力/備援（全部測試過 structured output + 工具呼叫）
-_GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-    "llama-3.1-8b-instant",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-]
-
-# Cerebras 上的模型 — 走 OpenAI 相容端點（langchain-cerebras 套件相依 langchain-core 太舊，
-# 會把 langgraph/langchain-groq 需要的 1.x 版本擠掉，所以不用那個套件）。
-_CEREBRAS_MODELS = ["gpt-oss-120b", "zai-glm-4.7"]
-
-_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq")
-_current_provider: str = _LLM_PROVIDER  # 可透過 API 動態切換，重啟後還原預設值
-
-
-def get_provider() -> str:
-    return _current_provider
-
-
-def set_provider(provider: str) -> None:
-    global _current_provider
-    if provider not in ("groq", "openrouter", "qwen"):
-        raise ValueError(f"不支援的 provider: {provider}，可選 groq / openrouter / qwen")
-    _current_provider = provider
-
-
-def _llm():
-    if _current_provider == "qwen":
-        # HF Serverless Inference（task="text-generation"）— 真正免費無額度上限。
-        # 注意：這條路徑不支援 with_structured_output()（會 raise NotImplementedError），
-        # 所以 supervisor_node 用這個 provider 會壞掉 — 僅供內部測試，不對外開放。
-        # bind_tools()（chip_analyst/news_analyst 用）測試正常，可以用。
-        from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
-
-        endpoint = HuggingFaceEndpoint(
-            repo_id="Qwen/Qwen3-8B",
-            huggingfacehub_api_token=_HF_TOKEN,
-            task="text-generation",
-            max_new_tokens=2048,
-        )
-        return ChatHuggingFace(llm=endpoint)
-
-    if _current_provider == "openrouter":
-        from langchain_openai import ChatOpenAI
-
-        return ChatOpenAI(
-            model="nvidia/nemotron-nano-9b-v2:free",
-            api_key=_OPENROUTER_API_KEY,
-            base_url="https://openrouter.ai/api/v1",
-        )
-
-    if _current_provider == "groq":
-        # Groq + Cerebras，多模型 + 多帳號 fallback — 每個模型、每個帳號的速率限制額度
-        # 都獨立，Groq 10 組（5模型×2帳號）用完才輪到 Cerebras，前端完全感覺不到切換。
-        from langchain_groq import ChatGroq
-        from langchain_openai import ChatOpenAI
-
-        keys = [k for k in (_GROQ_API_KEY, _GROQ_API_KEY_2) if k]
-        combos = [(m, k) for m in _GROQ_MODELS for k in keys]
-        llms = [ChatGroq(model=m, api_key=k, callbacks=[_FallbackLogger(m)]) for m, k in combos]
-
-        if _CEREBRAS_TOKEN:
-            llms += [
-                ChatOpenAI(
-                    model=m,
-                    api_key=_CEREBRAS_TOKEN,
-                    base_url="https://api.cerebras.ai/v1",
-                    callbacks=[_FallbackLogger(f"cerebras:{m}")],
-                )
-                for m in _CEREBRAS_MODELS
-            ]
-
-        primary, *fallbacks = llms
-        return primary.with_fallbacks(fallbacks)
-
-    raise ValueError(f"不支援的 provider: {_current_provider}")
-
-
-class _FallbackLogger(BaseCallbackHandler):
-    """模型呼叫失敗時印出來，方便在 HF Space Logs 看到 fallback 有沒有觸發。"""
-
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-
-    def on_llm_error(self, error: BaseException, **kwargs) -> None:
-        print(f"[ai_chat] Groq 模型 {self.model_name} 失敗，切換下一個: {type(error).__name__}: {error}")
 
 
 # ─── Topic Storage (HF Dataset) ──────────────────────────────────────────────
@@ -533,7 +430,7 @@ def _make_agent_node(agent_key: str):
     def node(state: RoundtableState) -> dict:
         from langgraph.prebuilt import create_react_agent
         subgraph = create_react_agent(
-            _llm(),
+            get_llm(),
             tools=cfg["tools"],
             prompt=cfg["persona"],  # ← 角色在這裡注入
         )
@@ -604,7 +501,7 @@ def supervisor_node(state: RoundtableState) -> dict:
 - 籌碼完成但尚未進行新聞分析 → news_analyst
 - 兩者都完成 → FINISH（進入整合結論）"""
 
-    decision = _llm().with_structured_output(_RouterDecision).invoke(
+    decision = get_llm().with_structured_output(_RouterDecision).invoke(
         [SystemMessage(system), HumanMessage("請決定下一步。")]
     )
     return {"next": decision.next}
@@ -646,7 +543,7 @@ def synthesizer_node(state: RoundtableState) -> dict:
 
 請彙整以上揭露的客觀資訊。"""
 
-    response = _llm().invoke([SystemMessage(system), HumanMessage(user)])
+    response = get_llm().invoke([SystemMessage(system), HumanMessage(user)])
     return {"discussion": [_entry("主持人AI", response.content)]}
 
 
@@ -679,7 +576,7 @@ def retail_investor_node(state: RoundtableState) -> dict:
 3. 若用戶想聊股票分析，引導用戶換個方式提出問題（例如直接問某支股票的籌碼/新聞）。
 4. 用繁體中文回答，語氣輕鬆自然。"""
 
-    response = _llm().invoke([SystemMessage(system), HumanMessage(state["question"])])
+    response = get_llm().invoke([SystemMessage(system), HumanMessage(state["question"])])
     return {"discussion": [_entry("散戶AI", response.content)]}
 
 
@@ -896,7 +793,7 @@ async def run_qa(
     ts = now.strftime("%H:%M")
     date_out = now.strftime("%Y-%m-%d")
 
-    response = await asyncio.to_thread(_llm().invoke, [SystemMessage(system), HumanMessage(user_message)])
+    response = await asyncio.to_thread(get_llm().invoke, [SystemMessage(system), HumanMessage(user_message)])
 
     qa_entry = {
         "question": {"type": "user", "nickname": nickname, "message": user_message, "timestamp": ts, "date": date_out},

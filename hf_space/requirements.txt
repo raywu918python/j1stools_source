@@ -9,3 +9,4 @@ langgraph
 langchain-groq
 langchain-openai
 langchain-huggingface
+langchain-anthropic
