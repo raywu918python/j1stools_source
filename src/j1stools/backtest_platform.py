@@ -9,8 +9,8 @@ from regex import P
 
 pd.set_option("future.no_silent_downcasting", True)
 
+import pandas_ta as ta
 from pandas_ta import ma
-import vectorbt as vbt
 
 from j1stools import j1s_chart, parquet_db, rfc_main
 
@@ -113,9 +113,11 @@ def calc_adx(high, low, close, cache_path="db/adx/adx.parquet", is_using_cache=F
         return pd.read_parquet(cache_path)
 
     print("計算 ADX...")
-    adx = vbt.pandas_ta("ADX").run(high, low, close, length=14).adx
-    if isinstance(adx.columns, pd.MultiIndex):
-        adx.columns = adx.columns.get_level_values(-1)
+    adx_cols = {}
+    for col in close.columns:
+        res = ta.adx(high[col], low[col], close[col], length=14)
+        adx_cols[col] = res["ADX_14"]
+    adx = pd.DataFrame(adx_cols)
     adx.columns = adx.columns.astype(str)
     adx.to_parquet(cache_path)
 

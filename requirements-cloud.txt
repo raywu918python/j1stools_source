@@ -17,8 +17,7 @@ attrs
 websockets
 patsy
 xgboost
-plotly
-vectorbt
+plotly<7
 shioaji
 google-genai
 qdrant-client
