@@ -64,6 +64,11 @@ def save(dfall):
     columns = ["date", "stock_id", "open", "high", "low", "close", "volume"]
     new = long_df[columns].copy()
 
+    # 多檔一起下載時 yfinance 會把缺資料的日期補成 NaN，keep="last" 會拿它蓋掉舊的正確資料；
+    # 週末跑排程時 yfinance 偶爾會多吐一筆日期是當天（週六/日）的資料，台股週末不開盤，一併丟掉。
+    new = new.dropna(subset=["close"])
+    new = new[pd.to_datetime(new["date"]).dt.dayofweek < 5]
+
     # 轉型
     for col in ["open", "high", "low", "close"]:
         new[col] = new[col].astype("float32")
