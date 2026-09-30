@@ -6,25 +6,25 @@ import pandas as pd
 
 
 def backtest_engine(
-    close,
-    entries,
-    exits,
-    df_proba,
-    stock_group,
-    max_positions=10,
-    sl_trail=0.1,
-    use_hold_days=True,  # ✅ 新增開關
-    use_sl_trail=True,
+    close,  # 收盤價，index=日期，columns=股票代號
+    entries,  # 進場訊號（bool DataFrame），True 代表當日可進場
+    exits,  # 出場危險訊號（bool Series），True 代表當日全面出場、不再進場
+    df_proba,  # 模型預測機率，用於進場排序與信心度加碼
+    stock_group,  # 股票所屬族群對照表，控制單一族群持股上限
+    max_positions=10,  # 最大同時持倉數
+    sl_trail=0.1,  # 移動停損幅度：從持有期間最高價回落多少比例出場
+    use_hold_days=True,  # ✅ 新增開關  # 是否啟用「持有滿天數即出場」
+    use_sl_trail=True,  # 是否啟用移動停損
     sl_stop=0.08,  # ✅ 固定停損 8%
     tp_stop=0.15,  # ✅ 固定停利 15%
     use_fixed_sl=False,  # ✅ 固定停損開關
     use_fixed_tp=False,  # ✅ 固定停利開關
-    hold_days=5,
-    init_cash=1_000_000,
-    fee=0.001,
+    hold_days=5,  # 固定持有天數（配合 use_hold_days）
+    init_cash=1_000_000,  # 初始資金
+    fee=0.001,  # 手續費率（買賣皆扣）
     group_limit=3,  # ✅ 每族群最多 3 支
-    use_fixed_sl_tp=False,  # 固定 10 %，有點像掛單，但實際操作不同
-    use_proba_sizing=False,
+    use_fixed_sl_tp=False,  # 觸發固定停損/停利時，出場成交價用設定價結算（模擬掛單），而非當日實際收盤價
+    use_proba_sizing=False,  # 是否依模型信心度（df_proba）調整每筆進場的資金倍數
 ):
     dates = close.index
     cash = float(init_cash)
