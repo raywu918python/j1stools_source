@@ -259,6 +259,39 @@ def query_margin(stocks: list, st="2015-01-01", end="2099-01-01"):
     return df
 
 
+def query_m1(stocks: list, st="2015-01-01", end="2099-01-01"):
+    dataset = ds.dataset("db/m1/", format="parquet")
+    st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+    condition = (ds.field("date") >= st_str) & (ds.field("date") < end_str) & (ds.field("stock_id").isin(stocks))
+
+    table = dataset.to_table(filter=condition).sort_by([("date", "ascending")])
+    df: pd.DataFrame = table.to_pandas()
+    df["close"] = df["close"].astype("float32")
+    df["open"] = df["open"].astype("float32")
+    df["high"] = df["high"].astype("float32")
+    df["low"] = df["low"].astype("float32")
+    df.drop_duplicates(subset=["date", "stock_id"], keep="last", inplace=True)
+    return df
+
+
+def query_day_price(stocks: list, st="2015-01-01", end="2099-01-01"):
+    """Fugle 日線 K 棒（db/day/），與 query_price（yfinance, db/price）來源不同"""
+    dataset = ds.dataset("db/day/", format="parquet")
+    st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+    condition = (ds.field("date") >= st_str) & (ds.field("date") < end_str) & (ds.field("stock_id").isin(stocks))
+
+    table = dataset.to_table(filter=condition).sort_by([("date", "ascending")])
+    df: pd.DataFrame = table.to_pandas()
+    df["close"] = df["close"].astype("float32")
+    df["open"] = df["open"].astype("float32")
+    df["high"] = df["high"].astype("float32")
+    df["low"] = df["low"].astype("float32")
+    df.drop_duplicates(subset=["date", "stock_id"], keep="last", inplace=True)
+    return df
+
+
 def query_news(stocks: list | None = None, st="2015-01-01", end="2099-01-01", is_include_end=False):
     dataset = ds.dataset("db/news_mops/", format="parquet")
     st_str = pd.Timestamp(st).strftime("%Y-%m-%d")
