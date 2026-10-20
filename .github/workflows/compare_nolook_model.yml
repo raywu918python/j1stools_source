@@ -2,12 +2,6 @@ name: Compare NoLook Model
 
 # 比較 f_macd_hist_div 修掉 center=True 前後的模型與回測；新模型只存成 artifact，不 push 回 HF
 on:
-  push:
-    branches: [claude/project-thread-7x4osi]
-    paths:
-      - scripts/compare_nolook_model.py
-      - src/j1stools/macdh_divergences.py
-      - .github/workflows/compare_nolook_model.yml
   workflow_dispatch:
 
 jobs:

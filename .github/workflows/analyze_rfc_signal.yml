@@ -2,11 +2,6 @@ name: Analyze RFC Signal
 
 # 唯讀診斷：看 rfc_macd_ib_6xx 為什麼最近沒訊號，不會 push 任何資料回 HF
 on:
-  push:
-    branches: [claude/project-thread-7x4osi]
-    paths:
-      - scripts/analyze_rfc_signal.py
-      - .github/workflows/analyze_rfc_signal.yml
   workflow_dispatch:
 
 jobs:

@@ -2,12 +2,6 @@ name: Train W Bottom Model
 
 # W 底＋拉回 特徵重訓，並和 C 模型比較門檻與持倉數；新模型只存成 artifact，不 push 回 HF
 on:
-  push:
-    branches: [claude/project-thread-7x4osi]
-    paths:
-      - scripts/train_w_bottom_model.py
-      - src/j1stools/w_bottom_features.py
-      - .github/workflows/train_w_bottom_model.yml
   workflow_dispatch:
 
 permissions:
