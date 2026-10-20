@@ -1,0 +1,35 @@
+name: Analyze RFC Signal
+
+# 唯讀診斷：看 rfc_macd_ib_6xx 為什麼最近沒訊號，不會 push 任何資料回 HF
+on:
+  push:
+    branches: [claude/project-thread-7x4osi]
+    paths:
+      - scripts/analyze_rfc_signal.py
+      - .github/workflows/analyze_rfc_signal.yml
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install TA-Lib
+        run: |
+          wget -q http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib && ./configure --prefix=/usr && make && sudo make install && cd ..
+          pip install TA-Lib
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: Analyze
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+          USE_IB_FEATURES: "true"
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/analyze_rfc_signal.py
