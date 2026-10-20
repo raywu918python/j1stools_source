@@ -8,6 +8,7 @@ from j1stools.CONFIG import BaseDataBuilderConfig
 from j1stools.TYPE import FEATURE_TYPE
 from j1stools.lgbm_test_feature import lgbm_all_f_features, lgbm_feature
 from j1stools.macdh_divergences import f_macd_hist_divergences_with_atr
+from j1stools.w_bottom_features import f_w_bottom_pullback
 from j1stools.obj_hv_feature import HvFeature
 from j1stools.obj_ma_feature import MaFeature
 from j1stools.obj_macd_feature import MacdFeature
@@ -41,6 +42,8 @@ def gen_feature(
         df = f_macd_continuous_features(df)
     if FEATURE_TYPE.macd in feature_type:
         df = f_macd_hist_divergences_with_atr(df)
+    if FEATURE_TYPE.w_bottom in feature_type:
+        df = f_w_bottom_pullback(df)
     if FEATURE_TYPE.abcd in feature_type:
         # df = abcd_feature.detect_n_shape_features(df, seg=9)
         # df = abcd_feature.detect_trend_features(df)
