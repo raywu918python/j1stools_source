@@ -1,0 +1,43 @@
+name: Compare NoLook Model
+
+# 比較 f_macd_hist_div 修掉 center=True 前後的模型與回測；新模型只存成 artifact，不 push 回 HF
+on:
+  push:
+    branches: [claude/project-thread-7x4osi]
+    paths:
+      - scripts/compare_nolook_model.py
+      - src/j1stools/macdh_divergences.py
+      - .github/workflows/compare_nolook_model.yml
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install TA-Lib
+        run: |
+          wget -q http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib && ./configure --prefix=/usr && make && sudo make install && cd ..
+          pip install TA-Lib
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: Compare
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+          USE_IB_FEATURES: "true"
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/compare_nolook_model.py
+      - name: Upload new model
+        uses: actions/upload-artifact@v4
+        with:
+          name: rfc_macd_ib_6xx_nolook
+          path: models/rfc_macd_ib_6xx_nolook.joblib
+          retention-days: 30
