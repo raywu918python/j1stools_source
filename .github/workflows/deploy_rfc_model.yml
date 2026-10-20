@@ -1,0 +1,37 @@
+name: Deploy RFC Model
+
+# 一次性：把 Compare NoLook Model 重訓出的模型換上 HF（舊檔先備份到 models/backup/）
+on:
+  push:
+    branches: [claude/project-thread-7x4osi]
+    paths:
+      - scripts/deploy_rfc_model.py
+      - .github/workflows/deploy_rfc_model.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Download retrained model
+        uses: actions/download-artifact@v4
+        with:
+          name: rfc_macd_ib_6xx_nolook
+          path: new_model/
+          run-id: 39412104557
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install deps
+        run: pip install -r requirements-cloud.txt
+      - name: Deploy
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+        run: python scripts/deploy_rfc_model.py new_model/rfc_macd_ib_6xx_nolook.joblib

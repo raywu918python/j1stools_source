@@ -19,6 +19,8 @@ hf_sync.pull(pull_dirs)
 today = datetime.now(_TW).strftime("%Y-%m-%d")
 out_dir = f"db/backtest/{MODEL_NAME}"
 pred_dir = f"db/predictions/{MODEL_NAME}"
+# 2026-10-21 起換成修掉 f_macd_hist_div 偷看未來後重訓的模型；之前的 pred 檔是舊模型算的，不再採用，改用新模型重算
+PRED_CUTOVER = "2026-10-21"
 
 
 def load_signal(stocks, st="2024-01-01", end="2099-01-01"):
@@ -28,7 +30,9 @@ def load_signal(stocks, st="2024-01-01", end="2099-01-01"):
     被新資料污染，分數會改變。因此每個 pred 檔只取自己那天的 row，確保
     June 10 的訊號永遠來自 pred_2026-06-10.parquet，不被後續資料覆蓋。
     """
-    pred_files = sorted(glob.glob(f"{pred_dir}/pred_*.parquet"))
+    pred_files = sorted(
+        f for f in glob.glob(f"{pred_dir}/pred_*.parquet") if os.path.basename(f)[5:15] >= PRED_CUTOVER
+    )
     if not pred_files:
         return predict(stocks, st, end)
 
@@ -57,9 +61,9 @@ def backtest(st="2024-01-01", end="2099-01-01"):
 
     portfolio_value, trades_df, positions, close_df = backtest_platform.prepare_data_backtest(
         signal,
-        top_n=5,
-        threshold=0.6,
-        max_positions=5,
+        top_n=10,
+        threshold=0.55,
+        max_positions=10,
         use_sl_trail=False,
         use_fixed_sl=True,
         sl_stop=0.10,
