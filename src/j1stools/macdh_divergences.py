@@ -10,6 +10,27 @@ import pandas_ta as ta
 import numpy as np
 
 
+def _confirmed_price_lows(close_wide: pd.DataFrame, hist_wide: pd.DataFrame, n: int):
+    """找價格低點，只用當下已知的資料。
+
+    t-n 是前後各 n 天的最低點，要到第 t 天收盤才能確認，所以訊號標在 t（延遲 n 天）。
+    原本用 rolling(center=True) 會在 t-n 當天就用到 t-n+1..t 的未來價格，即時推論時最近 n 天永遠是 0。
+
+    回傳 (is_low_confirmed, low_close, low_hist, prev_close_at_low, prev_hist_at_low)，都以確認日 t 為 index；
+    low_* 是低點那天 (t-n) 的值，prev_* 是上一個已確認低點的值。
+    """
+    low_close = close_wide.shift(n)
+    low_hist = hist_wide.shift(n)
+    is_low_confirmed = low_close == close_wide.rolling(2 * n + 1).min()
+
+    def find_prev_val(val_df, mask_df):
+        return val_df.where(mask_df).shift(1).ffill(limit=30)
+
+    prev_close_at_low = find_prev_val(low_close, is_low_confirmed)
+    prev_hist_at_low = find_prev_val(low_hist, is_low_confirmed)
+    return is_low_confirmed, low_close, low_hist, prev_close_at_low, prev_hist_at_low
+
+
 def f_macd_hist_divergences_with_atr(df: pd.DataFrame):
     # 1. 確保排序
     df = df.sort_values(by=["date", "stock_id"])
@@ -48,15 +69,11 @@ def f_macd_hist_divergences_with_atr(df: pd.DataFrame):
 
     # --- 特徵 1-3: (與先前相同，略過邏輯描述直接實作) ---
     n = 5
-    is_price_low = close_wide == close_wide.rolling(2 * n + 1, center=True).min()
+    is_low_confirmed, low_close, low_hist, prev_close_at_low, prev_hist_at_low = _confirmed_price_lows(
+        close_wide, hist_wide, n
+    )
 
-    def find_prev_val(val_df, mask_df):
-        return val_df.where(mask_df).shift(1).ffill(limit=30)
-
-    prev_close_at_low = find_prev_val(close_wide, is_price_low)
-    prev_hist_at_low = find_prev_val(hist_wide, is_price_low)
-
-    f1_hist_div = (is_price_low & (close_wide < prev_close_at_low) & (hist_wide > prev_hist_at_low)).astype(int)
+    f1_hist_div = (is_low_confirmed & (low_close < prev_close_at_low) & (low_hist > prev_hist_at_low)).astype(int)
     f2_trend_above_zero = ((macd_wide > 0) & (signal_wide > 0)).astype(int)
     f3_fast_above_slow = (macd_wide > signal_wide).astype(int)
 
@@ -116,17 +133,13 @@ def f_macd_continuous_features(df: pd.DataFrame):
 
     # ── 特徵 1: 背離強度 (hist 改善幅度 / ATR) ──────────────────
     n = 5
-    is_price_low = close_wide == close_wide.rolling(2 * n + 1, center=True).min()
+    is_low_confirmed, low_close, low_hist, prev_close_at_low, prev_hist_at_low = _confirmed_price_lows(
+        close_wide, hist_wide, n
+    )
 
-    def find_prev_val(val_df, mask_df):
-        return val_df.where(mask_df).shift(1).ffill(limit=30)
-
-    prev_hist_at_low = find_prev_val(hist_wide, is_price_low)
-    prev_close_at_low = find_prev_val(close_wide, is_price_low)
-
-    # 只在實際背離點計算，其他時間填 0
-    div_raw = (hist_wide - prev_hist_at_low) / atr_safe
-    at_low_with_div = is_price_low & (close_wide < prev_close_at_low) & (hist_wide > prev_hist_at_low)
+    # 只在實際背離點（確認日）計算，其他時間填 0
+    div_raw = (low_hist - prev_hist_at_low) / atr_safe.shift(n)
+    at_low_with_div = is_low_confirmed & (low_close < prev_close_at_low) & (low_hist > prev_hist_at_low)
     f1_div_strength = div_raw.where(at_low_with_div, 0.0)
 
     # ── 特徵 2: 趨勢強度 (macd + signal 之和 / ATR) ─────────────

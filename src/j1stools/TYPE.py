@@ -11,6 +11,7 @@ class FEATURE_TYPE(Flag):
     power = auto()
     test_lgbm_feature = auto()
     margin_ibbuysell = auto()
+    w_bottom = auto()
 
 
 class MODEL_TYPE(Enum):
