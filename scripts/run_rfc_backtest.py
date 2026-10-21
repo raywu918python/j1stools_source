@@ -61,9 +61,9 @@ def backtest(st="2024-01-01", end="2099-01-01"):
 
     portfolio_value, trades_df, positions, close_df = backtest_platform.prepare_data_backtest(
         signal,
-        top_n=10,
+        top_n=5,
         threshold=0.55,
-        max_positions=10,
+        max_positions=5,
         use_sl_trail=False,
         use_fixed_sl=True,
         sl_stop=0.10,
