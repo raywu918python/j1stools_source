@@ -2,6 +2,7 @@ name: Deploy HF Space
 
 on:
   push:
+    branches: [main]  # 只有 main 才部署，避免其他分支一推就改到線上 Space
     paths:
       - 'hf_space/**'
 
