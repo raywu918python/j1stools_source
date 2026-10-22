@@ -46,7 +46,7 @@ def run(push=True):
             [
                 {
                     "stock_id": sid,
-                    **{k: v for k, v in pos.items() if k != "exit_tomorrow"},
+                    **pos,
                     "last_date": close_df.index[-1],
                     "pnl_pct": round((last_price.get(sid, pos["entry_price"]) / pos["entry_price"] - 1) * 100, 2),
                     "weight": round(pos["cost"] / total_value, 4),

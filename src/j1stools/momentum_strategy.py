@@ -1,10 +1,11 @@
 """動能策略：創 60 日新高＋量 2 倍＋120 日報酬前 10%。
 
-- t 日收盤出現訊號 → t+1 開盤買；出場在收盤判斷 → 隔天開盤賣
-- 最多 5 檔，同族群最多 2 檔，開盤漲停不買
-- 0050 在 200 日均線上才開新倉（已持有的照規則出場）
-- 部位依波動調整：每檔基本 1/5，日波動超過 4% 的按比例買少
-- 出場：從持有期間最高收盤回落 20%，或持有滿 20 個交易日
+每天 13:10 用當天價格跑一次，訊號和出場都在「當天收盤」成交（避開台股開盤的大漲大跌）。
+- 最多 MAX_POS 檔，同族群最多 2 檔，漲停（漲幅 > 9.5%）不買
+- 0050 在 MKT_MA 日均線上才開新倉（已持有的照規則出場）
+- 部位依波動調整：每檔基本 1/MAX_POS，日波動超過 VOL_TARGET 的按比例買少
+- 出場：持有滿 HOLD 個交易日（TRAIL 設定時，另外加上從持有期間最高收盤回落 TRAIL 就出場）
+參數用 2015–2023 挑選（lab/close_grid.py）：持有 10 天、不設移動停損、波動 4%、0050>120MA。
 """
 
 import glob
@@ -13,11 +14,11 @@ import numpy as np
 import pandas as pd
 
 MAX_POS = 5
-HOLD = 20
-TRAIL = 0.20
+HOLD = 10
+TRAIL = None
 VOL_TARGET = 0.04
 GROUP_LIMIT = 2
-MKT_MA = 200
+MKT_MA = 120
 FEE = 0.003
 MIN_VOLUME = 500_000  # 20 日均量（股）
 MIN_PRICE = 10
@@ -34,7 +35,7 @@ def load_data(price_dir="db/price", info_path="db/info/info.parquet", st="2014-0
     px = px[px["date"] >= st].drop_duplicates(["date", "stock_id"], keep="last")
     etf = px[px["stock_id"] == "0050"].set_index("date")["close"].sort_index()
     px = px[~px["stock_id"].str.startswith("00")]
-    d = {c: _wide(px, c) for c in ["open", "high", "close", "volume"]}
+    d = {c: _wide(px, c) for c in ["high", "close", "volume"]}
     d["close"] = d["close"].ffill(limit=5)
     d["etf"] = etf.reindex(d["close"].index).ffill()
     info = pd.read_parquet(info_path).set_index("stock_id")
@@ -42,7 +43,7 @@ def load_data(price_dir="db/price", info_path="db/info/info.parquet", st="2014-0
     return d
 
 
-def signals(d):
+def signals(d, mkt_ma=MKT_MA):
     C, H, V = d["close"], d["high"], d["volume"]
     vol20 = V.rolling(20).mean()
     ret = C.pct_change(fill_method=None)
@@ -50,35 +51,42 @@ def signals(d):
     univ = (vol20 >= MIN_VOLUME) & (C >= MIN_PRICE)
     sig = (C >= H.rolling(60).max().shift(1)) & (V > 2 * vol20.shift(1)) & (r120.rank(axis=1, pct=True) >= 0.9)
     sig &= univ & ~(ret > 0.095)
-    entry_ok = d["etf"] > d["etf"].rolling(MKT_MA).mean()
+    entry_ok = d["etf"] > d["etf"].rolling(mkt_ma).mean() if mkt_ma else pd.Series(True, index=C.index)
     return sig, r120, ret.rolling(20).std(), entry_ok
 
 
-def backtest(d, st="2024-01-01"):
+def backtest(d, st="2024-01-01", max_pos=MAX_POS, hold=HOLD, trail=TRAIL, vol_target=VOL_TARGET, mkt_ma=MKT_MA):
     """回傳 (equity_df, trades_df, open_positions dict, close_df)，欄位與 RFC 回測相同，網站可直接讀。"""
-    sig, r120, std20, entry_ok = signals(d)
-    C, O = d["close"], d["open"]
+    sig, r120, std20, entry_ok = signals(d, mkt_ma)
+    C = d["close"]
     idx = C.index[C.index >= st]
-    c, o = C.loc[idx].values, O.loc[idx].values
+    c = C.loc[idx].values
     s = sig.loc[idx].fillna(False).values
     score, sd = r120.loc[idx].values, std20.loc[idx].values
     ok = entry_ok.loc[idx].fillna(False).values
     cols, group = C.columns, d["group"]
 
     cash, pos, trades, records = float(INIT_CASH), {}, [], []
-    to_sell, prev_eq = {}, cash
+    prev_eq = cash
     for i, dt in enumerate(idx):
-        for j, why in list(to_sell.items()):
-            p = pos.pop(j)
-            px = o[i, j] if np.isfinite(o[i, j]) and o[i, j] > 0 else c[i - 1, j]
+        # 1. 出場：今天收盤判斷、今天收盤賣
+        for j in list(pos):
+            p, px = pos[j], c[i, j]
+            if not np.isfinite(px):
+                continue
+            p["highest"] = max(p["highest"], px)
+            why = "sl_trail" if trail and px <= p["highest"] * (1 - trail) else "hold_days" if i - p["i"] >= hold else None
+            if not why:
+                continue
             value = p["shares"] * px * (1 - FEE)
             cash += value
+            del pos[j]
             trades.append(
                 {
                     "stock_id": cols[j],
                     "entry_date": idx[p["i"]],
                     "entry_price": p["entry_price"],
-                    "stop": round(p["highest"] * (1 - TRAIL), 4),
+                    "stop": round(p["highest"] * (1 - trail), 4) if trail else None,
                     "target": None,
                     "exit_date": dt,
                     "exit_price": px,
@@ -91,36 +99,26 @@ def backtest(d, st="2024-01-01"):
                     "hold_days": i - p["i"],
                 }
             )
-        to_sell.clear()
 
-        if i > 0 and ok[i - 1]:
-            cand = np.where(s[i - 1])[0]
-            cand = cand[np.argsort(-np.nan_to_num(score[i - 1, cand], nan=-9))]
+        # 2. 進場：今天的訊號、今天收盤買
+        if ok[i]:
+            cand = np.where(s[i])[0]
+            cand = cand[np.argsort(-np.nan_to_num(score[i, cand], nan=-9))]
             for j in cand:
-                if len(pos) >= MAX_POS:
+                if len(pos) >= max_pos:
                     break
-                if j in pos or not np.isfinite(o[i, j]) or o[i, j] <= 0 or o[i, j] >= c[i - 1, j] * 1.095:
+                if j in pos or not np.isfinite(c[i, j]) or c[i, j] <= 0:
                     continue
                 if sum(group[k] == group[j] for k in pos) >= GROUP_LIMIT:
                     continue
-                size = prev_eq / MAX_POS
-                if np.isfinite(sd[i - 1, j]) and sd[i - 1, j] > 0:
-                    size *= min(1.0, VOL_TARGET / sd[i - 1, j])
+                size = prev_eq / max_pos
+                if vol_target and np.isfinite(sd[i, j]) and sd[i, j] > 0:
+                    size *= min(1.0, vol_target / sd[i, j])
                 cost = min(size, cash)
                 if cost < size * 0.5:
                     break
                 cash -= cost
-                pos[j] = {"shares": cost * (1 - FEE) / o[i, j], "entry_price": o[i, j], "i": i, "highest": o[i, j], "cost": cost}
-
-        for j, p in pos.items():
-            px = c[i, j]
-            if not np.isfinite(px):
-                continue
-            p["highest"] = max(p["highest"], px)
-            if px <= p["highest"] * (1 - TRAIL):
-                to_sell[j] = "sl_trail"
-            elif i - p["i"] >= HOLD:
-                to_sell[j] = "hold_days"
+                pos[j] = {"shares": cost * (1 - FEE) / c[i, j], "entry_price": c[i, j], "i": i, "highest": c[i, j], "cost": cost}
 
         mv = sum(p["shares"] * (c[i, j] if np.isfinite(c[i, j]) else p["entry_price"]) for j, p in pos.items())
         records.append({"date": dt, "cash": round(cash, 2), "market_value": round(mv, 2), "total": round(cash + mv, 2)})
@@ -134,9 +132,8 @@ def backtest(d, st="2024-01-01"):
             "entry_date": idx[p["i"]],
             "highest": float(p["highest"]),
             "cost": float(p["cost"]),
-            "stop": round(float(p["highest"]) * (1 - TRAIL), 4),
+            "stop": round(float(p["highest"]) * (1 - trail), 4) if trail else None,
             "target": None,
-            "exit_tomorrow": j in to_sell,
         }
         for j, p in pos.items()
     }
