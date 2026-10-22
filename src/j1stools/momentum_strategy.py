@@ -4,8 +4,9 @@
 - 最多 MAX_POS 檔，同族群最多 2 檔，漲停（漲幅 > 9.5%）不買
 - 0050 在 MKT_MA 日均線上才開新倉（已持有的照規則出場）
 - 部位依波動調整：每檔基本 1/MAX_POS，日波動超過 VOL_TARGET 的按比例買少
-- 出場：持有滿 HOLD 個交易日（TRAIL 設定時，另外加上從持有期間最高收盤回落 TRAIL 就出場）
-參數用 2015–2023 挑選（lab/close_grid.py）：持有 10 天、不設移動停損、波動 4%、0050>120MA。
+- 出場（動態停利）：持有滿 HOLD 天時報酬未達 RUN_THR 就出場；有達到就繼續抱，
+  直到收盤跌破 EXIT_MA 日均線，最長 MAX_HOLD 天
+參數用 2015–2023 挑選（lab/close_grid.py、lab/momentum_exit_variant.py）。
 """
 
 import glob
@@ -15,6 +16,9 @@ import pandas as pd
 
 MAX_POS = 5
 HOLD = 10
+RUN_THR = 0.10
+EXIT_MA = 10
+MAX_HOLD = 120
 TRAIL = None
 VOL_TARGET = 0.04
 GROUP_LIMIT = 2
@@ -55,12 +59,14 @@ def signals(d, mkt_ma=MKT_MA):
     return sig, r120, ret.rolling(20).std(), entry_ok
 
 
-def backtest(d, st="2024-01-01", max_pos=MAX_POS, hold=HOLD, trail=TRAIL, vol_target=VOL_TARGET, mkt_ma=MKT_MA):
+def backtest(d, st="2024-01-01", max_pos=MAX_POS, hold=HOLD, trail=TRAIL, vol_target=VOL_TARGET, mkt_ma=MKT_MA,
+             run_thr=RUN_THR, exit_ma=EXIT_MA, max_hold=MAX_HOLD):
     """回傳 (equity_df, trades_df, open_positions dict, close_df)，欄位與 RFC 回測相同，網站可直接讀。"""
     sig, r120, std20, entry_ok = signals(d, mkt_ma)
     C = d["close"]
     idx = C.index[C.index >= st]
     c = C.loc[idx].values
+    ma = C.rolling(exit_ma).mean().loc[idx].values if exit_ma else None
     s = sig.loc[idx].fillna(False).values
     score, sd = r120.loc[idx].values, std20.loc[idx].values
     ok = entry_ok.loc[idx].fillna(False).values
@@ -75,7 +81,16 @@ def backtest(d, st="2024-01-01", max_pos=MAX_POS, hold=HOLD, trail=TRAIL, vol_ta
             if not np.isfinite(px):
                 continue
             p["highest"] = max(p["highest"], px)
-            why = "sl_trail" if trail and px <= p["highest"] * (1 - trail) else "hold_days" if i - p["i"] >= hold else None
+            days, gain = i - p["i"], px / p["entry_price"] - 1
+            running = run_thr is not None and days >= hold and gain >= run_thr  # 賺到門檻就不受 hold 限制
+            if trail and px <= p["highest"] * (1 - trail):
+                why = "sl_trail"
+            elif running and exit_ma and px < ma[i, j]:
+                why = "ma_exit"
+            elif days >= max_hold or (days >= hold and not running):
+                why = "hold_days"
+            else:
+                why = None
             if not why:
                 continue
             value = p["shares"] * px * (1 - FEE)
