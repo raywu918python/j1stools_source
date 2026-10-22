@@ -6,6 +6,7 @@
 - 部位依波動調整：每檔基本 1/MAX_POS，日波動超過 VOL_TARGET 的按比例買少
 - 出場（動態停利）：持有滿 HOLD 天時報酬未達 RUN_THR 就出場；有達到就繼續抱，
   直到收盤跌破 EXIT_MA 日均線，最長 MAX_HOLD 天
+- 加碼：持股賺到 ADD_THR 時用閒錢加碼一次（ADD_FRAC 個基本部位），單檔不超過總資產 CAP
 參數用 2015–2023 挑選（lab/close_grid.py、lab/momentum_exit_variant.py）。
 """
 
@@ -19,6 +20,10 @@ HOLD = 10
 RUN_THR = 0.10
 EXIT_MA = 10
 MAX_HOLD = 120
+ADD_THR = 0.20  # 持股賺 20% 時加碼
+ADD_FRAC = 1.0  # 加碼金額 = 1 個基本部位
+MAX_ADDS = 1
+CAP = 0.35  # 單檔最多佔總資產 35%
 TRAIL = None
 VOL_TARGET = 0.04
 GROUP_LIMIT = 2
@@ -60,7 +65,7 @@ def signals(d, mkt_ma=MKT_MA):
 
 
 def backtest(d, st="2024-01-01", max_pos=MAX_POS, hold=HOLD, trail=TRAIL, vol_target=VOL_TARGET, mkt_ma=MKT_MA,
-             run_thr=RUN_THR, exit_ma=EXIT_MA, max_hold=MAX_HOLD):
+             run_thr=RUN_THR, exit_ma=EXIT_MA, max_hold=MAX_HOLD, add_thr=ADD_THR, add_frac=ADD_FRAC, max_adds=MAX_ADDS, cap=CAP, add_new_high=False):
     """回傳 (equity_df, trades_df, open_positions dict, close_df)，欄位與 RFC 回測相同，網站可直接讀。"""
     sig, r120, std20, entry_ok = signals(d, mkt_ma)
     C = d["close"]
@@ -134,6 +139,23 @@ def backtest(d, st="2024-01-01", max_pos=MAX_POS, hold=HOLD, trail=TRAIL, vol_ta
                     break
                 cash -= cost
                 pos[j] = {"shares": cost * (1 - FEE) / c[i, j], "entry_price": c[i, j], "i": i, "highest": c[i, j], "cost": cost}
+
+        # 3. 加碼：持股賺到 add_thr 以上，用閒錢加碼（每次 add_frac 個基本部位，單檔不超過總資產 cap）
+        if add_thr is not None:
+            for j, p in sorted(pos.items(), key=lambda kv: -(c[i, kv[0]] / kv[1]["entry_price"])):
+                px = c[i, j]
+                if not np.isfinite(px) or p.get("adds", 0) >= max_adds or p["i"] == i:
+                    continue
+                if px / p["entry_price"] - 1 < add_thr or (add_new_high and px < p["highest"]):
+                    continue
+                room = cap * prev_eq - p["shares"] * px
+                amt = min(prev_eq / max_pos * add_frac, room, cash)
+                if amt < prev_eq / max_pos * 0.25:
+                    continue
+                cash -= amt
+                p["shares"] += amt * (1 - FEE) / px
+                p["cost"] += amt
+                p["adds"] = p.get("adds", 0) + 1
 
         mv = sum(p["shares"] * (c[i, j] if np.isfinite(c[i, j]) else p["entry_price"]) for j, p in pos.items())
         records.append({"date": dt, "cash": round(cash, 2), "market_value": round(mv, 2), "total": round(cash + mv, 2)})
