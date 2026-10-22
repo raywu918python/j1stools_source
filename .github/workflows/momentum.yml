@@ -1,0 +1,23 @@
+name: Momentum
+
+# 動能策略（momentum_v1）每日回測：由 HF Space 的 /trigger 觸發，結果推回 HF 給網站讀
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: j1s
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install deps
+        run: pip install huggingface_hub "pandas~=2.3" "pyarrow~=24.0" "numpy~=2.2"
+      - name: Run backtest
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: raywu918python/j1s-data
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/run_momentum.py

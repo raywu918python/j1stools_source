@@ -281,7 +281,8 @@ def trigger_predict_all(token: str = Query(default="")):
 
 _MODELS = {
     # "rfc_macd_6xx": "rfc_macd.yml",
-    "rfc_macd_ib_6xx": "rfc_ib_macd.yml",
+    # "rfc_macd_ib_6xx": "rfc_ib_macd.yml",  # 2026-10 起改用動能策略
+    "momentum_v1": "momentum.yml",
     # "margin_lgbm": "margin_lgbm.yml",
 }
 
